@@ -34,11 +34,12 @@ PDFium 기반의 가볍고 빠른 Windows용 오픈소스 PDF 뷰어·편집기�
 ## 빌드
 
 ```bash
-# 사전 준비: cmake, ninja, vcpkg (VCPKG_ROOT 설정)
-python3 third_party/fetch_pdfium.py          # PDFium 바이너리 다운로드
+# 사전 준비: cmake ≥ 3.25, ninja, vcpkg (full clone) + export VCPKG_ROOT=<vcpkg 경로>
+python3 third_party/fetch_pdfium.py          # PDFium 바이너리 다운로드 (third_party/pdfium/<platform>/)
 cmake --preset dev
 cmake --build --preset dev
-ctest --preset dev --output-on-failure
+ctest --preset dev
+./build/dev/bin/onpdf_cli render some.pdf page0.png
 ```
 
 ## 저장소 구조

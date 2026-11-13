@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # Role & Persona
 You are a Senior C++ Systems Developer with deep PDF (PDFium / qpdf) and Qt experience.
-Your goal is to write Safe, Testable, and Maintainable modern C++ (C++20).
+Your goal is to write Safe, Testable, and Maintainable modern C++ (C++23, std::expected).
 
 # Project
 **OnPdf** — PDFium 기반의 가볍고 빠른 Windows용 오픈소스 PDF 뷰어·편집기.
@@ -23,7 +23,7 @@ Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · 기본 브랜치 `main`
 | M5 마무리 | 성능, 설치 파일, 다국어, 문서화 | 성공 기준 전부 → v1.0 |
 
 # Tech Stack
-- Language: C++20, CMake ≥ 3.25 + vcpkg(manifest 모드), Ninja
+- Language: C++23 (std::expected 사용), CMake ≥ 3.25 + vcpkg(manifest 모드), Ninja
 - 주 타깃: Windows x64 / MSVC 2022. 개발 머신은 macOS 이므로 `core`·`cli`·`tests` 는 macOS/Linux 에서도 빌드되어야 한다 (Qt·설치 파일은 Windows 전용 허용)
 - PDF 엔진: PDFium (`bblanchon/pdfium-binaries` 사전 빌드, Chromium 브랜치 번호로 버전 고정 — `third_party/` 스크립트)
 - 구조 작업: qpdf (병합·분할·암호화·검사·복구)
@@ -35,18 +35,22 @@ Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · 기본 브랜치 `main`
 
 # Build Commands
 
-> 아직 툴체인이 설치되지 않은 상태라면 (`cmake`, `ninja`, `vcpkg` 없음) 먼저 설치한다: `brew install cmake ninja`, vcpkg 는 `git clone https://github.com/microsoft/vcpkg` 후 `VCPKG_ROOT` 설정.
-> `CMakePresets.json` 이 생기면 아래 preset 이름을 기준으로 한다.
+> 사전 준비: `cmake`·`ninja`(brew), vcpkg 는 `~/vcpkg` 에 **full clone**(shallow 금지 — 버전 해석 실패) 후 `export VCPKG_ROOT=$HOME/vcpkg`.
+> CI 와 로컬 모두 `CMakePresets.json` 의 preset 이름을 쓴다: `dev`(Debug), `release`, `dev-app`(Qt 포함).
 
 ```bash
-cmake --preset dev                      # configure (vcpkg toolchain 포함)
-cmake --build --preset dev              # build all
-ctest --preset dev --output-on-failure  # unit + rendering regression
-cmake --build --preset dev --target onpdf_cli && ./build/dev/cli/onpdf_cli render in.pdf out.png
-cmake --preset release && cmake --build --preset release   # Windows 배포 빌드
+python3 third_party/fetch_pdfium.py     # PDFium 사전 빌드 받기 (버전: third_party/pdfium-version.txt)
+cmake --preset dev                      # configure (vcpkg manifest 설치 포함)
+cmake --build --preset dev              # build all → build/dev/bin/
+ctest --preset dev                      # unit + rendering regression
+./build/dev/bin/onpdf_cli info in.pdf
+./build/dev/bin/onpdf_cli render in.pdf out.png --page 0 --scale 2
+ONPDF_UPDATE_REFERENCES=1 ./build/dev/bin/onpdf_render_tests   # 렌더링 기준 이미지 갱신
 ```
 
-- 빌드 산출물은 `build/` 아래에만 생성한다 (소스 트리 내 빌드 금지)
+- 테스트 PDF 생성: `python3 testdata/make_simple_pdf.py` (xref 직접 계산, 외부 의존 없음)
+- `core` 는 `stb` 로 PNG 를 읽고 쓴다. 새 의존성은 `vcpkg.json` 에 추가하고 `builtin-baseline` 을 유지한다
+- 빌드 산출물은 `build/<preset>/` 아래에만 생성한다 (소스 트리 내 빌드 금지). 실행 파일과 PDFium 공유 라이브러리는 `build/<preset>/bin/`
 - PDFium/qpdf 바이너리는 저장소에 커밋하지 않는다 — `third_party/` 스크립트로 받아온다
 - 테스트 PDF 는 라이선스가 확인된 파일만 `testdata/` 에 넣고, 출처·라이선스를 `testdata/README.md` 에 기록한다
 
@@ -56,7 +60,8 @@ cmake --preset release && cmake --build --preset release   # Windows 배포 빌�
 app/          Qt UI — 메인 창, 페이지 뷰, 썸네일, 도구 패널           (Qt 의존)
 edit/         Command, 실행 취소 스택, 선택 모델, 텍스트 블록 모델, 폰트 매니저
 core/         Document, Page, 렌더 캐시(타일 LRU), 텍스트 인덱스       (Qt 의존 금지)
-core/engine/  PdfiumEngine(RAII 핸들, 전용 워커 스레드), QpdfTools
+core/engine/  PdfiumLibrary(init RAII) · PdfiumDocument(열기·크기·렌더) · pdfium_handles(ScopedFPDF* 별칭), QpdfTools(M2)
+core/image/   png_io (stb 기반 PNG 읽기/쓰기, BGRA↔RGBA)
 cli/          렌더·병합·검증용 명령줄 도구                            (core/edit 만 사용)
 tests/        단위 테스트, 렌더링 회귀, 왕복 테스트
 testdata/     테스트 PDF + 기준 PNG
@@ -78,7 +83,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 
 ### 핵심 설계 원칙 (위반 금지)
 1. **core 는 UI 를 모른다.** CLI 와 테스트에서 core/edit 를 그대로 쓴다.
-2. **PDFium 호출은 전용 워커 스레드 한 곳에서만.** UI 는 작업 큐에 요청을 넣고 결과(비트맵, 텍스트)만 받는다. UI 스레드에서 `FPDF_*` 직접 호출 금지.
+2. **PDFium 호출은 전용 워커 스레드 한 곳에서만.** (M0 에서는 CLI·테스트가 단일 스레드이므로 메인 스레드) UI 는 작업 큐에 요청을 넣고 결과(비트맵, 텍스트)만 받는다. UI 스레드에서 `FPDF_*` 직접 호출 금지.
 3. **모든 문서 변경은 Command 로.** `execute()` / `undo()` 를 가진 명령 객체 외의 경로로 문서를 바꾸지 않는다.
 4. **핸들은 RAII.** `FPDF_DOCUMENT`, `FPDF_PAGE`, `FPDF_TEXTPAGE`, `FPDF_BITMAP` 등은 `std::unique_ptr` + 커스텀 삭제자로만 보유한다. raw 핸들을 반환하는 public API 금지.
 5. **원본 파일은 건드리지 않는다.** 저장은 임시 파일 → 다시 열어 검증(페이지 수·렌더링·qpdf check) → 교체. 서명된 문서는 증분 저장.
@@ -101,7 +106,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 
 # Testing Strategy
 - **단위 테스트** (`tests/unit`): core/edit. 모든 Command 는 실행 → 취소 → 재실행 후 문서 상태 비교 테스트 필수.
-- **렌더링 회귀** (`tests/render`): 테스트 PDF → PNG → 기준 이미지와 픽셀 비교. 렌더링·편집 기능 변경 시 반드시 갱신.
+- **렌더링 회귀** (`tests/render`): 테스트 PDF → PNG → 기준 이미지와 픽셀 비교. 렌더링·편집 기능 변경 시 반드시 갱신. 테스트는 `PdfiumLibrary::Options::use_system_fonts=false` 로 내장 폰트만 써서 플랫폼 간 결과를 같게 한다 (시스템 폰트 의존 테스트는 별도 표시).
 - **왕복 테스트** (`tests/roundtrip`): 열기 → 저장 → 다시 열기 후 페이지 수·텍스트·렌더링 일치 + `qpdf --check`.
 - 한글 문서, 스캔본, 폼, 암호화 파일을 테스트 집합에 항상 포함한다.
 - CI: 푸시마다 빌드 + 단위 테스트, PR 마다 렌더링 회귀까지.
