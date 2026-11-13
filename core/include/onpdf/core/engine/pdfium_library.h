@@ -24,6 +24,10 @@ class PdfiumLibrary {
   PdfiumLibrary& operator=(PdfiumLibrary&&) = delete;
 
   [[nodiscard]] static bool is_initialized() noexcept;
+
+  // 디버그 빌드에서 현재 스레드가 라이브러리를 만든 스레드인지 단정한다.
+  // PdfiumDocument 의 공개 메서드가 호출해 워커 밖 PDFium 사용을 잡는다. 릴리스에서는 no-op.
+  static void assert_current_thread() noexcept;
 };
 
 }  // namespace onpdf::engine

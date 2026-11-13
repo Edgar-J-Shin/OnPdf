@@ -60,7 +60,8 @@ ONPDF_UPDATE_REFERENCES=1 ./build/dev/bin/onpdf_render_tests   # 렌더링 기�
 app/          Qt UI — 메인 창, 페이지 뷰, 썸네일, 도구 패널           (Qt 의존)
 edit/         Command, 실행 취소 스택, 선택 모델, 텍스트 블록 모델, 폰트 매니저
 core/         Document, Page, 렌더 캐시(타일 LRU), 텍스트 인덱스       (Qt 의존 금지)
-core/engine/  PdfiumLibrary(init RAII) · PdfiumDocument(열기·크기·렌더) · pdfium_handles(ScopedFPDF* 별칭), QpdfTools(M2)
+core/engine/  PdfiumLibrary(init RAII) · PdfiumDocument(열기·크기·렌더) · pdfium_handles(ScopedFPDF* 별칭)
+              PdfiumWorker(전용 스레드 + High/Normal/Low 큐 + 취소) · DocumentHandle(워커 쪽 문서의 스레드 안전 핸들), QpdfTools(M2)
 core/image/   png_io (stb 기반 PNG 읽기/쓰기, BGRA↔RGBA)
 cli/          렌더·병합·검증용 명령줄 도구                            (core/edit 만 사용)
 tests/        단위 테스트, 렌더링 회귀, 왕복 테스트
@@ -83,7 +84,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 
 ### 핵심 설계 원칙 (위반 금지)
 1. **core 는 UI 를 모른다.** CLI 와 테스트에서 core/edit 를 그대로 쓴다.
-2. **PDFium 호출은 전용 워커 스레드 한 곳에서만.** (M0 에서는 CLI·테스트가 단일 스레드이므로 메인 스레드) UI 는 작업 큐에 요청을 넣고 결과(비트맵, 텍스트)만 받는다. UI 스레드에서 `FPDF_*` 직접 호출 금지.
+2. **PDFium 호출은 전용 워커 스레드 한 곳에서만.** 앱은 `PdfiumWorker` 하나를 만들고 `DocumentHandle` 로만 문서를 다룬다. 콜백은 워커 스레드에서 호출되므로 UI 는 자기 스레드로 넘긴 뒤 처리한다. CLI·테스트처럼 단일 스레드면 `PdfiumLibrary` 를 직접 만들어도 되지만 한 프로세스에서 둘을 섞지 않는다. 디버그 빌드는 `PdfiumLibrary::assert_current_thread()` 로 워커 밖 호출을 잡는다.
 3. **모든 문서 변경은 Command 로.** `execute()` / `undo()` 를 가진 명령 객체 외의 경로로 문서를 바꾸지 않는다.
 4. **핸들은 RAII.** `FPDF_DOCUMENT`, `FPDF_PAGE`, `FPDF_TEXTPAGE`, `FPDF_BITMAP` 등은 `std::unique_ptr` + 커스텀 삭제자로만 보유한다. raw 핸들을 반환하는 public API 금지.
 5. **원본 파일은 건드리지 않는다.** 저장은 임시 파일 → 다시 열어 검증(페이지 수·렌더링·qpdf check) → 교체. 서명된 문서는 증분 저장.
