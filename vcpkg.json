@@ -1,0 +1,11 @@
+{
+  "name": "onpdf",
+  "version-string": "0.0.1",
+  "description": "PDFium based PDF viewer and editor",
+  "license": "Apache-2.0",
+  "builtin-baseline": "fe8e78fac7df2793f9848ed0d27aa59d9c035998",
+  "dependencies": [
+    "stb",
+    { "name": "gtest", "version>=": "1.14.0" }
+  ]
+}
