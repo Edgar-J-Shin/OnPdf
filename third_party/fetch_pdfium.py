@@ -31,10 +31,10 @@ def host_platform() -> str:
     machine = platform.machine().lower()
     arch = {"x86_64": "x64", "amd64": "x64", "arm64": "arm64", "aarch64": "arm64"}.get(machine)
     if arch is None:
-        sys.exit(f"지원하지 않는 아키텍처: {machine}")
+        sys.exit(f"unsupported architecture: {machine}")
     os_name = {"Windows": "win", "Darwin": "mac", "Linux": "linux"}.get(system)
     if os_name is None:
-        sys.exit(f"지원하지 않는 OS: {system}")
+        sys.exit(f"unsupported OS: {system}")
     return f"{os_name}-{arch}"
 
 
@@ -47,11 +47,11 @@ def fetch(target: str, force: bool) -> Path:
     dest = ROOT / "pdfium" / target
     stamp = dest / ".version"
     if not force and stamp.exists() and stamp.read_text(encoding="utf-8").strip() == version:
-        print(f"[pdfium] {target} {version} 이미 있음: {dest}")
+        print(f"[pdfium] {target} {version} already present: {dest}")
         return dest
 
     url = f"{BASE_URL}/{version}/pdfium-{target}.tgz"
-    print(f"[pdfium] 다운로드 {url}")
+    print(f"[pdfium] downloading {url}")
     with urllib.request.urlopen(url, timeout=120) as resp:
         data = resp.read()
 
@@ -64,11 +64,15 @@ def fetch(target: str, force: bool) -> Path:
         else:
             tar.extractall(dest)
     stamp.write_text(version + "\n", encoding="utf-8")
-    print(f"[pdfium] 완료: {dest}")
+    print(f"[pdfium] extracted to {dest}")
     return dest
 
 
 def main() -> None:
+    # Windows 콘솔(cp1252 등)에서 비ASCII 출력이 깨지지 않게 한다
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--platform", default=host_platform(), help="win-x64, win-arm64, mac-arm64, mac-x64, linux-x64, linux-arm64")
     parser.add_argument("--force", action="store_true", help="이미 있어도 다시 받는다")
