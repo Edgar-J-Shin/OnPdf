@@ -6,7 +6,10 @@ $ARGUMENTS 에 대한 기술 검증(spike)을 수행한다. 목적은 **제품 �
 
 ## 프로세스
 
-1. `git branch --show-current`로 현재 브랜치명(`{branch}`)을 확인한다 (`spike/` 브랜치 권장)
+1. **이슈·브랜치 준비 (git flow)**
+   - `git branch --show-current` 가 `develop`/`main` 이거나 이슈 번호가 없는 브랜치면: `gh issue list` 로 해당 작업 이슈를 찾고, 없으면 `gh issue create` 로 만든다 (제목 접두 `M0:`~`M5:`, `--milestone`, 필요 시 라벨). 그 다음 `git checkout develop && git pull && git checkout -b spike/{이슈번호}-{slug}` 로 분기한다
+   - 이미 이슈 번호 브랜치에 있으면 그대로 진행
+   - 확정된 브랜치명을 `{branch}` 로 쓴다
 2. 검증할 질문을 **한 문장**으로 고정하고, 성공/실패 판정 기준을 먼저 적는다
 3. 조사:
    - PDFium 고정 버전 헤더(`third_party/`)와 PDFium 저장소의 테스트 코드(`testing/embedder_test`)에서 해당 API 사용 예 확인

@@ -8,7 +8,7 @@ Your goal is to write Safe, Testable, and Maintainable modern C++ (C++23, std::e
 
 # Project
 **OnPdf** — PDFium 기반의 가볍고 빠른 Windows용 오픈소스 PDF 뷰어·편집기.
-Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · 기본 브랜치 `main`
+Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜치 `develop`, 릴리스 `main`)
 1인 개발(주 10~15시간). 전체 계획서: [pdf-editor-plan.md](pdf-editor-plan.md) — 범위·로드맵·위험 대응은 이 문서가 기준이다.
 
 **현재 단계**: M0 기반 (저장소·CMake·PDFium 연결·첫 쪽 표시). 작업 전 계획서 9장 "첫 2주 할 일" 체크리스트를 확인한다.
@@ -120,15 +120,19 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 | **대형** | 새 기능, 다중 레이어, 아키텍처 변경 | `/planning` → `/design` → `/develop` → `/test` 워크플로우 |
 | **불확실** | PDFium API 동작·성능·폰트 임베딩 등 검증 필요 | `/spike` 로 2주 이내 사전 검증 후 결정 |
 
-# Git / Release
-- 기본 브랜치 `main` — 직접 push 금지. `feature/`, `fix/`, `spike/`, `chore/`, `release/` 브랜치 + PR
+# Git / Release (git flow)
+- `develop`: 통합·기본 브랜치. 모든 작업 PR 의 base. 직접 push 금지
+- `main`: 릴리스 브랜치. `release/x.y.z`·`hotfix/x.y.z` 만 머지하고 태그 `vx.y.z` 를 단다. 직접 push 금지
+- **작업 시작 절차**: ① GitHub 이슈 생성(제목 접두 `M0:`~`M5:`, 마일스톤 지정, 필요 시 라벨) → ② `develop` 에서 브랜치 분기 → ③ 구현 → ④ PR(base `develop`, 본문에 `Closes #N`) → ⑤ CI 통과 후 머지 커밋(`gh pr merge --merge`)
+- 브랜치 이름: `feature/<이슈번호>-<slug>`, `fix/<이슈번호>-<slug>`, `chore/<이슈번호>-<slug>`, `spike/<이슈번호>-<slug>`, `release/x.y.z`, `hotfix/x.y.z` (slug 는 영문 소문자·하이픈)
+- 릴리스: `develop` → `release/x.y.z` 분기 → 버전·CHANGELOG 정리 → `main` 머지 → 태그 → `main` 을 `develop` 에 백머지. GitHub Actions 가 태그에서 설치 파일·무설치 압축본 생성
 - 커밋 메시지: 제목 영어 명령형 72자 이내, 본문 한국어 가능
-- 릴리스: 마일스톤마다 `release/x.y.z` → main 머지 → 태그 `vx.y.z` → GitHub Actions 가 설치 파일·무설치 압축본 생성
 - 변경 기록은 `CHANGELOG.md`, 제3자 고지는 `THIRD_PARTY_NOTICES.md` (PDFium, qpdf, Qt, FreeType, HarfBuzz)
 - 커밋 금지: `build/`, `vcpkg_installed/`, PDFium/qpdf 바이너리, 라이선스 불명확한 PDF, 코드 서명 인증서
 
 # Agent Commands
-워크플로우 슬래시 명령. 산출물 경로: `.claude/workflow/{branch}/` (로컬 전용, gitignore)
+워크플로우 슬래시 명령. 산출물 경로: `.claude/workflow/{branch}/` (로컬 전용, gitignore).
+`/planning` 과 `/spike` 는 시작할 때 이슈가 없으면 만들고 `develop` 에서 이슈 번호 브랜치를 분기한다.
 - `/planning` → PRD → `01-plan.md`
 - `/design` → 설계 + 구현 계획 → `02-design.md`
 - `/develop` → Validate → Implement → Verify → QA Cases → `03-qa.md`

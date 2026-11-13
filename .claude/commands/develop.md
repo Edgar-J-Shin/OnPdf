@@ -96,6 +96,7 @@ Validate ──확인──▶ Implement ──코드──▶ Verify ──통�
 - Layer Dependency Rules 위반 금지
 - 설계서(`02-design.md`)의 구현 계획을 충실히 따를 것
 - 새 외부 의존성(`vcpkg.json`) 추가는 사용자 확인 후
+- 커밋은 이슈 번호 브랜치에서만. `develop`/`main` 에 직접 커밋 금지
 
 ## 완료 후 승인 절차 (필수 실행)
 

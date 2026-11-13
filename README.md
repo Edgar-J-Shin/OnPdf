@@ -55,6 +55,12 @@ third_party/  PDFium 바이너리 다운로드 스크립트
 docs/         설계 문서, 기여 가이드
 ```
 
+## 기여
+
+git flow 로 운영합니다. `develop` 이 기본 브랜치이고 `main` 은 릴리스 전용입니다.
+작업은 이슈를 먼저 만든 뒤 `feature/<이슈번호>-<설명>` 브랜치에서 진행하고, `develop` 으로 PR 을 보냅니다.
+PR 은 CI(Windows·macOS·Linux) 통과 후 머지합니다.
+
 ## 라이선스
 
 [Apache License 2.0](LICENSE). PDFium, qpdf, FreeType, HarfBuzz 는 각자의 허용적 라이선스를, Qt 는 LGPL v3 조건(동적 링크)을 따릅니다.

@@ -4,7 +4,10 @@ $ARGUMENTS 에 대한 PRD를 작성한다.
 
 ## 프로세스
 
-1. `git branch --show-current`로 현재 브랜치명(`{branch}`)을 확인한다
+1. **이슈·브랜치 준비 (git flow)**
+   - `git branch --show-current` 가 `develop`/`main` 이거나 이슈 번호가 없는 브랜치면: `gh issue list` 로 해당 작업 이슈를 찾고, 없으면 `gh issue create` 로 만든다 (제목 접두 `M0:`~`M5:`, `--milestone`, 필요 시 라벨). 그 다음 `git checkout develop && git pull && git checkout -b feature/{이슈번호}-{slug}` 로 분기한다
+   - 이미 이슈 번호 브랜치에 있으면 그대로 진행
+   - 확정된 브랜치명을 `{branch}` 로 쓴다
 2. `.claude/workflow/{branch}/` 디렉토리를 확인하여 기존 산출물 파악
 3. `pdf-editor-plan.md`에서 해당 기능이 속한 마일스톤(M0~M5)과 완료 기준, 범위 외 항목을 확인한다
 4. 코드베이스 탐색 (Explore 에이전트):
