@@ -15,6 +15,8 @@ enum class ErrorCode {
   kPageNotFound,
   kRenderFailed,
   kInvalidArgument,
+  kCancelled,
+  kInvalidState,
 };
 
 struct Error {
@@ -29,8 +31,6 @@ inline std::unexpected<Error> make_error(ErrorCode code, std::string message) {
   return std::unexpected(Error{code, std::move(message)});
 }
 
-const char* to_string(ErrorCode code) noexcept;
-
 inline const char* to_string(ErrorCode code) noexcept {
   switch (code) {
     case ErrorCode::kUnknown: return "unknown";
@@ -42,6 +42,8 @@ inline const char* to_string(ErrorCode code) noexcept {
     case ErrorCode::kPageNotFound: return "page not found";
     case ErrorCode::kRenderFailed: return "render failed";
     case ErrorCode::kInvalidArgument: return "invalid argument";
+    case ErrorCode::kCancelled: return "cancelled";
+    case ErrorCode::kInvalidState: return "invalid state";
   }
   return "unknown";
 }

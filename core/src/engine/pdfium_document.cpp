@@ -62,7 +62,7 @@ Result<PdfiumDocument> PdfiumDocument::open(const std::filesystem::path& path,
 
 Result<PdfiumDocument> PdfiumDocument::open_from_memory(std::vector<std::uint8_t> data,
                                                         std::string_view password) {
-  assert(PdfiumLibrary::is_initialized() && "PdfiumLibrary 를 먼저 생성해야 한다");
+  PdfiumLibrary::assert_current_thread();
   if (data.empty()) {
     return make_error(ErrorCode::kInvalidFormat, "empty document");
   }
@@ -75,7 +75,10 @@ Result<PdfiumDocument> PdfiumDocument::open_from_memory(std::vector<std::uint8_t
   return PdfiumDocument(std::move(data), std::move(doc));
 }
 
-int PdfiumDocument::page_count() const noexcept { return FPDF_GetPageCount(doc_.get()); }
+int PdfiumDocument::page_count() const noexcept {
+  PdfiumLibrary::assert_current_thread();
+  return FPDF_GetPageCount(doc_.get());
+}
 
 Result<ScopedPage> PdfiumDocument::load_page(int page_index) const {
   if (page_index < 0 || page_index >= page_count()) {
@@ -90,6 +93,7 @@ Result<ScopedPage> PdfiumDocument::load_page(int page_index) const {
 }
 
 Result<PageSize> PdfiumDocument::page_size(int page_index) const {
+  PdfiumLibrary::assert_current_thread();
   FS_SIZEF size{};
   if (page_index < 0 || page_index >= page_count() ||
       !FPDF_GetPageSizeByIndexF(doc_.get(), page_index, &size)) {
@@ -100,6 +104,7 @@ Result<PageSize> PdfiumDocument::page_size(int page_index) const {
 }
 
 Result<Bitmap> PdfiumDocument::render_page(int page_index, const RenderOptions& options) const {
+  PdfiumLibrary::assert_current_thread();
   if (!(options.scale > 0.0f) || !std::isfinite(options.scale)) {
     return make_error(ErrorCode::kInvalidArgument, "scale must be positive");
   }
