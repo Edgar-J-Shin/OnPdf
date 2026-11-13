@@ -1,40 +1,51 @@
 #include "onpdf/core/engine/document_handle.h"
 
 #include "onpdf/core/engine/pdfium_document.h"
+#include "pdfium_worker_impl.h"
 
 #include <algorithm>
 #include <atomic>
+#include <exception>
 #include <utility>
 
 namespace onpdf::engine {
 
 struct DocumentHandle::State {
-  PdfiumWorker* worker = nullptr;
+  std::weak_ptr<PdfiumWorkerImpl> worker;  // 워커가 먼저 소멸하면 lock 이 실패한다
   DocumentId id = 0;
   DocumentInfo info;
   std::atomic<bool> closed{false};
 
-  // 워커에 해제를 맡긴다. 워커가 이미 멈췄으면 post 가 cancelled=true 로 inline 호출하고,
-  // 그때는 워커 쪽 documents 가 이미 비워졌으므로 아무것도 하지 않는다.
+  // 워커에 해제를 맡긴다.
+  //  - 워커가 멈췄으면 post 가 cancelled=true 로 inline 호출하고, 워커 쪽 documents 는 이미 비워졌다.
+  //  - 워커가 소멸했으면 lock 이 실패하므로 아무것도 하지 않는다.
   void request_close() noexcept {
     if (closed.exchange(true)) return;
-    PdfiumWorker* w = worker;
+    std::shared_ptr<PdfiumWorkerImpl> w = worker.lock();
+    if (!w) return;
     const DocumentId doc_id = id;
-    w->post(
-        [w, doc_id](bool cancelled) {
-          if (!cancelled && w->is_worker_thread()) w->unregister_document(doc_id);
-        },
-        Priority::kHigh);
+    try {
+      w->post(
+          [w, doc_id](bool cancelled) {
+            if (!cancelled && w->is_worker_thread()) w->unregister_document(doc_id);
+          },
+          Priority::kHigh);
+    } catch (...) {
+      // 할당 실패 등. 워커 종료 시 documents.clear() 가 어차피 해제한다.
+    }
   }
 };
 
-// DocumentHandle 의 private 멤버(State, 생성자)에 접근하는 구현 전용 헬퍼.
+// DocumentHandle / PdfiumWorker 의 private 멤버에 접근하는 구현 전용 헬퍼.
 struct DocumentHandleAccess {
   using State = DocumentHandle::State;
 
-  // 워커 스레드에서 실행: 문서를 열고 등록한 뒤 핸들 상태를 만든다.
+  static std::shared_ptr<PdfiumWorkerImpl> impl_of(PdfiumWorker& worker) { return worker.impl_; }
+
+  // 워커 스레드에서 실행: 문서를 열고 등록한 뒤 핸들을 만든다. 예외는 submit 이 잡는다.
   template <class Opener>
-  static Result<std::shared_ptr<State>> open_on_worker(PdfiumWorker& worker, Opener& opener) {
+  static Result<DocumentHandle> open_on_worker(const std::shared_ptr<PdfiumWorkerImpl>& impl,
+                                               Opener& opener) {
     Result<PdfiumDocument> doc = opener();
     if (!doc) return std::unexpected(doc.error());
 
@@ -51,32 +62,21 @@ struct DocumentHandleAccess {
       s->request_close();
       delete s;
     });
-    state->worker = &worker;
+    state->worker = impl;
     state->info = std::move(info);
-    state->id = worker.register_document(std::make_unique<PdfiumDocument>(std::move(*doc)));
-    return state;
+    state->id = impl->register_document(std::make_unique<PdfiumDocument>(std::move(*doc)));
+    return DocumentHandle(std::move(state));
   }
 
   template <class Opener>
   static std::future<Result<DocumentHandle>> open_async(PdfiumWorker& worker, Opener opener,
                                                         Priority priority) {
-    auto promise = std::make_shared<std::promise<Result<DocumentHandle>>>();
-    auto future = promise->get_future();
-    worker.post(
-        [&worker, promise, opener = std::move(opener)](bool cancelled) mutable {
-          if (cancelled) {
-            promise->set_value(make_error(ErrorCode::kCancelled, "open cancelled"));
-            return;
-          }
-          auto state = open_on_worker(worker, opener);
-          if (!state) {
-            promise->set_value(std::unexpected(state.error()));
-            return;
-          }
-          promise->set_value(DocumentHandle(std::move(*state)));
+    std::shared_ptr<PdfiumWorkerImpl> impl = impl_of(worker);
+    return worker.submit(
+        [impl, opener = std::move(opener)]() mutable -> Result<DocumentHandle> {
+          return open_on_worker(impl, opener);
         },
         priority);
-    return future;
   }
 };
 
@@ -120,24 +120,32 @@ TaskHandle DocumentHandle::render_page(int page_index, const RenderOptions& opti
     on_done(make_error(ErrorCode::kInvalidState, "empty document handle"));
     return TaskHandle{};
   }
+  std::shared_ptr<PdfiumWorkerImpl> impl = state_->worker.lock();
+  if (!impl) {
+    on_done(make_error(ErrorCode::kInvalidState, "worker destroyed"));
+    return TaskHandle{};
+  }
   std::shared_ptr<State> state = state_;
   RenderOptions opts = options;
-  return state->worker->post(
-      [state, page_index, opts, on_done = std::move(on_done)](bool cancelled) {
-        if (cancelled) {
-          on_done(make_error(ErrorCode::kCancelled, "render cancelled"));
-          return;
+  return impl->post(
+      [impl, state, page_index, opts, on_done = std::move(on_done)](bool cancelled) {
+        Result<Bitmap> result = make_error(ErrorCode::kUnknown, "unreachable");
+        try {
+          if (cancelled) {
+            result = make_error(ErrorCode::kCancelled, "render cancelled");
+          } else if (state->closed.load(std::memory_order_relaxed)) {
+            result = make_error(ErrorCode::kInvalidState, "document closed");
+          } else if (PdfiumDocument* doc = impl->find_document(state->id); doc == nullptr) {
+            result = make_error(ErrorCode::kInvalidState, "document not registered");
+          } else {
+            result = doc->render_page(page_index, opts);
+          }
+        } catch (const std::exception& e) {
+          result = make_error(ErrorCode::kUnknown, std::string("render threw: ") + e.what());
+        } catch (...) {
+          result = make_error(ErrorCode::kUnknown, "render threw unknown exception");
         }
-        if (state->closed.load(std::memory_order_relaxed)) {
-          on_done(make_error(ErrorCode::kInvalidState, "document closed"));
-          return;
-        }
-        PdfiumDocument* doc = state->worker->find_document(state->id);
-        if (doc == nullptr) {
-          on_done(make_error(ErrorCode::kInvalidState, "document not registered"));
-          return;
-        }
-        on_done(doc->render_page(page_index, opts));
+        on_done(std::move(result));  // 정확히 한 번
       },
       priority);
 }

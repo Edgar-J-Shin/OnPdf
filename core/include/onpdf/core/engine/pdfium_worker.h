@@ -9,8 +9,10 @@
 // 규칙
 //  - 앱은 PdfiumWorker 하나만 만든다. CLI·테스트처럼 단일 스레드인 경우에는 PdfiumLibrary 를
 //    직접 만들어 써도 되지만, 한 프로세스에서 둘을 섞지 않는다.
-//  - 콜백은 워커 스레드에서 호출된다. UI 는 반드시 자기 스레드로 넘긴 뒤 처리한다.
+//  - 콜백은 보통 워커 스레드에서 호출된다. 단, 워커가 이미 멈춘 뒤 post 하면 호출 스레드에서
+//    cancelled=true 로 즉시 호출된다. UI 는 두 경우 모두 자기 스레드로 넘긴 뒤 처리한다.
 //  - 취소는 아직 시작하지 않은 작업에만 적용된다. 취소된 작업은 task(true) 로 통지된다.
+//  - 워커를 워커 스레드 안에서 소멸시키지 않는다 (자기 join).
 
 #include "onpdf/core/error.h"
 
@@ -27,6 +29,7 @@ namespace onpdf::engine {
 
 class PdfiumDocument;
 class PdfiumLibrary;
+struct PdfiumWorkerImpl;
 
 enum class Priority { kLow = 0, kNormal = 1, kHigh = 2 };
 
@@ -47,7 +50,7 @@ class TaskHandle {
   [[nodiscard]] bool valid() const noexcept { return static_cast<bool>(cancelled_); }
 
  private:
-  friend class PdfiumWorker;
+  friend struct PdfiumWorkerImpl;
   explicit TaskHandle(std::shared_ptr<std::atomic<bool>> flag) : cancelled_(std::move(flag)) {}
   std::shared_ptr<std::atomic<bool>> cancelled_;
 };
@@ -95,8 +98,8 @@ class PdfiumWorker {
   void unregister_document(DocumentId id) noexcept;
 
  private:
-  struct Impl;
-  std::unique_ptr<Impl> impl_;
+  friend struct DocumentHandleAccess;  // 핸들이 weak_ptr 로 Impl 을 참조하기 위해
+  std::shared_ptr<PdfiumWorkerImpl> impl_;
 };
 
 namespace detail {
@@ -117,7 +120,7 @@ struct SubmitResult<Result<R>> {
 
 template <class F>
 auto PdfiumWorker::submit(F&& fn, Priority priority) {
-  using Raw = std::invoke_result_t<F>;
+  using Raw = std::remove_cvref_t<std::invoke_result_t<F>>;
   static_assert(!std::is_void_v<Raw>, "submit 의 함수는 값 또는 Result<T> 를 돌려줘야 한다");
   using Wrapper = detail::SubmitResult<Raw>;
   using Out = typename Wrapper::type;
@@ -131,7 +134,7 @@ auto PdfiumWorker::submit(F&& fn, Priority priority) {
           return;
         }
         try {
-          promise->set_value(Wrapper::wrap(fn()));
+          promise->set_value(Wrapper::wrap(Raw(fn())));
         } catch (const std::exception& e) {
           promise->set_value(
               make_error(ErrorCode::kUnknown, std::string("task threw: ") + e.what()));

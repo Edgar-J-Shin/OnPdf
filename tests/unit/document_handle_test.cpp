@@ -10,6 +10,8 @@
 #include <chrono>
 #include <future>
 #include <latch>
+#include <memory>
+#include <stdexcept>
 #include <thread>
 
 namespace onpdf::engine {
@@ -22,7 +24,10 @@ constexpr auto kTimeout = 5s;
 
 template <class T>
 T get_or_fail(std::future<T>& f) {
-  EXPECT_EQ(f.wait_for(kTimeout), std::future_status::ready) << "future timed out";
+  if (f.wait_for(kTimeout) != std::future_status::ready) {
+    ADD_FAILURE() << "future timed out";
+    throw std::runtime_error("future timed out");
+  }
   return f.get();
 }
 
@@ -146,27 +151,26 @@ TEST_F(DocumentHandleTest, LastHandleDestructorUnregisters) {
 
 TEST_F(DocumentHandleTest, CancelPendingRender) {
   DocumentHandle doc = open_simple();
-  std::latch entered{1};
-  std::latch release{1};
-  worker_.post([&](bool) {
-    entered.count_down();
-    release.wait();
+  auto entered = std::make_shared<std::latch>(1);
+  auto release = std::make_shared<std::latch>(1);
+  worker_.post([entered, release](bool) {
+    entered->count_down();
+    release->wait();
   });
-  entered.wait();
+  entered->wait();
 
   std::promise<Result<Bitmap>> p;
   auto f = p.get_future();
   TaskHandle handle = doc.render_page(0, RenderOptions{}, Priority::kNormal,
                                       [&](Result<Bitmap> r) { p.set_value(std::move(r)); });
   handle.cancel();
-  release.count_down();
+  release->count_down();
   auto r = get_or_fail(f);
   ASSERT_FALSE(r);
   EXPECT_EQ(r.error().code, ErrorCode::kCancelled);
 }
 
-TEST_F(DocumentHandleTest, HandlesSurviveWorkerShutdownGracefully) {
-  // 규칙상 핸들은 워커보다 먼저 죽어야 하지만, 워커가 먼저 stop 되어도 UB 없이 kInvalidState/kCancelled 로 끝나야 한다.
+TEST_F(DocumentHandleTest, RenderAfterWorkerStopReturnsCancelled) {
   DocumentHandle doc = open_simple();
   worker_.stop();
   auto f = doc.render_page(0, RenderOptions{});
@@ -174,6 +178,31 @@ TEST_F(DocumentHandleTest, HandlesSurviveWorkerShutdownGracefully) {
   ASSERT_FALSE(r);
   EXPECT_EQ(r.error().code, ErrorCode::kCancelled);
   doc.close();  // inline cancelled 통지 → 아무것도 안 함
+}
+
+TEST(DocumentHandleLifetime, HandleOutlivingWorkerFailsSafely) {
+  // 핸들이 워커보다 오래 살아도 UAF 없이 kInvalidState 로 끝나야 한다.
+  DocumentHandle doc;
+  {
+    PdfiumWorker worker;
+    auto f = DocumentHandle::open(worker, testdata("simple.pdf"));
+    auto r = get_or_fail(f);
+    ASSERT_TRUE(r) << r.error().message;
+    doc = *r;
+  }
+  EXPECT_TRUE(doc.valid());  // 닫힌 게 아니라 워커가 사라진 것
+  bool called = false;
+  std::thread::id called_on;
+  doc.render_page(0, RenderOptions{}, Priority::kHigh, [&](Result<Bitmap> result) {
+    called = true;
+    called_on = std::this_thread::get_id();
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidState);
+  });
+  EXPECT_TRUE(called);
+  EXPECT_EQ(called_on, std::this_thread::get_id());
+  doc.close();  // lock 실패 → no-op
+  doc = DocumentHandle{};
 }
 
 }  // namespace

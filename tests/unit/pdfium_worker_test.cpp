@@ -20,25 +20,39 @@ using namespace std::chrono_literals;
 constexpr auto kTimeout = 5s;
 
 // 워커를 첫 작업에서 블록시켜, 그 사이 큐에 쌓인 작업의 순서·취소를 검증한다.
+// latch 는 shared_ptr 로 소유해 작업이 Gate 보다 오래 살아도 안전하고,
+// 테스트가 ASSERT 로 일찍 빠져나가도 소멸자가 게이트를 열어 워커가 hang 하지 않는다.
 class Gate {
  public:
-  explicit Gate(PdfiumWorker& worker) {
-    worker.post([this](bool) {
-      entered_.count_down();
-      release_.wait();
+  explicit Gate(PdfiumWorker& worker)
+      : entered_(std::make_shared<std::latch>(1)), release_(std::make_shared<std::latch>(1)) {
+    worker.post([entered = entered_, release = release_](bool) {
+      entered->count_down();
+      release->wait();
     });
-    entered_.wait();  // 워커가 블록 상태에 들어갈 때까지 기다린다
+    entered_->wait();  // 워커가 블록 상태에 들어갈 때까지 기다린다
   }
-  void open() { release_.count_down(); }
+  ~Gate() { open(); }
+  void open() {
+    if (!opened_) {
+      opened_ = true;
+      release_->count_down();
+    }
+  }
 
  private:
-  std::latch entered_{1};
-  std::latch release_{1};
+  std::shared_ptr<std::latch> entered_;
+  std::shared_ptr<std::latch> release_;
+  bool opened_ = false;
 };
 
+// future 가 kTimeout 안에 준비되지 않으면 실패로 기록하고 예외를 던져 테스트를 끝낸다 (hang 방지).
 template <class T>
 T get_or_fail(std::future<T>& f) {
-  EXPECT_EQ(f.wait_for(kTimeout), std::future_status::ready) << "future timed out";
+  if (f.wait_for(kTimeout) != std::future_status::ready) {
+    ADD_FAILURE() << "future timed out";
+    throw std::runtime_error("future timed out");
+  }
   return f.get();
 }
 
@@ -176,7 +190,7 @@ TEST(PdfiumWorker, CancelAllCancelsEveryPendingTask) {
   EXPECT_EQ(cancelled_count.load(), 3);
 }
 
-TEST(PdfiumWorker, DestructorCancelsPendingAndJoins) {
+TEST(PdfiumWorker, StopThenDestructorNotifiesPendingAndJoins) {
   std::atomic<int> cancelled_count{0};
   std::atomic<int> total{0};
   {
@@ -188,8 +202,11 @@ TEST(PdfiumWorker, DestructorCancelsPendingAndJoins) {
         if (cancelled) ++cancelled_count;
       });
     }
+    // 워커가 게이트에 막혀 있는 동안 stop() 이 대기 작업 3개를 취소 표시한다.
+    // (gate.open() 뒤에 stop() 하면 워커가 먼저 꺼낼 수 있어 결정적이지 않다)
+    worker.stop();
     gate.open();
-    // Gate 가 열리자마자 소멸자가 stop() 을 부르므로, 대기 작업은 취소 통지된다
+    // 소멸자: 남은 작업을 cancelled=true 로 흘려보내고 join
   }
   EXPECT_EQ(total.load(), 3);
   EXPECT_EQ(cancelled_count.load(), 3);

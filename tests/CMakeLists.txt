@@ -9,6 +9,7 @@ function(onpdf_add_test name)
   onpdf_set_warnings(${name})
   onpdf_set_runtime_rpath(${name})
   add_test(NAME ${name} COMMAND ${name})
+  set_tests_properties(${name} PROPERTIES TIMEOUT 120)
 endfunction()
 
 # 메인 스레드에 전역 PdfiumLibrary 를 두고 PdfiumDocument 를 직접 쓰는 테스트

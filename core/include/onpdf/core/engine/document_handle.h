@@ -5,9 +5,12 @@
 //
 //  - open()/open_from_memory() 는 워커에 열기를 맡기고 future 로 핸들을 돌려준다.
 //  - info() 는 열 때 찍은 스냅샷이라 잠금 없이 어디서나 읽을 수 있다. (M2 편집 시 갱신 경로 추가)
-//  - render_page() 콜백은 워커 스레드에서 호출된다. UI 는 자기 스레드로 넘겨서 처리한다.
+//  - render_page() 콜백은 정확히 한 번 호출된다. 보통은 워커 스레드에서 호출되지만,
+//    빈 핸들이거나 워커가 이미 멈춘 경우에는 호출 스레드에서 즉시 호출된다.
+//    UI 는 두 경우 모두 자기 스레드로 넘겨서 처리한다.
 //  - 핸들은 복사 가능하다. 마지막 복사가 사라지거나 close() 가 호출되면 워커에 해제를 맡긴다.
-//  - 핸들은 PdfiumWorker 보다 먼저 소멸해야 한다. 워커가 먼저 멈추면 이후 호출은 kInvalidState.
+//  - 핸들은 워커보다 오래 살아도 안전하다 (내부적으로 weak 참조). 워커가 멈추거나 소멸한 뒤의
+//    render_page 는 각각 kCancelled / kInvalidState 로 끝난다.
 
 #include "onpdf/core/bitmap.h"
 #include "onpdf/core/engine/pdfium_worker.h"
@@ -47,7 +50,7 @@ class DocumentHandle {
   [[nodiscard]] DocumentId id() const noexcept;
   [[nodiscard]] const DocumentInfo& info() const;
 
-  // 콜백 방식. on_done 은 워커 스레드에서 정확히 한 번 호출된다 (취소·실패 포함).
+  // 콜백 방식. on_done 은 정확히 한 번 호출된다 (취소·실패·예외 포함). 호출 스레드는 위 설명 참고.
   TaskHandle render_page(int page_index, const RenderOptions& options, Priority priority,
                          std::function<void(Result<Bitmap>)> on_done) const;
 
