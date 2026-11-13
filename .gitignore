@@ -1,0 +1,33 @@
+# Build
+build/
+out/
+vcpkg_installed/
+CMakeUserPresets.json
+compile_commands.json
+.cache/
+
+# Third-party binaries (downloaded by third_party/ scripts)
+third_party/pdfium/
+third_party/qpdf/
+*.dll
+*.lib
+*.pdb
+*.dylib
+*.so
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+.DS_Store
+
+# Signing / secrets
+*.pfx
+*.p12
+*.snk
+
+# Claude Code (local only)
+.claude/workflow/
+.claude/settings.local.json
+.claude/res/
