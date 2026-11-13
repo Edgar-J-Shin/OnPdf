@@ -8,7 +8,14 @@ namespace onpdf::engine {
 // JavaScript 는 활성화하지 않는다 (V8 미연결).
 class PdfiumLibrary {
  public:
-  PdfiumLibrary();
+  struct Options {
+    // false 면 시스템 폰트를 쓰지 않고 PDFium 내장(Foxit) 폰트만 쓴다.
+    // 렌더링 회귀 테스트처럼 플랫폼 간 결과가 같아야 할 때 끈다. 앱에서는 켠다.
+    bool use_system_fonts = true;
+  };
+
+  PdfiumLibrary() : PdfiumLibrary(Options{}) {}
+  explicit PdfiumLibrary(const Options& options);
   ~PdfiumLibrary();
 
   PdfiumLibrary(const PdfiumLibrary&) = delete;
