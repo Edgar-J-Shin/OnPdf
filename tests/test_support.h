@@ -3,6 +3,7 @@
 #include "onpdf/core/bitmap.h"
 #include "onpdf/core/engine/pdfium_library.h"
 #include "onpdf/core/image/png_io.h"
+#include "onpdf/core/platform/path.h"
 
 #include <gtest/gtest.h>
 
@@ -13,8 +14,9 @@
 
 namespace onpdf::test {
 
+// 파일명은 UTF-8 (한글 파일명 포함). Windows 에서도 올바르게 해석되도록 path_from_utf8 을 쓴다.
 inline std::filesystem::path testdata(const char* name) {
-  return std::filesystem::path(ONPDF_TESTDATA_DIR) / name;
+  return path_from_utf8(ONPDF_TESTDATA_DIR) / path_from_utf8(name);
 }
 
 // 렌더링 비교 허용치. 플랫폼별 안티에일리어싱 차이를 흡수한다.

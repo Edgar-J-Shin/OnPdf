@@ -5,9 +5,11 @@
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/core/engine/pdfium_library.h"
 #include "onpdf/core/image/png_io.h"
+#include "onpdf/core/platform/path.h"
 
 #include <charconv>
 #include <cstdio>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -84,7 +86,7 @@ bool parse_args(int argc, char** argv, Args& args) {
 
 int cmd_info(const Args& args) {
   if (args.positional.size() != 1) return usage();
-  auto doc = PdfiumDocument::open(args.positional[0], args.password);
+  auto doc = PdfiumDocument::open(onpdf::path_from_utf8(args.positional[0]), args.password);
   if (!doc) return fail(doc.error());
   const int count = doc->page_count();
   std::printf("file: %s\npages: %d\n", args.positional[0].c_str(), count);
@@ -98,7 +100,7 @@ int cmd_info(const Args& args) {
 
 int cmd_render(const Args& args) {
   if (args.positional.size() != 2) return usage();
-  auto doc = PdfiumDocument::open(args.positional[0], args.password);
+  auto doc = PdfiumDocument::open(onpdf::path_from_utf8(args.positional[0]), args.password);
   if (!doc) return fail(doc.error());
 
   RenderOptions options;
@@ -107,7 +109,7 @@ int cmd_render(const Args& args) {
   auto bitmap = doc->render_page(args.page, options);
   if (!bitmap) return fail(bitmap.error());
 
-  auto written = onpdf::image::write_png(*bitmap, args.positional[1]);
+  auto written = onpdf::image::write_png(*bitmap, onpdf::path_from_utf8(args.positional[1]));
   if (!written) return fail(written.error());
   std::printf("rendered page %d -> %s (%d x %d)\n", args.page, args.positional[1].c_str(),
               bitmap->width, bitmap->height);
@@ -116,7 +118,7 @@ int cmd_render(const Args& args) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int run(int argc, char** argv) {
   Args args;
   if (!parse_args(argc, argv, args)) return usage();
 
@@ -125,3 +127,16 @@ int main(int argc, char** argv) {
   if (args.command == "render") return cmd_render(args);
   return usage();
 }
+
+#ifdef _WIN32
+// Windows 콘솔 인자는 코드 페이지 인코딩이므로 wmain 으로 받아 UTF-8 로 바꾼다.
+int wmain(int argc, wchar_t** argv) {
+  std::vector<std::string> utf8;
+  std::vector<char*> ptrs;
+  for (int i = 0; i < argc; ++i) utf8.push_back(onpdf::path_to_utf8(std::filesystem::path(argv[i])));
+  for (auto& s : utf8) ptrs.push_back(s.data());
+  return run(argc, ptrs.data());
+}
+#else
+int main(int argc, char** argv) { return run(argc, argv); }
+#endif

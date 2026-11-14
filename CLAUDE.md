@@ -105,7 +105,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 2. **Ownership 명확히**: raw `new`/`delete` 금지. 소유권은 `unique_ptr`, 공유는 꼭 필요할 때만 `shared_ptr`, 비소유 참조는 참조 또는 raw pointer(nullable 명시).
 3. **스레드**: PDFium 워커 외 스레드에서 PDFium 객체 접근 금지. 공유 상태는 `std::mutex` 또는 메시지 전달로 보호. 데이터 레이스는 Critical 이슈로 취급.
 4. **텍스트는 UTF-8**: 내부 문자열은 UTF-8 `std::string`. PDFium 의 UTF-16LE 와는 core/engine 경계에서만 변환. 한글(CID 폰트) 경로는 항상 테스트를 함께 만든다.
-5. **플랫폼 분기 최소화**: `#ifdef _WIN32` 는 `core/platform/` 과 `app/` 에만. 경로는 `std::filesystem::path`.
+5. **플랫폼 분기 최소화**: `#ifdef _WIN32` 는 `core/platform/`, `app/`, `cli/main.cpp`(wmain) 에만. 경로는 `std::filesystem::path` 이되 **UTF-8 문자열에서 만들 때는 반드시 `onpdf::path_from_utf8`**(`core/platform/path.h`) 를 쓴다 — Windows 는 `path(std::string)` 을 코드 페이지로 해석해 한글 경로가 깨진다. 오류 메시지 등 역변환은 `path_to_utf8`.
 6. **스타일**: `.clang-format` 준수(생기면). 클래스 `PascalCase`, 함수·변수 `snake_case`, 멤버 `name_`, 상수 `kName`. 헤더는 `#pragma once`. 주석·문서는 한국어, 식별자·커밋 메시지 제목은 영어.
 7. **i18n**: 사용자 노출 문자열은 `tr()` 로 감싸고 `app/i18n/` 에 ko/en 둘 다 추가. 하드코딩 금지.
 8. **Simplicity**: 보일러플레이트 최소화, 기존 패턴 우선. 새 의존성은 `vcpkg.json` 추가 전에 상의.

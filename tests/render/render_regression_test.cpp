@@ -42,7 +42,7 @@ void expect_matches_reference(const RenderCase& c) {
   auto actual = doc->render_page(c.page, options);
   ASSERT_TRUE(actual) << actual.error().message;
 
-  const auto expected_path = std::filesystem::path(ONPDF_TESTDATA_DIR) / "expected" / c.expected;
+  const auto expected_path = testdata("expected") / c.expected;
   if (update_references()) {
     auto written = image::write_png(*actual, expected_path);
     ASSERT_TRUE(written) << written.error().message;

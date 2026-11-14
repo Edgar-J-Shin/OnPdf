@@ -23,7 +23,7 @@ namespace {
 using onpdf::test::expect_bitmap_matches_png;
 using onpdf::test::testdata;
 
-QString testdata_q(const char* name) { return QString::fromStdString(testdata(name).string()); }
+QString testdata_q(const char* name) { return QString::fromStdString(onpdf::path_to_utf8(testdata(name))); }
 
 // 이벤트 루프를 돌리며 predicate 가 참이 될 때까지 기다린다. 시간 초과면 false.
 template <class Pred>

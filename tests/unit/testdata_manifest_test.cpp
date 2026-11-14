@@ -73,7 +73,8 @@ std::string test_name(const ::testing::TestParamInfo<ManifestEntry>& info) {
     const auto ch = static_cast<unsigned char>(c);
     name += std::isalnum(ch) ? static_cast<char>(ch) : '_';
   }
-  return name.empty() ? "unnamed" : name;
+  if (name.find_first_not_of('_') == std::string::npos) return "non_ascii_name";  // 예: 한글 파일명.pdf
+  return name;
 }
 
 void expect_opened(const ManifestEntry& e, const Result<PdfiumDocument>& doc) {

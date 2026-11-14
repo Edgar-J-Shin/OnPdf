@@ -38,7 +38,7 @@ void DocumentSession::open(const QString& path, const QString& password) {
   QPointer<DocumentSession> self(this);
 
   pending_open_ = engine::DocumentHandle::open(
-      worker_, std::filesystem::path(path.toStdString()), password.toStdString(),
+      worker_, onpdf::path_from_utf8(path.toUtf8().toStdString()), password.toStdString(),
       engine::Priority::kHigh,
       // 워커 스레드: 결과를 메인 스레드로 넘기기만 한다.
       [dispatcher, self, gen, path](onpdf::Result<engine::DocumentHandle> result) {
