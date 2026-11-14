@@ -59,5 +59,27 @@ TEST(RenderRegression, SimplePage1Landscape) {
   expect_matches_reference({"simple.pdf", 1, 0.5f, "simple-p1.png"});
 }
 
+// 한글 CID 폰트 임베딩 — 서브셋 TrueType 이 들어 있어 플랫폼 무관하게 같은 결과
+TEST(RenderRegression, KoreanEmbeddedFont) {
+  expect_matches_reference({"korean-embedded.pdf", 0, 1.0f, "korean-embedded-p0.png"});
+}
+
+TEST(RenderRegression, ScannedImagePage) {
+  expect_matches_reference({"scanned.pdf", 0, 0.5f, "scanned-p0.png"});
+}
+
+TEST(RenderRegression, AcroFormWidgets) {
+  expect_matches_reference({"form-acro.pdf", 0, 1.0f, "form-acro-p0.png"});
+}
+
+TEST(RenderRegression, Annotations) {
+  expect_matches_reference({"annotations.pdf", 0, 1.0f, "annotations-p0.png"});
+}
+
+// /Rotate 90 쪽: 가로·세로가 바뀐 비트맵
+TEST(RenderRegression, RotatedPage) {
+  expect_matches_reference({"mixed-sizes.pdf", 5, 0.5f, "mixed-sizes-p5.png"});
+}
+
 }  // namespace
 }  // namespace onpdf

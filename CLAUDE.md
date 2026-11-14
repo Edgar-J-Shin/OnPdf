@@ -53,11 +53,11 @@ cmake --preset dev-app && cmake --build --preset dev-app        # Qt 앱 포함 
 ctest --preset dev-app                                         # app 테스트(offscreen) 포함
 ```
 
-- 테스트 PDF 생성: `python3 testdata/make_simple_pdf.py` (xref 직접 계산, 외부 의존 없음)
+- 테스트 PDF: `python3 testdata/gen/make_all.py` 로 전부 생성(표준 라이브러리만, 결정적). `--check` 가 CI 에서 커밋본과 비교. 파일별 기대값은 `testdata/manifest.tsv`, 절차는 `testdata/README.md`
 - `core` 는 `stb` 로 PNG 를 읽고 쓴다. 새 의존성은 `vcpkg.json` 에 추가하고 `builtin-baseline` 을 유지한다
 - 빌드 산출물은 `build/<preset>/` 아래에만 생성한다 (소스 트리 내 빌드 금지). 실행 파일과 PDFium 공유 라이브러리는 `build/<preset>/bin/`
 - PDFium/qpdf 바이너리는 저장소에 커밋하지 않는다 — `third_party/` 스크립트로 받아온다
-- 테스트 PDF 는 라이선스가 확인된 파일만 `testdata/` 에 넣고, 출처·라이선스를 `testdata/README.md` 에 기록한다
+- 테스트 PDF 는 라이선스가 확인된 파일만 `testdata/` 에 넣고, `manifest.tsv` 에 기대값·출처·라이선스를 적는다 (README 표는 자동 생성). 한글 파일명(`한글 파일명.pdf`)이 있으므로 경로는 항상 UTF-8 `std::filesystem::path` 로 다룬다
 
 # Architecture
 
@@ -114,7 +114,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 - **단위 테스트** (`tests/unit`): core/edit. 모든 Command 는 실행 → 취소 → 재실행 후 문서 상태 비교 테스트 필수.
 - **렌더링 회귀** (`tests/render`): 테스트 PDF → PNG → 기준 이미지와 픽셀 비교. 렌더링·편집 기능 변경 시 반드시 갱신. 테스트는 `PdfiumLibrary::Options::use_system_fonts=false` 로 내장 폰트만 써서 플랫폼 간 결과를 같게 한다 (시스템 폰트 의존 테스트는 별도 표시).
 - **왕복 테스트** (`tests/roundtrip`): 열기 → 저장 → 다시 열기 후 페이지 수·텍스트·렌더링 일치 + `qpdf --check`.
-- 한글 문서, 스캔본, 폼, 암호화 파일을 테스트 집합에 항상 포함한다.
+- 한글 문서, 스캔본, 폼, 암호화 파일을 테스트 집합에 항상 포함한다. `tests/unit/testdata_manifest_test.cpp` 가 `manifest.tsv` 의 전 파일을 열어 검증하므로 새 PDF 는 manifest 한 줄로 테스트에 들어간다.
 - CI: 푸시마다 빌드 + 단위 테스트, PR 마다 렌더링 회귀까지.
 
 # Task Complexity Routing

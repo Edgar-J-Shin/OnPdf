@@ -1,0 +1,31 @@
+# file	expect(ok|password|invalid)	password	owner_password	pages	width	height	render(0/1)	source	license	note
+file	expect	password	owner_password	pages	width	height	render	source	license	note
+simple.pdf	ok			2	612	792	1	gen	Apache-2.0	기본: 2쪽(세로/가로), Helvetica, 도형
+korean-embedded.pdf	ok			1	595.276	841.89	1	gen	Apache-2.0	한글 CIDFontType2 임베딩(Identity-H), M3 폰트 임베딩 기준
+korean-system-font.pdf	ok			1	595.276	841.89	0	gen	Apache-2.0	비임베딩 한글 CID(Adobe-Korea1, UniKS-UCS2-H) → 시스템 폰트 대체
+encrypted-rc4-user.pdf	password	user	owner	2	612	792	0	gen	Apache-2.0	표준 보안 핸들러 R3 RC4-128, 사용자 암호
+encrypted-owner-only.pdf	ok		owner	2	612	792	0	gen	Apache-2.0	소유자 암호만(P=-3904), 암호 없이 열림
+encrypted-aes256.pdf	password	user	owner	2	612	792	0	gen+qpdf	Apache-2.0	AESV3 R6 256-bit (qpdf)
+scanned.pdf	ok			3	612	792	1	gen	Apache-2.0	이미지 전용 3쪽(8-bit Gray, Flate), 텍스트 없음
+form-acro.pdf	ok			1	612	792	1	gen	Apache-2.0	AcroForm: 텍스트·체크박스·라디오·콤보(외형 스트림 포함). 위젯은 폼 필 환경(FPDF_FFLDraw, M3) 없이는 그려지지 않아 현재 기준 PNG 에는 보이지 않음
+bookmarks.pdf	ok			10	612	792	0	gen	Apache-2.0	3단계 Outline(한글 제목), 10쪽
+large-1000.pdf	ok			1000	612	792	0	gen	Apache-2.0	1,000쪽, xref 스트림 + 객체 스트림
+mixed-sizes.pdf	ok			7	595.276	841.89	1	gen	Apache-2.0	A4/Letter/A5/명함, /Rotate 90·270 (p5 렌더 비교)
+xref-stream.pdf	ok			2	612	792	0	gen	Apache-2.0	PDF 1.5 xref 스트림 + 객체 스트림
+incremental-update.pdf	ok			3	612	792	0	gen	Apache-2.0	증분 갱신으로 3쪽 추가 (/Prev)
+annotations.pdf	ok			1	612	792	1	gen	Apache-2.0	Highlight(AP, BM Multiply)·Square·Text(PDFium 생성 AP)·Link 주석
+empty-page.pdf	ok			1	612	792	0	gen	Apache-2.0	내용 없는 1쪽
+unicode-metadata.pdf	ok			1	612	792	0	gen	Apache-2.0	Info 한글 제목·작성자(UTF-16BE)
+transparency.pdf	ok			1	612	792	0	gen	Apache-2.0	ExtGState ca/CA 0.5 겹친 원
+truncated.pdf	invalid			0	0	0	0	gen	Apache-2.0	bookmarks.pdf 뒤 40% 절단(쪽 트리 소실) → 복구 불가, 크래시 없이 invalid
+bad-xref.pdf	ok			2	612	792	0	gen	Apache-2.0	xref 오프셋 전부 오류 → 복구 파서
+garbage-header.pdf	ok			2	612	792	0	gen	Apache-2.0	%PDF 앞 1KB 쓰레기 → 헤더 탐색
+한글 파일명.pdf	ok			1	612	792	0	gen	Apache-2.0	unicode-metadata 복사본, 경로 UTF-8 처리
+pdfium-hello_world.pdf	ok			1	200	200	0	pdfium	BSD-3-Clause	최소 텍스트 문서
+pdfium-encrypted.pdf	password	1234		1	612	792	0	pdfium	BSD-3-Clause	PDFium 암호 샘플
+pdfium-bookmarks.pdf	ok			2	612	792	0	pdfium	BSD-3-Clause	북마크 샘플
+pdfium-text_form.pdf	ok			1	300	300	0	pdfium	BSD-3-Clause	AcroForm 텍스트 필드
+pdfium-rectangles.pdf	ok			1	200	300	0	pdfium	BSD-3-Clause	도형 렌더 샘플
+pdfium-trailer_unterminated.pdf	invalid			0	0	0	0	pdfium	BSD-3-Clause	손상: trailer 미종료
+pdfium-bug_481363.pdf	ok			1	612	792	0	pdfium	BSD-3-Clause	실제 버그 리포트 손상 파일
+not_a_pdf.txt	invalid			0	0	0	0	gen	Apache-2.0	PDF 가 아닌 파일

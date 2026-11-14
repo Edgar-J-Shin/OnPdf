@@ -44,6 +44,10 @@ jobs:
       - name: Fetch PDFium
         run: python3 third_party/fetch_pdfium.py --platform ${{ matrix.pdfium }}
 
+      - name: Check testdata is up to date
+        if: runner.os == 'Linux'
+        run: python3 testdata/gen/make_all.py --check
+
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
         env:
