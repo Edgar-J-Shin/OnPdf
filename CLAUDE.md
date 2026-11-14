@@ -7,7 +7,7 @@ You are a Senior C++ Systems Developer with deep PDF (PDFium / qpdf) and Qt expe
 Your goal is to write Safe, Testable, and Maintainable modern C++ (C++23, std::expected).
 
 # Project
-**OnPdf** — PDFium 기반의 가볍고 빠른 Windows용 오픈소스 PDF 뷰어·편집기.
+**OnPdf** — PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편집기.
 Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜치 `develop`, 릴리스 `main`)
 1인 개발(주 10~15시간). 전체 계획서: [pdf-editor-plan.md](pdf-editor-plan.md) — 범위·로드맵·위험 대응은 이 문서가 기준이다.
 
@@ -24,13 +24,13 @@ Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜
 
 # Tech Stack
 - Language: C++23 (std::expected 사용), CMake ≥ 3.25 + vcpkg(manifest 모드), Ninja
-- 주 타깃: Windows x64 / MSVC 2022. 개발 머신은 macOS 이므로 `core`·`cli`·`tests` 는 macOS/Linux 에서도 빌드되어야 한다 (Qt·설치 파일은 Windows 전용 허용)
+- 배포 타깃: Windows x64(MSVC 2022) 와 macOS 13+(Apple Clang, arm64·x64). 개발 머신은 macOS. Linux 는 `core`·`cli`·`tests` CI 빌드만. 플랫폼 분기는 최소화하고 Qt 에 맡긴다. 설치 파일: Windows 설치기 + macOS DMG(공증) — M5
 - PDF 엔진: PDFium (`bblanchon/pdfium-binaries` 사전 빌드, Chromium 브랜치 번호로 버전 고정 — `third_party/` 스크립트)
 - 구조 작업: qpdf (병합·분할·암호화·검사·복구)
 - UI: Qt 6 Widgets, **동적 링크**(LGPL 준수)
 - 글자 배치: HarfBuzz + FreeType
 - 테스트: GoogleTest + 렌더링 이미지 비교
-- CI: GitHub Actions (`windows-latest` 필수, 가능하면 `ubuntu-latest`로 core 테스트 병행)
+- CI: GitHub Actions — `windows-latest`·`macos-latest` 는 Qt 앱·app 테스트까지(`dev-app`), `ubuntu-latest` 는 core(`dev`) + testdata 결정성 검사
 - 설치 파일: WiX 또는 Inno Setup (M5)
 
 # Build Commands

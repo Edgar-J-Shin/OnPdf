@@ -13,9 +13,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # 주 타깃 Windows 는 Qt 앱까지 빌드·테스트한다 (dev-app). 나머지는 core 만.
+          # 배포 타깃 Windows·macOS 는 Qt 앱까지 빌드·테스트한다 (dev-app). Linux 는 core 만.
           - { name: windows-x64, os: windows-latest, pdfium: win-x64,   preset: dev-app, qt: true }
-          - { name: macos-arm64, os: macos-latest,   pdfium: mac-arm64, preset: dev,     qt: false }
+          - { name: macos-arm64, os: macos-latest,   pdfium: mac-arm64, preset: dev-app, qt: true }
           - { name: linux-x64,   os: ubuntu-latest,  pdfium: linux-x64, preset: dev,     qt: false }
 
     steps:
