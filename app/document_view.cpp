@@ -288,7 +288,7 @@ void DocumentView::paint_page(QPainter& painter, int page, const QRectF& page_lo
     const onpdf::Rect src = view::tile_rect_px(key, pt);
     const QRectF target(page_logical.x() + src.x * factor / d, page_logical.y() + src.y * factor / d,
                         src.w * factor / d, src.h * factor / d);
-    painter.drawImage(target, to_qimage(onpdf::Bitmap(*bitmap), 1.0));
+    painter.drawImage(target, to_qimage_shared(bitmap, 1.0));  // 복사 없음
   }
 
   // 2. 현재 배율 타일 (뷰포트와 교차하는 것만)
@@ -307,8 +307,8 @@ void DocumentView::paint_page(QPainter& painter, int page, const QRectF& page_lo
       auto bitmap = cache_.get(key);
       if (!bitmap) continue;
       const onpdf::Rect src = view::tile_rect_px(key, pt);
-      QImage image = to_qimage(onpdf::Bitmap(*bitmap), d);
-      painter.drawImage(QPointF(page_logical.x() + src.x / d, page_logical.y() + src.y / d), image);
+      painter.drawImage(QPointF(page_logical.x() + src.x / d, page_logical.y() + src.y / d),
+                        to_qimage_shared(bitmap, d));  // 복사 없음
     }
   }
 }

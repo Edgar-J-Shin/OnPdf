@@ -21,6 +21,7 @@
 #include <QTimer>
 
 #include <memory>
+#include <vector>
 
 namespace onpdf::app {
 
@@ -52,6 +53,7 @@ class DocumentView : public QAbstractScrollArea {
   [[nodiscard]] int page_count() const;
 
   [[nodiscard]] view::TileCache::Stats cache_stats() const { return cache_.stats(); }
+  [[nodiscard]] std::vector<view::TileKey> cache_keys() const { return cache_.keys(); }
   [[nodiscard]] view::TileScheduler::Stats scheduler_stats() const;
   [[nodiscard]] int pending_visible_tiles() const;
 

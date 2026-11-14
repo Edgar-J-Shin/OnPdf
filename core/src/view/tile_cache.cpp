@@ -44,6 +44,13 @@ std::vector<std::pair<TileKey, std::shared_ptr<const Bitmap>>> TileCache::tiles_
   return out;
 }
 
+std::vector<TileKey> TileCache::keys() const {
+  std::vector<TileKey> out;
+  out.reserve(map_.size());
+  for (const auto& [key, entry] : map_) out.push_back(key);
+  return out;
+}
+
 void TileCache::clear() {
   lru_.clear();
   map_.clear();

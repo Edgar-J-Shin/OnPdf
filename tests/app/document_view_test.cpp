@@ -103,11 +103,6 @@ TEST_F(DocumentViewTest, ZoomKeepsAnchorAndClamps) {
   EXPECT_EQ(view_.zoom_mode(), ZoomMode::kCustom);
   view_.go_to_page(2);
   const int page_before = view_.current_page();
-  const double before_fraction = [&] {
-    QScrollBar* v = view_.verticalScrollBar();
-    return static_cast<double>(v->value());
-  }();
-  (void)before_fraction;
   view_.set_zoom(2.0, QPointF(400, 300));
   EXPECT_DOUBLE_EQ(view_.zoom(), 2.0);
   EXPECT_EQ(view_.current_page(), page_before);  // 중앙 앵커 → 같은 쪽이 중앙에 남는다
@@ -136,9 +131,14 @@ TEST_F(DocumentViewTest, ReplacingDocumentDropsLateTiles) {
   // 즉시 다른 문서로 교체: 이전 문서의 타일이 늦게 도착해도 새 캐시에는 들어가지 않는다
   ASSERT_TRUE(open("simple.pdf"));
   ASSERT_TRUE(wait_first_view());
-  for (const auto& [key, bitmap] : std::vector<std::pair<int, int>>{}) (void)key;
-  EXPECT_LE(view_.cache_stats().count, 8u);  // simple.pdf 2쪽: 미리보기 2 + 타일 몇 장
   EXPECT_EQ(view_.page_count(), 2);
+  // 캐시에는 새 문서(2쪽)의 타일만 있어야 한다. 이전 문서(500쪽 근처)의 늦은 타일이 섞이면 실패
+  const auto keys = view_.cache_keys();
+  EXPECT_FALSE(keys.empty());
+  for (const auto& key : keys) {
+    EXPECT_GE(key.page, 0);
+    EXPECT_LT(key.page, 2) << "late tile from previous document leaked into cache";
+  }
 }
 
 TEST_F(DocumentViewTest, ClearDocumentResetsState) {
