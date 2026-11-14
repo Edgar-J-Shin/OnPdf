@@ -40,6 +40,10 @@ cmake --preset dev
 cmake --build --preset dev
 ctest --preset dev
 ./build/dev/bin/onpdf_cli render some.pdf page0.png
+
+# Qt 앱 (Qt 6 필요. macOS: brew install qt && export QT_ROOT=$(brew --prefix qt))
+cmake --preset dev-app && cmake --build --preset dev-app
+./build/dev-app/bin/onpdf_app some.pdf
 ```
 
 ## 저장소 구조

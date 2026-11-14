@@ -2,9 +2,14 @@ find_package(GTest CONFIG REQUIRED)
 
 set(ONPDF_TESTDATA_DIR "${CMAKE_SOURCE_DIR}/testdata")
 
+# onpdf_add_test(<name> [NO_GTEST_MAIN] <sources...>)
 function(onpdf_add_test name)
-  add_executable(${name} ${ARGN})
-  target_link_libraries(${name} PRIVATE onpdf::core GTest::gtest GTest::gtest_main)
+  cmake_parse_arguments(ARG "NO_GTEST_MAIN" "" "" ${ARGN})
+  add_executable(${name} ${ARG_UNPARSED_ARGUMENTS})
+  target_link_libraries(${name} PRIVATE onpdf::core GTest::gtest)
+  if(NOT ARG_NO_GTEST_MAIN)
+    target_link_libraries(${name} PRIVATE GTest::gtest_main)
+  endif()
   target_compile_definitions(${name} PRIVATE ONPDF_TESTDATA_DIR="${ONPDF_TESTDATA_DIR}")
   onpdf_set_warnings(${name})
   onpdf_set_runtime_rpath(${name})
@@ -29,3 +34,14 @@ onpdf_add_test(onpdf_worker_tests
   unit/pdfium_worker_test.cpp
   unit/document_handle_test.cpp
 )
+
+# Qt app 로직 테스트 (위젯 없음, offscreen 플랫폼). ONPDF_BUILD_APP=ON 일 때만.
+if(ONPDF_BUILD_APP)
+  onpdf_add_test(onpdf_app_tests NO_GTEST_MAIN
+    app/test_main.cpp
+    app/qt_image_test.cpp
+    app/document_session_test.cpp
+  )
+  target_link_libraries(onpdf_app_tests PRIVATE onpdf_app_lib)
+  set_tests_properties(onpdf_app_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()

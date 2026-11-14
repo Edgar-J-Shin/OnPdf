@@ -79,6 +79,37 @@ TEST_F(DocumentHandleTest, OpenReturnsInfo) {
   EXPECT_TRUE(is_registered(doc.id()));
 }
 
+TEST_F(DocumentHandleTest, OpenWithCallbackRunsOnWorkerThread) {
+  std::promise<bool> on_worker;
+  auto f = on_worker.get_future();
+  DocumentHandle received;
+  TaskHandle handle = DocumentHandle::open(
+      worker_, testdata("simple.pdf"), "", Priority::kHigh, [&](Result<DocumentHandle> r) {
+        if (r) received = *r;
+        on_worker.set_value(worker_.is_worker_thread());
+      });
+  EXPECT_TRUE(handle.valid());
+  EXPECT_TRUE(get_or_fail(f));
+  EXPECT_TRUE(received.valid());
+  EXPECT_EQ(received.info().page_count, 2);
+}
+
+TEST_F(DocumentHandleTest, OpenWithCallbackAfterStopIsCancelledInline) {
+  worker_.stop();
+  bool called = false;
+  std::thread::id called_on;
+  ErrorCode code = ErrorCode::kUnknown;
+  DocumentHandle::open(worker_, testdata("simple.pdf"), "", Priority::kHigh,
+                       [&](Result<DocumentHandle> r) {
+                         called = true;
+                         called_on = std::this_thread::get_id();
+                         if (!r) code = r.error().code;
+                       });
+  EXPECT_TRUE(called);
+  EXPECT_EQ(called_on, std::this_thread::get_id());
+  EXPECT_EQ(code, ErrorCode::kCancelled);
+}
+
 TEST_F(DocumentHandleTest, OpenMissingFileFails) {
   auto f = DocumentHandle::open(worker_, testdata("does-not-exist.pdf"));
   auto r = get_or_fail(f);

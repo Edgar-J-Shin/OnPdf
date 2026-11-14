@@ -3,7 +3,7 @@
 // 워커 스레드에 사는 PdfiumDocument 를 가리키는 스레드 안전 핸들.
 // UI 는 이 헤더만 보고 PDFium 헤더나 PdfiumDocument 를 보지 않는다.
 //
-//  - open()/open_from_memory() 는 워커에 열기를 맡기고 future 로 핸들을 돌려준다.
+//  - open()/open_from_memory() 는 워커에 열기를 맡긴다. 콜백 오버로드(UI 용)와 future 오버로드(CLI·테스트)가 있다.
 //  - info() 는 열 때 찍은 스냅샷이라 잠금 없이 어디서나 읽을 수 있다. (M2 편집 시 갱신 경로 추가)
 //  - render_page() 콜백은 정확히 한 번 호출된다. 보통은 워커 스레드에서 호출되지만,
 //    빈 핸들이거나 워커가 이미 멈춘 경우에는 호출 스레드에서 즉시 호출된다.
@@ -14,6 +14,7 @@
 
 #include "onpdf/core/bitmap.h"
 #include "onpdf/core/engine/pdfium_worker.h"
+#include "onpdf/core/engine/render_types.h"
 #include "onpdf/core/error.h"
 
 #include <cstdint>
@@ -26,9 +27,6 @@
 
 namespace onpdf::engine {
 
-struct PageSize;
-struct RenderOptions;
-
 struct DocumentInfo {
   int page_count = 0;
   std::vector<PageSize> page_sizes;
@@ -38,6 +36,16 @@ class DocumentHandle {
  public:
   DocumentHandle() = default;  // 빈 핸들
 
+  using OpenCallback = std::function<void(Result<DocumentHandle>)>;
+
+  // 콜백 방식. on_done 은 정확히 한 번 호출된다. 보통 워커 스레드에서, 워커가 멈췄으면
+  // 호출 스레드에서 즉시 kCancelled 로 호출된다.
+  static TaskHandle open(PdfiumWorker& worker, std::filesystem::path path, std::string password,
+                         Priority priority, OpenCallback on_done);
+  static TaskHandle open_from_memory(PdfiumWorker& worker, std::vector<std::uint8_t> data,
+                                     std::string password, Priority priority, OpenCallback on_done);
+
+  // future 방식 (CLI·테스트용).
   static std::future<Result<DocumentHandle>> open(PdfiumWorker& worker, std::filesystem::path path,
                                                   std::string password = {},
                                                   Priority priority = Priority::kHigh);
