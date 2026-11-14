@@ -1,6 +1,10 @@
 {
   "version": 6,
-  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
   "configurePresets": [
     {
       "name": "base",
@@ -16,29 +20,63 @@
       "name": "dev",
       "displayName": "Dev (Debug)",
       "inherits": "base",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
     },
     {
       "name": "release",
       "displayName": "Release",
       "inherits": "base",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
     },
     {
       "name": "dev-app",
       "displayName": "Dev + Qt app",
       "inherits": "dev",
-      "cacheVariables": { "ONPDF_BUILD_APP": "ON" }
+      "cacheVariables": {
+        "ONPDF_BUILD_APP": "ON",
+        "CMAKE_PREFIX_PATH": "$env{QT_ROOT}"
+      }
     }
   ],
   "buildPresets": [
-    { "name": "dev",     "configurePreset": "dev" },
-    { "name": "release", "configurePreset": "release" },
-    { "name": "dev-app", "configurePreset": "dev-app" }
+    {
+      "name": "dev",
+      "configurePreset": "dev"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "dev-app",
+      "configurePreset": "dev-app"
+    }
   ],
   "testPresets": [
-    { "name": "dev",     "configurePreset": "dev",     "output": { "outputOnFailure": true } },
-    { "name": "release", "configurePreset": "release", "output": { "outputOnFailure": true } },
-    { "name": "dev-app", "configurePreset": "dev-app", "output": { "outputOnFailure": true } }
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "dev-app",
+      "configurePreset": "dev-app",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
   ]
 }

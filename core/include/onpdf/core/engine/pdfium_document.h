@@ -2,6 +2,7 @@
 
 #include "onpdf/core/bitmap.h"
 #include "onpdf/core/engine/pdfium_handles.h"
+#include "onpdf/core/engine/render_types.h"
 #include "onpdf/core/error.h"
 
 #include <cstdint>
@@ -10,23 +11,6 @@
 #include <vector>
 
 namespace onpdf::engine {
-
-// 페이지 크기 (PDF 포인트, 1/72 inch)
-struct PageSize {
-  double width = 0.0;
-  double height = 0.0;
-};
-
-struct RenderOptions {
-  // 포인트당 픽셀 수. 1.0 = 72 DPI, 96 DPI 화면은 96/72.
-  float scale = 1.0f;
-  // 0, 90, 180, 270 (시계 방향)
-  int rotation = 0;
-  // 주석(annotation) 렌더링 여부
-  bool render_annotations = true;
-  // LCD 서브픽셀 텍스트
-  bool lcd_text = false;
-};
 
 // 열린 PDF 문서. 이동만 가능하며 PDFium 워커 스레드에서만 사용한다.
 // 파일 내용은 메모리에 통째로 올린다 (M1 에서 FPDF_LoadCustomDocument 로 전환 예정).

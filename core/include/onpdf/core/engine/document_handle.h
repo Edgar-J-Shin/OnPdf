@@ -14,6 +14,7 @@
 
 #include "onpdf/core/bitmap.h"
 #include "onpdf/core/engine/pdfium_worker.h"
+#include "onpdf/core/engine/render_types.h"
 #include "onpdf/core/error.h"
 
 #include <cstdint>
@@ -26,9 +27,6 @@
 
 namespace onpdf::engine {
 
-struct PageSize;
-struct RenderOptions;
-
 struct DocumentInfo {
   int page_count = 0;
   std::vector<PageSize> page_sizes;
@@ -38,6 +36,16 @@ class DocumentHandle {
  public:
   DocumentHandle() = default;  // 빈 핸들
 
+  using OpenCallback = std::function<void(Result<DocumentHandle>)>;
+
+  // 콜백 방식. on_done 은 정확히 한 번 호출된다. 보통 워커 스레드에서, 워커가 멈췄으면
+  // 호출 스레드에서 즉시 kCancelled 로 호출된다.
+  static TaskHandle open(PdfiumWorker& worker, std::filesystem::path path, std::string password,
+                         Priority priority, OpenCallback on_done);
+  static TaskHandle open_from_memory(PdfiumWorker& worker, std::vector<std::uint8_t> data,
+                                     std::string password, Priority priority, OpenCallback on_done);
+
+  // future 방식 (CLI·테스트용).
   static std::future<Result<DocumentHandle>> open(PdfiumWorker& worker, std::filesystem::path path,
                                                   std::string password = {},
                                                   Priority priority = Priority::kHigh);

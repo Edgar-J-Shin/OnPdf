@@ -39,6 +39,8 @@ Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜
 > CI 와 로컬 모두 `CMakePresets.json` 의 preset 이름을 쓴다: `dev`(Debug), `release`, `dev-app`(Qt 포함).
 
 ```bash
+export VCPKG_ROOT=$HOME/vcpkg
+export QT_ROOT=$(brew --prefix qt)      # dev-app preset 이 CMAKE_PREFIX_PATH 로 넘긴다 (Homebrew qt 6.12)
 python3 third_party/fetch_pdfium.py     # PDFium 사전 빌드 받기 (버전: third_party/pdfium-version.txt)
 cmake --preset dev                      # configure (vcpkg manifest 설치 포함)
 cmake --build --preset dev              # build all → build/dev/bin/
@@ -46,6 +48,9 @@ ctest --preset dev                      # unit + rendering regression
 ./build/dev/bin/onpdf_cli info in.pdf
 ./build/dev/bin/onpdf_cli render in.pdf out.png --page 0 --scale 2
 ONPDF_UPDATE_REFERENCES=1 ./build/dev/bin/onpdf_render_tests   # 렌더링 기준 이미지 갱신
+cmake --preset dev-app && cmake --build --preset dev-app        # Qt 앱 포함 빌드
+./build/dev-app/bin/onpdf_app testdata/simple.pdf              # 앱 실행
+ctest --preset dev-app                                         # app 테스트(offscreen) 포함
 ```
 
 - 테스트 PDF 생성: `python3 testdata/make_simple_pdf.py` (xref 직접 계산, 외부 의존 없음)
@@ -57,7 +62,7 @@ ONPDF_UPDATE_REFERENCES=1 ./build/dev/bin/onpdf_render_tests   # 렌더링 기�
 # Architecture
 
 ```text
-app/          Qt UI — 메인 창, 페이지 뷰, 썸네일, 도구 패널           (Qt 의존)
+app/          Qt UI (Qt 의존). onpdf_app_lib(위젯 없음: UiDispatcher·DocumentSession·qt_image) + onpdf_app(MainWindow·PageView·main)
 edit/         Command, 실행 취소 스택, 선택 모델, 텍스트 블록 모델, 폰트 매니저
 core/         Document, Page, 렌더 캐시(타일 LRU), 텍스트 인덱스       (Qt 의존 금지)
 core/engine/  PdfiumLibrary(init RAII) · PdfiumDocument(열기·크기·렌더) · pdfium_handles(ScopedFPDF* 별칭)
@@ -84,7 +89,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 
 ### 핵심 설계 원칙 (위반 금지)
 1. **core 는 UI 를 모른다.** CLI 와 테스트에서 core/edit 를 그대로 쓴다.
-2. **PDFium 호출은 전용 워커 스레드 한 곳에서만.** 앱은 `PdfiumWorker` 하나를 만들고 `DocumentHandle` 로만 문서를 다룬다. 콜백은 워커 스레드에서 호출되므로 UI 는 자기 스레드로 넘긴 뒤 처리한다. CLI·테스트처럼 단일 스레드면 `PdfiumLibrary` 를 직접 만들어도 되지만 한 프로세스에서 둘을 섞지 않는다. 디버그 빌드는 `PdfiumLibrary::assert_current_thread()` 로 워커 밖 호출을 잡는다.
+2. **PDFium 호출은 전용 워커 스레드 한 곳에서만.** 앱은 `PdfiumWorker` 하나를 만들고 `DocumentHandle` 로만 문서를 다룬다. 콜백은 워커 스레드에서 호출되므로 앱은 반드시 `UiDispatcher::post_to` 로 메인 스레드에 넘긴 뒤 처리한다(수신자는 `QPointer` 로 보호). 워커 콜백 람다는 위젯 포인터를 직접 잡지 않는다. CLI·테스트처럼 단일 스레드면 `PdfiumLibrary` 를 직접 만들어도 되지만 한 프로세스에서 둘을 섞지 않는다. 디버그 빌드는 `PdfiumLibrary::assert_current_thread()` 로 워커 밖 호출을 잡는다.
 3. **모든 문서 변경은 Command 로.** `execute()` / `undo()` 를 가진 명령 객체 외의 경로로 문서를 바꾸지 않는다.
 4. **핸들은 RAII.** `FPDF_DOCUMENT`, `FPDF_PAGE`, `FPDF_TEXTPAGE`, `FPDF_BITMAP` 등은 `std::unique_ptr` + 커스텀 삭제자로만 보유한다. raw 핸들을 반환하는 public API 금지.
 5. **원본 파일은 건드리지 않는다.** 저장은 임시 파일 → 다시 열어 검증(페이지 수·렌더링·qpdf check) → 교체. 서명된 문서는 증분 저장.

@@ -68,17 +68,61 @@ struct DocumentHandleAccess {
     return DocumentHandle(std::move(state));
   }
 
+  // 열기 작업을 워커에 넣고 on_done 을 정확히 한 번 호출한다 (취소·예외 포함).
   template <class Opener>
-  static std::future<Result<DocumentHandle>> open_async(PdfiumWorker& worker, Opener opener,
-                                                        Priority priority) {
+  static TaskHandle open_with_callback(PdfiumWorker& worker, Opener opener, Priority priority,
+                                       DocumentHandle::OpenCallback on_done) {
     std::shared_ptr<PdfiumWorkerImpl> impl = impl_of(worker);
-    return worker.submit(
-        [impl, opener = std::move(opener)]() mutable -> Result<DocumentHandle> {
-          return open_on_worker(impl, opener);
+    return impl->post(
+        [impl, opener = std::move(opener), on_done = std::move(on_done)](bool cancelled) mutable {
+          Result<DocumentHandle> result = make_error(ErrorCode::kUnknown, "unreachable");
+          try {
+            if (cancelled) {
+              result = make_error(ErrorCode::kCancelled, "open cancelled");
+            } else {
+              result = open_on_worker(impl, opener);
+            }
+          } catch (const std::exception& e) {
+            result = make_error(ErrorCode::kUnknown, std::string("open threw: ") + e.what());
+          } catch (...) {
+            result = make_error(ErrorCode::kUnknown, "open threw unknown exception");
+          }
+          on_done(std::move(result));  // 정확히 한 번
         },
         priority);
   }
+
+  template <class Opener>
+  static std::future<Result<DocumentHandle>> open_async(PdfiumWorker& worker, Opener opener,
+                                                        Priority priority) {
+    auto promise = std::make_shared<std::promise<Result<DocumentHandle>>>();
+    auto future = promise->get_future();
+    open_with_callback(worker, std::move(opener), priority,
+                       [promise](Result<DocumentHandle> r) { promise->set_value(std::move(r)); });
+    return future;
+  }
 };
+
+TaskHandle DocumentHandle::open(PdfiumWorker& worker, std::filesystem::path path,
+                                std::string password, Priority priority, OpenCallback on_done) {
+  return DocumentHandleAccess::open_with_callback(
+      worker,
+      [path = std::move(path), password = std::move(password)]() {
+        return PdfiumDocument::open(path, password);
+      },
+      priority, std::move(on_done));
+}
+
+TaskHandle DocumentHandle::open_from_memory(PdfiumWorker& worker, std::vector<std::uint8_t> data,
+                                            std::string password, Priority priority,
+                                            OpenCallback on_done) {
+  return DocumentHandleAccess::open_with_callback(
+      worker,
+      [data = std::move(data), password = std::move(password)]() mutable {
+        return PdfiumDocument::open_from_memory(std::move(data), password);
+      },
+      priority, std::move(on_done));
+}
 
 std::future<Result<DocumentHandle>> DocumentHandle::open(PdfiumWorker& worker,
                                                          std::filesystem::path path,
