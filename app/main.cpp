@@ -37,10 +37,15 @@ int main(int argc, char** argv) {
   options.use_system_fonts = true;
   onpdf::engine::PdfiumWorker worker(options);
 
+  const QStringList files = parser.positionalArguments();
+  if (parser.isSet(screenshot) && files.isEmpty()) {
+    qWarning("--screenshot requires a PDF file argument");
+    return 1;
+  }
+
   onpdf::app::MainWindow window(worker, dispatcher);
   if (parser.isSet(screenshot)) window.screenshot_after_render(parser.value(screenshot));
   window.show();
-  const QStringList files = parser.positionalArguments();
   if (!files.isEmpty()) window.open_file(files.first());
 
   return app.exec();

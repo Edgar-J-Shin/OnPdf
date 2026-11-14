@@ -92,8 +92,13 @@ void MainWindow::on_open_action() {
 void MainWindow::on_opened(const QString& path, int page_count) {
   current_page_ = 0;
   setWindowTitle(QStringLiteral("OnPdf — %1").arg(QFileInfo(path).fileName()));
+  statusBar()->clearMessage();  // "여는 중" 임시 메시지가 문서 정보를 가리지 않게
   set_document_status(tr("%1 · %2 쪽").arg(QFileInfo(path).fileName()).arg(page_count));
   if (page_count <= 0) {
+    if (!screenshot_path_.isEmpty()) {
+      fail_screenshot(QStringLiteral("no pages"));
+      return;
+    }
     page_view_->clear(tr("쪽이 없는 문서입니다"));
     return;
   }

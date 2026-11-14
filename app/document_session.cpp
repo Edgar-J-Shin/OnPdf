@@ -13,7 +13,10 @@ namespace onpdf::app {
 namespace {
 
 QString error_text(const onpdf::Error& e) {
-  return QString::fromStdString(std::string(onpdf::to_string(e.code)) + ": " + e.message);
+  // core 메시지가 이미 코드 설명으로 시작하면("file not found: ...") 접두어를 겹치지 않는다
+  const std::string code = onpdf::to_string(e.code);
+  if (e.message.starts_with(code)) return QString::fromStdString(e.message);
+  return QString::fromStdString(code + ": " + e.message);
 }
 
 }  // namespace
