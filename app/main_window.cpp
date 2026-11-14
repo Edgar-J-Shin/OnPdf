@@ -1,6 +1,6 @@
 #include "main_window.h"
 
-#include "page_view.h"
+#include "document_view.h"
 
 #include <QAction>
 #include <QApplication>
@@ -15,6 +15,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QSpinBox>
 #include <QStatusBar>
 #include <QTimer>
 #include <QUrl>
@@ -22,39 +23,57 @@
 namespace onpdf::app {
 
 MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, QWidget* parent)
-    : QMainWindow(parent), session_(worker, dispatcher, this) {
+    : QMainWindow(parent), dispatcher_(dispatcher), session_(worker, dispatcher, this) {
   setWindowTitle(QStringLiteral("OnPdf"));
   setAcceptDrops(true);
 
-  page_view_ = new PageView(this);
-  page_view_->clear(tr("파일을 열거나 여기로 끌어다 놓으세요 (Ctrl+O)"));
-  setCentralWidget(page_view_);
+  view_ = new DocumentView(this);
+  view_->clear_document(tr("파일을 열거나 여기로 끌어다 놓으세요 (Ctrl+O)"));
+  setCentralWidget(view_);
 
+  page_spin_ = new QSpinBox(this);
+  page_spin_->setRange(1, 1);
+  page_spin_->setEnabled(false);
+  page_spin_->setKeyboardTracking(false);
+  page_total_label_ = new QLabel(this);
   status_label_ = new QLabel(this);
+  statusBar()->addWidget(page_spin_);
+  statusBar()->addWidget(page_total_label_);
   statusBar()->addWidget(status_label_, 1);
   set_document_status(tr("문서 없음"));
 
   build_menus();
 
   connect(&session_, &DocumentSession::opened, this, &MainWindow::on_opened);
-  connect(&session_, &DocumentSession::password_required, this,
-          &MainWindow::on_password_required);
+  connect(&session_, &DocumentSession::password_required, this, &MainWindow::on_password_required);
   connect(&session_, &DocumentSession::open_failed, this, &MainWindow::on_open_failed);
-  connect(&session_, &DocumentSession::page_rendered, this, &MainWindow::on_page_rendered);
-  connect(&session_, &DocumentSession::render_failed, this, &MainWindow::on_render_failed);
-  connect(page_view_, &PageView::viewport_resized, this, &MainWindow::request_render);
+  connect(view_, &DocumentView::current_page_changed, this, &MainWindow::on_current_page_changed);
+  connect(view_, &DocumentView::zoom_changed, this, &MainWindow::on_zoom_changed);
+  connect(view_, &DocumentView::first_view_rendered, this, &MainWindow::on_first_view_rendered);
+  connect(page_spin_, &QSpinBox::valueChanged, this, [this](int value) {
+    if (view_->has_document() && view_->current_page() != value - 1) view_->go_to_page(value - 1);
+  });
 
   resize(900, 1000);
 }
 
 void MainWindow::build_menus() {
   QMenu* file = menuBar()->addMenu(tr("파일(&F)"));
-  QAction* open = file->addAction(tr("열기(&O)..."), QKeySequence::Open, this,
-                                  &MainWindow::on_open_action);
+  QAction* open = file->addAction(tr("열기(&O)..."), QKeySequence::Open, this, &MainWindow::on_open_action);
   open->setStatusTip(tr("PDF 파일을 연다"));
   file->addSeparator();
   // QKeySequence::Quit 은 Windows 에서 비어 있으므로 Ctrl+Q 를 명시한다
   file->addAction(tr("종료(&Q)"), QKeySequence(Qt::CTRL | Qt::Key_Q), qApp, &QApplication::quit);
+
+  QMenu* view = menuBar()->addMenu(tr("보기(&V)"));
+  view->addAction(tr("너비 맞춤(&W)"), QKeySequence(Qt::CTRL | Qt::Key_1), this,
+                  [this] { view_->set_zoom_mode(ZoomMode::kFitWidth); });
+  view->addAction(tr("쪽 맞춤(&P)"), QKeySequence(Qt::CTRL | Qt::Key_2), this,
+                  [this] { view_->set_zoom_mode(ZoomMode::kFitPage); });
+  view->addAction(tr("실제 크기(&A)"), QKeySequence(Qt::CTRL | Qt::Key_0), this, [this] { view_->set_zoom(1.0); });
+  view->addSeparator();
+  view->addAction(tr("확대(&I)"), QKeySequence::ZoomIn, this, [this] { view_->zoom_in(); });
+  view->addAction(tr("축소(&O)"), QKeySequence::ZoomOut, this, [this] { view_->zoom_out(); });
 
   QMenu* help = menuBar()->addMenu(tr("도움말(&H)"));
   help->addAction(tr("OnPdf 정보(&A)"), this, [this] {
@@ -62,11 +81,6 @@ void MainWindow::build_menus() {
                        tr("OnPdf %1 — PDFium 기반 PDF 뷰어·편집기\nApache License 2.0")
                            .arg(QApplication::applicationVersion()));
   });
-}
-
-void MainWindow::open_file(const QString& path) {
-  show_transient(tr("여는 중: %1").arg(QFileInfo(path).fileName()));
-  session_.open(path);
 }
 
 void MainWindow::screenshot_after_render(const QString& png_path) {
@@ -83,6 +97,11 @@ void MainWindow::fail_screenshot(const QString& reason) {
   QApplication::exit(1);
 }
 
+void MainWindow::open_file(const QString& path) {
+  show_transient(tr("여는 중: %1").arg(QFileInfo(path).fileName()));
+  session_.open(path);
+}
+
 void MainWindow::on_open_action() {
   const QString path = QFileDialog::getOpenFileName(this, tr("PDF 열기"), QString(),
                                                     tr("PDF 문서 (*.pdf);;모든 파일 (*)"));
@@ -90,19 +109,25 @@ void MainWindow::on_open_action() {
 }
 
 void MainWindow::on_opened(const QString& path, int page_count) {
-  current_page_ = 0;
   setWindowTitle(QStringLiteral("OnPdf — %1").arg(QFileInfo(path).fileName()));
   statusBar()->clearMessage();  // "여는 중" 임시 메시지가 문서 정보를 가리지 않게
-  set_document_status(tr("%1 · %2 쪽").arg(QFileInfo(path).fileName()).arg(page_count));
   if (page_count <= 0) {
     if (!screenshot_path_.isEmpty()) {
       fail_screenshot(QStringLiteral("no pages"));
       return;
     }
-    page_view_->clear(tr("쪽이 없는 문서입니다"));
+    view_->clear_document(tr("쪽이 없는 문서입니다"));
+    page_spin_->setEnabled(false);
+    page_total_label_->clear();
+    set_document_status(tr("%1 · 0 쪽").arg(QFileInfo(path).fileName()));
     return;
   }
-  request_render();
+  page_spin_->setRange(1, page_count);
+  page_spin_->setEnabled(true);
+  page_total_label_->setText(tr("/ %1 쪽").arg(page_count));
+  view_->set_document(session_.handle(), dispatcher_);
+  view_->setFocus();
+  refresh_status();
 }
 
 void MainWindow::on_password_required(const QString& path) {
@@ -131,51 +156,40 @@ void MainWindow::on_open_failed(const QString& path, const QString& message) {
                        tr("%1\n\n%2").arg(QFileInfo(path).fileName(), message));
 }
 
-void MainWindow::on_page_rendered(int page_index, const QImage& image, int elapsed_ms) {
-  if (page_index != current_page_ || !session_.has_document()) return;
-  const auto& info = session_.info();
-  // 세션이 세대 불일치 결과를 걸러 주지만, 문서가 바뀐 직후를 대비해 범위를 한 번 더 확인한다
-  if (page_index < 0 || static_cast<std::size_t>(page_index) >= info.page_sizes.size()) return;
-  const engine::PageSize size = info.page_sizes[static_cast<std::size_t>(page_index)];
-  page_view_->set_page(image, size);
-  set_document_status(tr("%1 · %2 / %3 쪽 · %4×%5 pt · %6 ms")
-                 .arg(QFileInfo(session_.path()).fileName())
-                 .arg(page_index + 1)
-                 .arg(info.page_count)
-                 .arg(size.width, 0, 'f', 0)
-                 .arg(size.height, 0, 'f', 0)
-                 .arg(elapsed_ms));
-
-  if (!screenshot_path_.isEmpty()) {
-    const QString path = screenshot_path_;
-    screenshot_path_.clear();
-    // 이번 paint 가 끝난 뒤 캡처
-    QTimer::singleShot(0, this, [this, path] {
-      if (!grab().save(path)) {
-        fail_screenshot(path);
-        return;
-      }
-      QApplication::exit(0);
-    });
-  }
+void MainWindow::on_first_view_rendered() {
+  refresh_status();  // 타일이 도착한 뒤의 캐시·렌더 시간을 보여 준다
+  if (screenshot_path_.isEmpty()) return;
+  const QString path = screenshot_path_;
+  screenshot_path_.clear();
+  // 이번 paint 가 끝난 뒤 캡처
+  QTimer::singleShot(0, this, [this, path] {
+    if (!grab().save(path)) {
+      fail_screenshot(path);
+      return;
+    }
+    QApplication::exit(0);
+  });
 }
 
-void MainWindow::on_render_failed(int page_index, const QString& message) {
-  if (!screenshot_path_.isEmpty()) {
-    fail_screenshot(message);
-    return;
+void MainWindow::on_current_page_changed(int page) {
+  if (page >= 0 && page_spin_->value() != page + 1) {
+    const QSignalBlocker blocker(page_spin_);
+    page_spin_->setValue(page + 1);
   }
-  show_transient(tr("%1 쪽 렌더 실패: %2").arg(page_index + 1).arg(message));
+  refresh_status();
 }
 
-void MainWindow::request_render() {
-  if (!session_.has_document()) return;
-  const auto& sizes = session_.info().page_sizes;
-  if (current_page_ < 0 || static_cast<std::size_t>(current_page_) >= sizes.size()) return;
-  const engine::PageSize size = sizes[static_cast<std::size_t>(current_page_)];
-  const qreal dpr = page_view_->devicePixelRatioF();
-  const float scale = page_view_->fit_width_scale(size) * static_cast<float>(dpr);
-  session_.render_page(current_page_, scale, dpr);
+void MainWindow::on_zoom_changed(double) { refresh_status(); }
+
+void MainWindow::refresh_status() {
+  if (!session_.has_document() || !view_->has_document()) return;
+  const auto cache = view_->cache_stats();
+  const auto sched = view_->scheduler_stats();
+  set_document_status(tr("%1 · %2% · 캐시 %3 MB · 타일 %4 ms")
+                          .arg(QFileInfo(session_.path()).fileName())
+                          .arg(static_cast<int>(view_->zoom() * 100.0 + 0.5))
+                          .arg(static_cast<double>(cache.bytes) / (1024.0 * 1024.0), 0, 'f', 1)
+                          .arg(sched.avg_render_ms, 0, 'f', 1));
 }
 
 void MainWindow::set_document_status(const QString& text) { status_label_->setText(text); }

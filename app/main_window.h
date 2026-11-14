@@ -7,10 +7,11 @@
 #include <QString>
 
 class QLabel;
+class QSpinBox;
 
 namespace onpdf::app {
 
-class PageView;
+class DocumentView;
 
 class MainWindow : public QMainWindow {
   Q_OBJECT
@@ -31,17 +32,20 @@ class MainWindow : public QMainWindow {
   void on_opened(const QString& path, int page_count);
   void on_password_required(const QString& path);
   void on_open_failed(const QString& path, const QString& message);
-  void on_page_rendered(int page_index, const QImage& image, int elapsed_ms);
-  void on_render_failed(int page_index, const QString& message);
-  void request_render();
+  void on_first_view_rendered();
+  void on_current_page_changed(int page);
+  void on_zoom_changed(double zoom);
+  void refresh_status();
   void set_document_status(const QString& text);   // 문서 정보 (지속)
   void show_transient(const QString& text);        // 진행·오류 안내 (몇 초 뒤 사라짐)
   void fail_screenshot(const QString& reason);     // --screenshot 모드에서 실패 시 종료
 
+  UiDispatcher& dispatcher_;
   DocumentSession session_;
-  PageView* page_view_ = nullptr;
+  DocumentView* view_ = nullptr;
+  QSpinBox* page_spin_ = nullptr;
+  QLabel* page_total_label_ = nullptr;
   QLabel* status_label_ = nullptr;
-  int current_page_ = 0;
   QString screenshot_path_;
 };
 

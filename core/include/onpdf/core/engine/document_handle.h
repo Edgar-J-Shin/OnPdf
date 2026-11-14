@@ -16,6 +16,7 @@
 #include "onpdf/core/engine/pdfium_worker.h"
 #include "onpdf/core/engine/render_types.h"
 #include "onpdf/core/error.h"
+#include "onpdf/core/geometry.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -65,6 +66,13 @@ class DocumentHandle {
   // future 방식 (CLI·테스트용).
   [[nodiscard]] std::future<Result<Bitmap>> render_page(int page_index, const RenderOptions& options,
                                                         Priority priority = Priority::kNormal) const;
+
+  // 쪽의 일부(타일)만 렌더. 계약은 render_page 와 같다.
+  TaskHandle render_region(int page_index, const RenderOptions& options, const Rect& region_px,
+                           Priority priority, std::function<void(Result<Bitmap>)> on_done) const;
+  [[nodiscard]] std::future<Result<Bitmap>> render_region(int page_index, const RenderOptions& options,
+                                                          const Rect& region_px,
+                                                          Priority priority = Priority::kNormal) const;
 
   // 워커에 문서 해제를 맡긴다. 이후 render_page 는 kInvalidState.
   void close() noexcept;

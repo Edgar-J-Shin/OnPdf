@@ -11,7 +11,7 @@ Your goal is to write Safe, Testable, and Maintainable modern C++ (C++23, std::e
 Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜치 `develop`, 릴리스 `main`)
 1인 개발(주 10~15시간). 전체 계획서: [pdf-editor-plan.md](pdf-editor-plan.md) — 범위·로드맵·위험 대응은 이 문서가 기준이다.
 
-**현재 단계**: M0 기반 (저장소·CMake·PDFium 연결·첫 쪽 표시). 작업 전 계획서 9장 "첫 2주 할 일" 체크리스트를 확인한다.
+**현재 단계**: M1 뷰어 (M0 완료 2026-11-14: CI·첫 쪽 표시·테스트 PDF 29개). 연속 스크롤·타일 캐시(#10) 위에 검색·썸네일·목차·텍스트 선택·인쇄를 쌓는다.
 
 | 마일스톤 | 핵심 | 완료 기준 |
 |---|---|---|
@@ -47,6 +47,7 @@ cmake --build --preset dev              # build all → build/dev/bin/
 ctest --preset dev                      # unit + rendering regression
 ./build/dev/bin/onpdf_cli info in.pdf
 ./build/dev/bin/onpdf_cli render in.pdf out.png --page 0 --scale 2
+./build/dev/bin/onpdf_cli tiles in.pdf out-dir --page 0 --scale 2   # 타일 PNG + stitched.png + full.png
 ONPDF_UPDATE_REFERENCES=1 ./build/dev/bin/onpdf_render_tests   # 렌더링 기준 이미지 갱신
 cmake --preset dev-app && cmake --build --preset dev-app        # Qt 앱 포함 빌드
 ./build/dev-app/bin/onpdf_app testdata/simple.pdf              # 앱 실행
@@ -62,12 +63,15 @@ ctest --preset dev-app                                         # app 테스트(o
 # Architecture
 
 ```text
-app/          Qt UI (Qt 의존). onpdf_app_lib(위젯 없음: UiDispatcher·DocumentSession·qt_image) + onpdf_app(MainWindow·PageView·main)
+app/          Qt UI (Qt 의존). onpdf_app_lib(UiDispatcher·DocumentSession·qt_image·DocumentTileSource·DocumentView) + onpdf_app(MainWindow·main)
 edit/         Command, 실행 취소 스택, 선택 모델, 텍스트 블록 모델, 폰트 매니저
 core/         Document, Page, 렌더 캐시(타일 LRU), 텍스트 인덱스       (Qt 의존 금지)
 core/engine/  PdfiumLibrary(init RAII) · PdfiumDocument(열기·크기·렌더) · pdfium_handles(ScopedFPDF* 별칭)
               PdfiumWorker(전용 스레드 + High/Normal/Low 큐 + 취소) · DocumentHandle(워커 쪽 문서의 스레드 안전 핸들), QpdfTools(M2)
 core/image/   png_io (stb 기반 PNG 읽기/쓰기, BGRA↔RGBA)
+core/view/    PageLayout(세로 연속 레이아웃·좌표 변환) · tile.h(TileKey, 512px, 1/64 배율 양자화) · TileCache(바이트 상한 LRU)
+              TileScheduler(뷰포트→필요 타일, High/Low 요청·취소·실패 집합) · TileSource(SyncTileSource=CLI·테스트)   (메인 스레드 전용, Qt 금지)
+core/platform/ path.h (UTF-8 ↔ std::filesystem::path)
 cli/          렌더·병합·검증용 명령줄 도구                            (core/edit 만 사용)
 tests/        단위 테스트, 렌더링 회귀, 왕복 테스트
 testdata/     테스트 PDF + 기준 PNG
@@ -95,10 +99,12 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 5. **원본 파일은 건드리지 않는다.** 저장은 임시 파일 → 다시 열어 검증(페이지 수·렌더링·qpdf check) → 교체. 서명된 문서는 증분 저장.
 6. **JavaScript 실행은 기본 비활성화.** 악성 PDF 대응.
 
-### 렌더링
-- 보이는 페이지를 타일(512×512)로 나눠 `FPDF_RenderPageBitmap`, LRU 캐시 보관
-- 보이는 영역 우선 + 앞뒤 1쪽 미리 그리기
-- 확대·축소/스크롤 중에는 기존 타일을 늘려 보여 주고 새 해상도 타일이 준비되면 교체
+### 렌더링 (구현: core/view + app/DocumentView)
+- 쪽을 512×512 타일로 나눠 `PdfiumDocument::render_region`(`FPDF_RenderPageBitmapWithMatrix`, 회전 0 기준 — `page_size` 가 /Rotate 반영) 으로 그리고 `TileCache`(기본 256MB LRU) 에 보관
+- `TileScheduler::update(viewport)` 가 보이는 타일·쪽 미리보기(배율 1/8)를 kHigh, 앞뒤 1쪽(타일 ≤32개일 때)을 kLow 로 요청하고 밀려난 요청은 `TaskHandle::cancel`
+- 뷰는 쪽 배경 → 미리보기 → 이전 배율 타일(늘려 그림) → 현재 배율 타일 순으로 그려 확대·스크롤 중 빈 화면이 없다
+- 배율은 `quantize_scale(zoom × dpr)` 로 1/64 단위. 맞춤 배율은 내림(`fit_*_scale_q`) 이라 문서가 뷰포트를 넘지 않는다
+- 타일 경계는 AGG 클리핑 때문에 전체 렌더와 픽셀 단위로 완전히 같지는 않다(0.03% 수준). `tile_stitch_test` 가 0.1% 상한으로 검증
 
 # Coding Guidelines
 1. **Safety First**: 모든 PDFium 반환값(nullptr, FALSE, 음수)을 검사한다. 파일 I/O 와 외부 라이브러리 호출은 `std::expected` 또는 명시적 에러 타입으로 전파하고, 예외는 경계(UI·CLI)에서만 잡는다.

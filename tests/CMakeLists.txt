@@ -22,11 +22,17 @@ onpdf_add_test(onpdf_unit_tests
   unit/pdfium_document_test.cpp
   unit/png_io_test.cpp
   unit/testdata_manifest_test.cpp
+  unit/geometry_test.cpp
+  unit/tile_test.cpp
+  unit/page_layout_test.cpp
+  unit/tile_cache_test.cpp
+  unit/tile_scheduler_test.cpp
 )
 target_compile_definitions(onpdf_unit_tests PRIVATE ONPDF_TEST_GLOBAL_PDFIUM=1)
 
 onpdf_add_test(onpdf_render_tests
   render/render_regression_test.cpp
+  render/tile_stitch_test.cpp
 )
 target_compile_definitions(onpdf_render_tests PRIVATE ONPDF_TEST_GLOBAL_PDFIUM=1)
 
@@ -42,6 +48,7 @@ if(ONPDF_BUILD_APP)
     app/test_main.cpp
     app/qt_image_test.cpp
     app/document_session_test.cpp
+    app/document_view_test.cpp
   )
   target_link_libraries(onpdf_app_tests PRIVATE onpdf_app_lib)
   set_tests_properties(onpdf_app_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
