@@ -4,7 +4,9 @@
 #include "onpdf/core/view/tile.h"
 #include "qt_image.h"
 
+#include <QApplication>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <QNativeGestureEvent>
 #include <QPaintEvent>
 #include <QPainter>
@@ -15,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace onpdf::app {
@@ -24,6 +27,11 @@ constexpr int kSingleStep = 40;
 constexpr int kShadow = 2;
 const QColor kBackground(0x80, 0x80, 0x80);
 const QColor kShadowColor(0, 0, 0, 60);
+const QColor kSelectionColor(0, 120, 215, 90);
+constexpr double kLinkClickSlop = 4.0;      // 이 거리(논리 px) 미만 이동이면 클릭
+constexpr int kMultiClickMs = 500;
+constexpr int kAutoscrollMs = 30;
+constexpr int kMaxCopyPages = 200;
 }  // namespace
 
 DocumentView::DocumentView(QWidget* parent) : QAbstractScrollArea(parent) {
@@ -36,6 +44,9 @@ DocumentView::DocumentView(QWidget* parent) : QAbstractScrollArea(parent) {
   resize_timer_.setSingleShot(true);
   resize_timer_.setInterval(100);
   connect(&resize_timer_, &QTimer::timeout, this, &DocumentView::relayout);
+  autoscroll_timer_.setInterval(kAutoscrollMs);
+  connect(&autoscroll_timer_, &QTimer::timeout, this, &DocumentView::autoscroll_step);
+  viewport()->setMouseTracking(true);
 }
 
 DocumentView::~DocumentView() = default;
@@ -47,6 +58,14 @@ void DocumentView::set_document(const engine::DocumentHandle& handle, UiDispatch
   scheduler_.reset();
   source_.reset();
   cache_.clear();
+  ++doc_generation_;
+  handle_ = handle;
+  dispatcher_ = &dispatcher;
+  text_cache_.clear();
+  text_requested_.clear();
+  clear_selection();
+  pressed_link_.reset();
+  drag_ = Drag::kNone;
   // 스크롤바는 스케줄러를 만들기 전에 초기화한다 (setValue 가 scrollContentsBy → 요청을 일으키므로)
   verticalScrollBar()->setValue(0);
   horizontalScrollBar()->setValue(0);
@@ -67,6 +86,14 @@ void DocumentView::clear_document(const QString& placeholder) {
   source_.reset();
   layout_.reset();
   cache_.clear();
+  ++doc_generation_;
+  handle_ = engine::DocumentHandle{};
+  text_cache_.clear();
+  text_requested_.clear();
+  clear_selection();
+  pressed_link_.reset();
+  drag_ = Drag::kNone;
+  autoscroll_timer_.stop();
   placeholder_ = placeholder;
   last_page_ = -1;
   first_view_pending_ = false;
@@ -227,6 +254,7 @@ void DocumentView::update_scrollbars() {
 void DocumentView::schedule_update() {
   if (!scheduler_) return;
   scheduler_->update(viewport_doc());
+  request_text_indexes();
   if (first_view_pending_ && scheduler_->pending_visible() == 0) {
     first_view_pending_ = false;
     emit first_view_rendered();
@@ -335,6 +363,203 @@ void DocumentView::paint_page(QPainter& painter, int page, const QRectF& page_lo
     painter.drawImage(QPointF(page_logical.x() + src.x / d, page_logical.y() + src.y / d),
                       to_qimage_shared(bitmap, d));  // 복사 없음
   }
+
+  // 4. 선택 하이라이트
+  paint_selection(painter, page, page_logical);
+}
+
+// ---------------------------------------------------------------- 텍스트 인덱스
+
+void DocumentView::request_text_indexes() {
+  if (!layout_ || !handle_.valid() || dispatcher_ == nullptr) return;
+  const std::vector<int> visible = layout_->pages_in(viewport_doc());
+  if (visible.empty()) return;
+  const int first = std::max(0, visible.front() - 1);
+  const int last = std::min(layout_->page_count() - 1, visible.back() + 1);
+  const int center = current_page();
+
+  // 멀어진 쪽의 인덱스는 해제 (호버/누름 링크 포인터는 복사본이라 안전)
+  for (auto it = text_cache_.begin(); it != text_cache_.end();) {
+    if (std::abs(it->first - center) > kTextKeepPages && !selection_.pages().empty() &&
+        selection_.range_on(it->first, it->second->char_count()).empty()) {
+      it = text_cache_.erase(it);
+    } else if (std::abs(it->first - center) > kTextKeepPages && selection_.empty()) {
+      it = text_cache_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+
+  for (int page = first; page <= last; ++page) {
+    if (text_cache_.contains(page) || text_requested_.contains(page)) continue;
+    text_requested_.insert(page);
+    UiDispatcher* dispatcher = dispatcher_;
+    QPointer<DocumentView> self(this);
+    const int generation = doc_generation_;
+    handle_.load_text(page, engine::Priority::kLow,
+                      // 워커 스레드: 메인으로 넘기기만
+                      [dispatcher, self, page, generation](onpdf::Result<view::PageTextIndex> result) {
+                        std::shared_ptr<const view::PageTextIndex> index;
+                        if (result) index = std::make_shared<const view::PageTextIndex>(std::move(*result));
+                        dispatcher->post_to(self, [page, generation, index](DocumentView* v) {
+                          v->on_text_index(page, generation, index);
+                        });
+                      });
+  }
+}
+
+void DocumentView::on_text_index(int page, int generation, std::shared_ptr<const view::PageTextIndex> index) {
+  if (generation != doc_generation_) return;  // 이전 문서
+  text_requested_.erase(page);
+  if (!index) index = std::make_shared<const view::PageTextIndex>();  // 실패: 빈 인덱스로 재요청 방지
+  text_cache_[page] = std::move(index);
+  emit text_index_ready(page);
+  if (layout_ && page < layout_->page_count()) {
+    const double d = dpr();
+    const onpdf::Rect r = layout_->page_rect(page);
+    viewport()->update(QRectF(horizontal_offset_logical() + r.x / d - horizontalScrollBar()->value(),
+                              r.y / d - verticalScrollBar()->value(), r.w / d, r.h / d)
+                           .toAlignedRect());
+  }
+}
+
+const view::PageTextIndex* DocumentView::text_index(int page) const {
+  auto it = text_cache_.find(page);
+  return it == text_cache_.end() ? nullptr : it->second.get();
+}
+
+// ---------------------------------------------------------------- 좌표
+
+std::optional<std::pair<int, onpdf::Point>> DocumentView::page_point_at(QPointF viewport_pos) const {
+  if (!layout_ || layout_->page_count() == 0) return std::nullopt;
+  const double d = dpr();
+  const onpdf::Point doc{(viewport_pos.x() - horizontal_offset_logical() + horizontalScrollBar()->value()) * d,
+                         (viewport_pos.y() + verticalScrollBar()->value()) * d};
+  const int page = layout_->page_at(doc.y);
+  if (page < 0) return std::nullopt;
+  const onpdf::Point in_page = layout_->doc_to_page_px(page, doc);
+  return std::make_pair(page, layout_->page_px_to_pt(page, in_page));
+}
+
+QPointF DocumentView::page_point_to_viewport(int page, onpdf::Point pt) const {
+  if (!layout_) return {};
+  const double d = dpr();
+  const double s = layout_->scale();
+  const onpdf::Point doc = layout_->page_px_to_doc(page, {pt.x * s, pt.y * s});
+  return {horizontal_offset_logical() + doc.x / d - horizontalScrollBar()->value(),
+          doc.y / d - verticalScrollBar()->value()};
+}
+
+view::TextPos DocumentView::position_at(QPointF viewport_pos) const {
+  auto hit = page_point_at(viewport_pos);
+  if (!hit) return {};
+  const auto [page, pt] = *hit;
+  const view::PageTextIndex* index = text_index(page);
+  if (index == nullptr) return {page, 0};
+  return {page, index->nearest_position(pt)};
+}
+
+void DocumentView::scroll_to_page_point(int page, onpdf::Point pt) {
+  if (!layout_ || layout_->page_count() == 0) return;
+  page = std::clamp(page, 0, layout_->page_count() - 1);
+  const double d = dpr();
+  const double s = layout_->scale();
+  const onpdf::Point doc = layout_->page_px_to_doc(page, {pt.x * s, pt.y * s});
+  verticalScrollBar()->setValue(static_cast<int>(std::lround(doc.y / d - layout_->options().margin / d)));
+}
+
+// ---------------------------------------------------------------- 선택
+
+void DocumentView::set_selection(view::TextPos anchor, view::TextPos focus) {
+  const bool before = has_selection();
+  selection_.set(anchor, focus);
+  viewport()->update();
+  if (before != has_selection()) emit selection_changed(has_selection());
+}
+
+void DocumentView::clear_selection() {
+  if (selection_.empty()) return;
+  selection_.clear();
+  viewport()->update();
+  emit selection_changed(false);
+}
+
+void DocumentView::select_all_on_current_page() {
+  const int page = current_page();
+  const view::PageTextIndex* index = text_index(page);
+  if (page < 0 || index == nullptr || index->empty()) return;
+  set_selection({page, 0}, {page, index->char_count()});
+}
+
+QString DocumentView::selected_text() const {
+  if (selection_.empty()) return {};
+  // 미로드 쪽은 워커에 동기 요청 (복사 시점에만, 상한 있음)
+  std::unordered_map<int, std::shared_ptr<const view::PageTextIndex>> loaded;
+  int budget = kMaxCopyPages;
+  for (int page : selection_.pages()) {
+    if (text_index(page) != nullptr || budget-- <= 0) continue;
+    auto result = handle_.load_text(page, engine::Priority::kHigh).get();
+    if (result) loaded[page] = std::make_shared<const view::PageTextIndex>(std::move(*result));
+  }
+  const std::string text = selection_.text([&](int page) -> const view::PageTextIndex* {
+    if (const auto* cached = text_index(page)) return cached;
+    auto it = loaded.find(page);
+    return it == loaded.end() ? nullptr : it->second.get();
+  });
+  return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
+}
+
+void DocumentView::paint_selection(QPainter& painter, int page, const QRectF& page_logical) {
+  if (selection_.empty()) return;
+  const view::PageTextIndex* index = text_index(page);
+  if (index == nullptr) return;
+  const view::TextRange range = selection_.range_on(page, index->char_count());
+  if (range.empty()) return;
+  const double k = layout_->scale() / dpr();  // 포인트 → 논리 px
+  painter.setPen(Qt::NoPen);
+  painter.setBrush(kSelectionColor);
+  for (const onpdf::Rect& r : index->selection_rects(range)) {
+    painter.drawRect(QRectF(page_logical.x() + r.x * k, page_logical.y() + r.y * k, r.w * k, r.h * k));
+  }
+}
+
+void DocumentView::update_hover(QPointF viewport_pos) {
+  QString target;
+  Qt::CursorShape cursor = Qt::ArrowCursor;
+  if (auto hit = page_point_at(viewport_pos)) {
+    const auto [page, pt] = *hit;
+    if (const view::PageTextIndex* index = text_index(page)) {
+      if (const view::Link* link = index->link_at(pt)) {
+        cursor = Qt::PointingHandCursor;
+        target = link->kind == view::LinkKind::kUri ? QString::fromStdString(link->uri)
+                                                     : tr("%1 쪽").arg(link->page + 1);
+      } else if (index->hit_test(pt)) {
+        cursor = Qt::IBeamCursor;
+      }
+    }
+  }
+  viewport()->setCursor(cursor);
+  if (target != hovered_target_) {
+    hovered_target_ = target;
+    emit link_hovered(target);
+  }
+}
+
+void DocumentView::autoscroll_step() {
+  if (drag_ != Drag::kText) {
+    autoscroll_timer_.stop();
+    return;
+  }
+  const QRect vp = viewport()->rect();
+  int dy = 0;
+  if (last_drag_pos_.y() < vp.top()) dy = static_cast<int>(last_drag_pos_.y() - vp.top());
+  if (last_drag_pos_.y() > vp.bottom()) dy = static_cast<int>(last_drag_pos_.y() - vp.bottom());
+  if (dy == 0) {
+    autoscroll_timer_.stop();
+    return;
+  }
+  verticalScrollBar()->setValue(verticalScrollBar()->value() + std::clamp(dy, -40, 40));
+  set_selection(selection_.anchor(), position_at(last_drag_pos_));
 }
 
 // ---------------------------------------------------------------- 이벤트
@@ -367,6 +592,11 @@ void DocumentView::wheelEvent(QWheelEvent* event) {
 
 void DocumentView::keyPressEvent(QKeyEvent* event) {
   QScrollBar* v = verticalScrollBar();
+  if (event->key() == Qt::Key_Escape) {
+    clear_selection();
+    event->accept();
+    return;
+  }
   switch (event->key()) {
     case Qt::Key_PageDown: v->setValue(v->value() + v->pageStep()); break;
     case Qt::Key_PageUp: v->setValue(v->value() - v->pageStep()); break;
@@ -375,6 +605,108 @@ void DocumentView::keyPressEvent(QKeyEvent* event) {
     default: QAbstractScrollArea::keyPressEvent(event); return;
   }
   event->accept();
+}
+
+void DocumentView::mousePressEvent(QMouseEvent* event) {
+  if (event->button() != Qt::LeftButton || !layout_) {
+    QAbstractScrollArea::mousePressEvent(event);
+    return;
+  }
+  setFocus();
+  press_pos_ = event->position();
+  // 연속 클릭 수 (더블/트리플)
+  const bool near_last = (event->position() - last_click_pos_).manhattanLength() < 6;
+  click_count_ = (click_timer_.isValid() && click_timer_.elapsed() < kMultiClickMs && near_last) ? click_count_ + 1 : 1;
+  click_timer_.restart();
+  last_click_pos_ = event->position();
+
+  pressed_link_.reset();
+  if (auto hit = page_point_at(event->position())) {
+    const auto [page, pt] = *hit;
+    if (const view::PageTextIndex* index = text_index(page)) {
+      if (const view::Link* link = index->link_at(pt)) {
+        pressed_link_ = *link;
+        drag_ = Drag::kMaybeLink;
+        return;
+      }
+      if (click_count_ >= 3) {
+        const auto pos = index->nearest_position(pt);
+        const view::TextRange line = index->line_at(std::min(pos, index->char_count() - 1));
+        if (!line.empty()) set_selection({page, line.start}, {page, line.end});
+        drag_ = Drag::kNone;
+        return;
+      }
+      if (click_count_ == 2) {
+        if (auto ch = index->hit_test(pt)) {
+          const view::TextRange word = index->word_at(*ch);
+          set_selection({page, word.start}, {page, word.end});
+          drag_ = Drag::kNone;
+          return;
+        }
+      }
+    }
+  }
+  const view::TextPos anchor = position_at(event->position());
+  if (anchor.page < 0) {
+    clear_selection();
+    return;
+  }
+  drag_ = Drag::kText;
+  set_selection(anchor, anchor);  // 빈 선택으로 시작
+}
+
+void DocumentView::mouseMoveEvent(QMouseEvent* event) {
+  if (drag_ == Drag::kText) {
+    last_drag_pos_ = event->position();
+    set_selection(selection_.anchor(), position_at(event->position()));
+    const QRect vp = viewport()->rect();
+    if (!vp.contains(event->position().toPoint())) {
+      if (!autoscroll_timer_.isActive()) autoscroll_timer_.start();
+    } else {
+      autoscroll_timer_.stop();
+    }
+    return;
+  }
+  if (drag_ == Drag::kMaybeLink) {
+    if ((event->position() - press_pos_).manhattanLength() >= kLinkClickSlop) {
+      // 링크 위에서 끌면 텍스트 선택으로 전환
+      drag_ = Drag::kText;
+      pressed_link_.reset();
+      set_selection(position_at(press_pos_), position_at(event->position()));
+    }
+    return;
+  }
+  update_hover(event->position());
+}
+
+void DocumentView::mouseReleaseEvent(QMouseEvent* event) {
+  if (event->button() != Qt::LeftButton) {
+    QAbstractScrollArea::mouseReleaseEvent(event);
+    return;
+  }
+  autoscroll_timer_.stop();
+  if (drag_ == Drag::kMaybeLink && pressed_link_) {
+    const view::Link link = *pressed_link_;
+    pressed_link_.reset();
+    drag_ = Drag::kNone;
+    emit link_activated(link);
+    return;
+  }
+  drag_ = Drag::kNone;
+  update_hover(event->position());
+}
+
+void DocumentView::mouseDoubleClickEvent(QMouseEvent* event) {
+  // Qt 가 두 번째 press 대신 보내는 이벤트. 우리 클릭 카운터로 처리하도록 press 로 넘긴다
+  mousePressEvent(event);
+}
+
+void DocumentView::leaveEvent(QEvent* event) {
+  QAbstractScrollArea::leaveEvent(event);
+  if (!hovered_target_.isEmpty()) {
+    hovered_target_.clear();
+    emit link_hovered({});
+  }
 }
 
 bool DocumentView::viewportEvent(QEvent* event) {

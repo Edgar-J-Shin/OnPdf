@@ -404,6 +404,7 @@ def make_annotations() -> bytes:
     pages = w.reserve()
     helv = g.simple_font(w)
     page_num = w.reserve()
+    page2_num = w.reserve()
     # 하이라이트는 Multiply 블렌드로 글자가 비치게 한다 (Acrobat 과 같은 방식)
     gs = w.add(b"<< /Type /ExtGState /BM /Multiply >>")
     hl_ap = w.stream(b"/Type /XObject /Subtype /Form /BBox [70 696 330 722] /Resources << /ExtGState << /GS0 %d 0 R >> >>" % gs,
@@ -418,15 +419,25 @@ def make_annotations() -> bytes:
               b"/F 28 /P %d 0 R /T " % page_num + text_string("작성자") + b" /Contents " + text_string("메모 주석입니다") + b" >>"),
         w.add(b"<< /Type /Annot /Subtype /Link /Rect [72 400 300 420] /Border [0 0 1] /C [0 0 1] "
               b"/A << /S /URI /URI (https://github.com/Edgar-J-Shin/OnPdf) >> /F 4 /P %d 0 R >>" % page_num),
+        # 내부 링크: 2쪽의 (72, 700) 으로 (/XYZ 위치 포함)
+        w.add(b"<< /Type /Annot /Subtype /Link /Rect [72 360 300 380] /Border [0 0 1] /C [0 0.5 0] "
+              b"/Dest [%d 0 R /XYZ 72 700 0] /F 4 /P %d 0 R >>" % (page2_num, page_num)),
+        # 차단되어야 하는 스킴 (보안 테스트)
+        w.add(b"<< /Type /Annot /Subtype /Link /Rect [72 320 300 340] /Border [0 0 0] "
+              b"/A << /S /URI /URI (javascript:alert(1)) >> /F 4 /P %d 0 R >>" % page_num),
     ]
     c = w.stream(b"", content(
         _label(72, 740, 18, "Annotations test"),
         _label(72, 702, 14, "This sentence is highlighted in yellow."),
         _label(72, 460, 11, "Square annotation above, text (note) annotation to the right."),
         "0 0 1 rg " + _label(72, 406, 12, "Link annotation: github.com/Edgar-J-Shin/OnPdf"),
+        "0 0.5 0 rg " + _label(72, 366, 12, "Internal link: go to page 2"),
+        "0.5 g " + _label(72, 326, 12, "Blocked link (javascript: scheme)"),
     ))
     g.page(w, pages, g.LETTER, c, _helv_resources(helv), annots=annots, num=page_num)
-    g.pages_tree(w, pages, [page_num])
+    c2 = w.stream(b"", content(_label(72, 700, 18, "Link target: page 2"), _label(72, 670, 12, "The internal link lands here.")))
+    g.page(w, pages, g.LETTER, c2, _helv_resources(helv), num=page2_num)
+    g.pages_tree(w, pages, [page_num, page2_num])
     root = g.catalog(w, pages)
     info = g.info_dict(w, "Annotations")
     return w.write(root=root, info=info, file_id=g.file_id_for("annotations.pdf"))

@@ -9,7 +9,10 @@
 
 #include <gtest/gtest.h>
 
+#include <QApplication>
 #include <QEventLoop>
+#include <QKeyEvent>
+#include <QMouseEvent>
 #include <QScrollBar>
 #include <QTimer>
 
@@ -71,11 +74,163 @@ class DocumentViewTest : public ::testing::Test {
     return ok;
   }
 
+  bool wait_text(int page) {
+    if (view_.text_index(page) != nullptr) return true;
+    return spin_until([&] { return view_.text_index(page) != nullptr; });
+  }
+  void send_mouse(QEvent::Type type, QPointF pos, Qt::MouseButton button = Qt::LeftButton,
+                  Qt::MouseButtons buttons = Qt::LeftButton) {
+    QMouseEvent ev(type, pos, view_.viewport()->mapToGlobal(pos.toPoint()), button, buttons, Qt::NoModifier);
+    QApplication::sendEvent(view_.viewport(), &ev);
+  }
+  void drag(QPointF from, QPointF to) {
+    send_mouse(QEvent::MouseButtonPress, from);
+    send_mouse(QEvent::MouseMove, (from + to) / 2);
+    send_mouse(QEvent::MouseMove, to);
+    send_mouse(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
+  }
+  QPointF char_center(int page, int ch) {
+    const auto* index = view_.text_index(page);
+    const auto& box = index->chars[static_cast<std::size_t>(ch)].box;
+    return view_.page_point_to_viewport(page, {box.x + box.w / 2, box.y + box.h / 2});
+  }
+  // 드래그 시작점은 글자 왼쪽 가장자리(그 글자부터 포함), 끝점은 오른쪽 가장자리 너머(그 글자까지 포함)
+  QPointF char_left(int page, int ch) {
+    const auto* index = view_.text_index(page);
+    const auto& box = index->chars[static_cast<std::size_t>(ch)].box;
+    return view_.page_point_to_viewport(page, {box.x + 0.5, box.y + box.h / 2});
+  }
+  QPointF char_right(int page, int ch) {
+    const auto* index = view_.text_index(page);
+    const auto& box = index->chars[static_cast<std::size_t>(ch)].box;
+    return view_.page_point_to_viewport(page, {box.right() + 0.5, box.y + box.h / 2});
+  }
+
   UiDispatcher dispatcher_;
   engine::PdfiumWorker worker_;
   DocumentSession session_;
   DocumentView view_;
 };
+
+TEST_F(DocumentViewTest, DragSelectsKoreanText) {
+  ASSERT_TRUE(open("korean-embedded.pdf"));
+  ASSERT_TRUE(wait_text(0));
+  const auto* index = view_.text_index(0);
+  const view::TextRange line0 = index->lines[0].chars;
+  bool changed = false;
+  QObject::connect(&view_, &DocumentView::selection_changed, &view_, [&](bool has) { changed = has; });
+  drag(char_left(0, line0.start), char_right(0, line0.end - 1));
+  EXPECT_TRUE(changed);
+  EXPECT_TRUE(view_.has_selection());
+  EXPECT_EQ(view_.selected_text(), QStringLiteral("안녕하세요, OnPdf 입니다."));
+  // 배율이 바뀌어도 같은 글자가 선택된 채
+  view_.set_zoom(2.0);
+  EXPECT_EQ(view_.selected_text(), QStringLiteral("안녕하세요, OnPdf 입니다."));
+}
+
+TEST_F(DocumentViewTest, ReverseDragAndEscape) {
+  ASSERT_TRUE(open("korean-embedded.pdf"));
+  ASSERT_TRUE(wait_text(0));
+  const auto* index = view_.text_index(0);
+  const view::TextRange line1 = index->lines[1].chars;
+  drag(char_right(0, line1.end - 1), char_left(0, line1.start));
+  EXPECT_EQ(view_.selected_text(), QStringLiteral("한글 CID 폰트 임베딩 테스트 문서입니다."));
+  QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+  QApplication::sendEvent(&view_, &esc);
+  EXPECT_FALSE(view_.has_selection());
+  EXPECT_TRUE(view_.selected_text().isEmpty());
+}
+
+TEST_F(DocumentViewTest, DoubleClickSelectsWord) {
+  ASSERT_TRUE(open("simple.pdf"));
+  ASSERT_TRUE(wait_text(0));
+  const auto* index = view_.text_index(0);
+  // 줄 0: "OnPdf M0 test page" → 'M0' 의 'M' 은 인덱스 6
+  const QPointF at = char_center(0, 6);
+  send_mouse(QEvent::MouseButtonPress, at);
+  send_mouse(QEvent::MouseButtonRelease, at, Qt::LeftButton, Qt::NoButton);
+  send_mouse(QEvent::MouseButtonDblClick, at);
+  send_mouse(QEvent::MouseButtonRelease, at, Qt::LeftButton, Qt::NoButton);
+  EXPECT_EQ(view_.selected_text(), QStringLiteral("M0"));
+  (void)index;
+}
+
+TEST_F(DocumentViewTest, CrossPageDragJoinsWithBlankLine) {
+  ASSERT_TRUE(open("simple.pdf"));
+  ASSERT_TRUE(wait_text(0));
+  view_.set_zoom(0.4);  // 두 쪽이 한 뷰포트에
+  ASSERT_TRUE(wait_text(1));
+  const auto* p0 = view_.text_index(0);
+  const QPointF from = char_left(0, p0->lines.back().chars.start);
+  const QPointF to = char_right(1, 5);
+  drag(from, to);
+  const QString text = view_.selected_text();
+  EXPECT_TRUE(text.startsWith(QStringLiteral("Letter portrait"))) << text.toStdString();
+  EXPECT_TRUE(text.contains(QStringLiteral("\n\n"))) << text.toStdString();
+  EXPECT_TRUE(text.endsWith(QStringLiteral("Page 2"))) << text.toStdString();
+}
+
+TEST_F(DocumentViewTest, ClickOnLinksActivatesWithoutOpening) {
+  ASSERT_TRUE(open("annotations.pdf"));
+  ASSERT_TRUE(wait_text(0));
+  std::vector<view::Link> activated;
+  QObject::connect(&view_, &DocumentView::link_activated, &view_, [&](const view::Link& l) { activated.push_back(l); });
+  // 내부 링크 Rect [72 360 300 380] → 쪽 포인트 (100, 792-370)
+  const QPointF internal = view_.page_point_to_viewport(0, {100, 792 - 370});
+  send_mouse(QEvent::MouseButtonPress, internal);
+  send_mouse(QEvent::MouseButtonRelease, internal, Qt::LeftButton, Qt::NoButton);
+  ASSERT_EQ(activated.size(), 1u);
+  EXPECT_EQ(activated[0].kind, view::LinkKind::kPage);
+  EXPECT_EQ(activated[0].page, 1);
+  // 외부(차단) 링크 Rect [72 320 300 340]
+  const QPointF blocked = view_.page_point_to_viewport(0, {100, 792 - 330});
+  send_mouse(QEvent::MouseButtonPress, blocked);
+  send_mouse(QEvent::MouseButtonRelease, blocked, Qt::LeftButton, Qt::NoButton);
+  ASSERT_EQ(activated.size(), 2u);
+  EXPECT_EQ(activated[1].kind, view::LinkKind::kUri);
+  EXPECT_FALSE(view::is_safe_uri(activated[1].uri));
+  // 링크 위에서 끌면 텍스트 선택으로 바뀌고 활성화되지 않는다
+  drag(internal, internal + QPointF(60, 0));
+  EXPECT_EQ(activated.size(), 2u);
+  // 내부 링크 이동
+  view_.scroll_to_page_point(activated[0].page, *activated[0].location);
+  EXPECT_EQ(view_.current_page(), 1);
+}
+
+TEST_F(DocumentViewTest, HoverReportsLinkTarget) {
+  ASSERT_TRUE(open("annotations.pdf"));
+  ASSERT_TRUE(wait_text(0));
+  QString hovered;
+  QObject::connect(&view_, &DocumentView::link_hovered, &view_, [&](const QString& t) { hovered = t; });
+  send_mouse(QEvent::MouseMove, view_.page_point_to_viewport(0, {100, 792 - 410}), Qt::NoButton, Qt::NoButton);
+  EXPECT_EQ(hovered, QStringLiteral("https://github.com/Edgar-J-Shin/OnPdf"));
+  EXPECT_EQ(view_.viewport()->cursor().shape(), Qt::PointingHandCursor);
+  send_mouse(QEvent::MouseMove, view_.page_point_to_viewport(0, {300, 600}), Qt::NoButton, Qt::NoButton);
+  EXPECT_TRUE(hovered.isEmpty());
+  EXPECT_EQ(view_.viewport()->cursor().shape(), Qt::ArrowCursor);
+}
+
+TEST_F(DocumentViewTest, StaleTextIndexIgnoredAfterReplace) {
+  ASSERT_TRUE(open("large-1000.pdf"));
+  view_.verticalScrollBar()->setValue(view_.verticalScrollBar()->maximum() / 2);
+  ASSERT_TRUE(open("scanned.pdf"));
+  ASSERT_TRUE(wait_text(0));
+  spin_until([] { return false; }, 150);
+  EXPECT_EQ(view_.text_index(0)->char_count(), 0);
+  for (int p = 2; p < 1000; p += 97) EXPECT_EQ(view_.text_index(p), nullptr);
+  EXPECT_FALSE(view_.has_selection());
+}
+
+TEST_F(DocumentViewTest, SelectAllOnCurrentPage) {
+  ASSERT_TRUE(open("korean-embedded.pdf"));
+  ASSERT_TRUE(wait_text(0));
+  view_.select_all_on_current_page();
+  EXPECT_TRUE(view_.has_selection());
+  EXPECT_EQ(view_.selected_text().split(QLatin1Char('\n')).size(), 4);
+  view_.clear_selection();
+  EXPECT_FALSE(view_.has_selection());
+}
+
 
 TEST_F(DocumentViewTest, OpensAndRendersFirstView) {
   ASSERT_TRUE(open("simple.pdf"));

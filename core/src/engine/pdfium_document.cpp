@@ -1,6 +1,7 @@
 #include "onpdf/core/engine/pdfium_document.h"
 
 #include "onpdf/core/engine/pdfium_library.h"
+#include "onpdf/core/engine/text_page.h"
 #include "onpdf/core/platform/path.h"
 
 #include <fpdfview.h>
@@ -205,6 +206,15 @@ Result<Bitmap> PdfiumDocument::render_region(int page_index, const RenderOptions
                 static_cast<std::size_t>(out.stride));
   }
   return out;
+}
+
+Result<view::PageTextIndex> PdfiumDocument::load_text(int page_index) const {
+  PdfiumLibrary::assert_current_thread();
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  auto text_page = TextPage::load(page->get());
+  if (!text_page) return std::unexpected(text_page.error());
+  return text_page->extract(doc_.get(), page->get(), page_index);
 }
 
 }  // namespace onpdf::engine

@@ -31,6 +31,7 @@ struct ManifestEntry {
   double width = 0.0;
   double height = 0.0;
   bool render = false;
+  int chars = -1;  // 첫 쪽 글자 수. -1 = 검사 안 함
 };
 
 std::vector<std::string> split_tabs(const std::string& line) {
@@ -88,6 +89,10 @@ const Manifest& manifest() {
         continue;
       }
       e.render = cols[7] == "1";
+      if (cols.size() >= 12 && !cols[11].empty() && !parse_number(cols[11], e.chars)) {
+        result.bad_rows.push_back("line " + std::to_string(line_no) + ": chars not numeric");
+        continue;
+      }
       result.entries.push_back(std::move(e));
     }
     return result;
@@ -127,6 +132,10 @@ void expect_opened(const ManifestEntry& e, const Result<PdfiumDocument>& doc) {
     options.scale = 0.25f;
     auto bitmap = doc->render_page(0, options);
     EXPECT_TRUE(bitmap) << e.file << ": " << (bitmap ? "" : bitmap.error().message);
+    // 텍스트 인덱스 추출이 모든 파일에서 크래시 없이 끝나고 글자 수가 기대와 같아야 한다
+    auto text = doc->load_text(0);
+    ASSERT_TRUE(text) << e.file << ": " << text.error().message;
+    if (e.chars >= 0) EXPECT_EQ(text->char_count(), e.chars) << e.file;
   }
 }
 

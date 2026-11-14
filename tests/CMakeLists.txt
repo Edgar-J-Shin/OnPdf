@@ -27,6 +27,9 @@ onpdf_add_test(onpdf_unit_tests
   unit/page_layout_test.cpp
   unit/tile_cache_test.cpp
   unit/tile_scheduler_test.cpp
+  unit/text_index_test.cpp
+  unit/text_selection_test.cpp
+  unit/text_page_test.cpp
 )
 target_compile_definitions(onpdf_unit_tests PRIVATE ONPDF_TEST_GLOBAL_PDFIUM=1)
 

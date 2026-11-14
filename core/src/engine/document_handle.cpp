@@ -43,6 +43,12 @@ struct DocumentHandleAccess {
 
   static std::shared_ptr<PdfiumWorkerImpl> impl_of(PdfiumWorker& worker) { return worker.impl_; }
 
+  template <class T, class Fn>
+  static TaskHandle post_document_task(const DocumentHandle& handle, Priority priority, Fn fn,
+                                       std::function<void(Result<T>)> on_done);
+  template <class T>
+  static std::future<Result<T>> to_future(std::function<TaskHandle(std::function<void(Result<T>)>)> start);
+
   // 워커 스레드에서 실행: 문서를 열고 등록한 뒤 핸들을 만든다. 예외는 submit 이 잡는다.
   template <class Opener>
   static Result<DocumentHandle> open_on_worker(const std::shared_ptr<PdfiumWorkerImpl>& impl,
@@ -159,99 +165,92 @@ const DocumentInfo& DocumentHandle::info() const {
   return state_ ? state_->info : kEmpty;
 }
 
-TaskHandle DocumentHandle::render_page(int page_index, const RenderOptions& options,
-                                       Priority priority,
-                                       std::function<void(Result<Bitmap>)> on_done) const {
-  assert(on_done && "render 콜백은 비어 있을 수 없다");
-  if (!state_) {
+// 문서 작업을 워커에 넣고 콜백을 정확히 한 번 부른다. fn(doc) 는 워커 스레드에서 실행된다.
+template <class T, class Fn>
+TaskHandle DocumentHandleAccess::post_document_task(const DocumentHandle& handle, Priority priority, Fn fn,
+                                                    std::function<void(Result<T>)> on_done) {
+  assert(on_done && "콜백은 비어 있을 수 없다");
+  const std::shared_ptr<DocumentHandle::State>& state_ref = handle.state_;
+  if (!state_ref) {
     on_done(make_error(ErrorCode::kInvalidState, "empty document handle"));
     return TaskHandle{};
   }
-  std::shared_ptr<PdfiumWorkerImpl> impl = state_->worker.lock();
+  std::shared_ptr<PdfiumWorkerImpl> impl = state_ref->worker.lock();
   if (!impl) {
     on_done(make_error(ErrorCode::kInvalidState, "worker destroyed"));
     return TaskHandle{};
   }
-  std::shared_ptr<State> state = state_;
-  RenderOptions opts = options;
+  std::shared_ptr<DocumentHandle::State> state = state_ref;
   return impl->post(
-      [impl, state, page_index, opts, on_done = std::move(on_done)](bool cancelled) {
-        Result<Bitmap> result = make_error(ErrorCode::kUnknown, "unreachable");
+      [impl, state, fn = std::move(fn), on_done = std::move(on_done)](bool cancelled) mutable {
+        Result<T> result = make_error(ErrorCode::kUnknown, "unreachable");
         try {
           if (cancelled) {
-            result = make_error(ErrorCode::kCancelled, "render cancelled");
+            result = make_error(ErrorCode::kCancelled, "task cancelled");
           } else if (state->closed.load(std::memory_order_relaxed)) {
             result = make_error(ErrorCode::kInvalidState, "document closed");
           } else if (PdfiumDocument* doc = impl->find_document(state->id); doc == nullptr) {
             result = make_error(ErrorCode::kInvalidState, "document not registered");
           } else {
-            result = doc->render_page(page_index, opts);
+            result = fn(*doc);
           }
         } catch (const std::exception& e) {
-          result = make_error(ErrorCode::kUnknown, std::string("render threw: ") + e.what());
+          result = make_error(ErrorCode::kUnknown, std::string("task threw: ") + e.what());
         } catch (...) {
-          result = make_error(ErrorCode::kUnknown, "render threw unknown exception");
+          result = make_error(ErrorCode::kUnknown, "task threw unknown exception");
         }
         on_done(std::move(result));  // 정확히 한 번
       },
       priority);
 }
 
-std::future<Result<Bitmap>> DocumentHandle::render_page(int page_index,
-                                                        const RenderOptions& options,
-                                                        Priority priority) const {
-  auto promise = std::make_shared<std::promise<Result<Bitmap>>>();
+template <class T>
+std::future<Result<T>> DocumentHandleAccess::to_future(std::function<TaskHandle(std::function<void(Result<T>)>)> start) {
+  auto promise = std::make_shared<std::promise<Result<T>>>();
   auto future = promise->get_future();
-  render_page(page_index, options, priority,
-              [promise](Result<Bitmap> result) { promise->set_value(std::move(result)); });
+  start([promise](Result<T> r) { promise->set_value(std::move(r)); });
   return future;
 }
 
-TaskHandle DocumentHandle::render_region(int page_index, const RenderOptions& options,
-                                         const Rect& region_px, Priority priority,
-                                         std::function<void(Result<Bitmap>)> on_done) const {
-  assert(on_done && "render 콜백은 비어 있을 수 없다");
-  if (!state_) {
-    on_done(make_error(ErrorCode::kInvalidState, "empty document handle"));
-    return TaskHandle{};
-  }
-  std::shared_ptr<PdfiumWorkerImpl> impl = state_->worker.lock();
-  if (!impl) {
-    on_done(make_error(ErrorCode::kInvalidState, "worker destroyed"));
-    return TaskHandle{};
-  }
-  std::shared_ptr<State> state = state_;
+TaskHandle DocumentHandle::render_page(int page_index, const RenderOptions& options, Priority priority,
+                                       std::function<void(Result<Bitmap>)> on_done) const {
   RenderOptions opts = options;
-  return impl->post(
-      [impl, state, page_index, opts, region_px, on_done = std::move(on_done)](bool cancelled) {
-        Result<Bitmap> result = make_error(ErrorCode::kUnknown, "unreachable");
-        try {
-          if (cancelled) {
-            result = make_error(ErrorCode::kCancelled, "render cancelled");
-          } else if (state->closed.load(std::memory_order_relaxed)) {
-            result = make_error(ErrorCode::kInvalidState, "document closed");
-          } else if (PdfiumDocument* doc = impl->find_document(state->id); doc == nullptr) {
-            result = make_error(ErrorCode::kInvalidState, "document not registered");
-          } else {
-            result = doc->render_region(page_index, opts, region_px);
-          }
-        } catch (const std::exception& e) {
-          result = make_error(ErrorCode::kUnknown, std::string("render threw: ") + e.what());
-        } catch (...) {
-          result = make_error(ErrorCode::kUnknown, "render threw unknown exception");
-        }
-        on_done(std::move(result));  // 정확히 한 번
-      },
-      priority);
+  return DocumentHandleAccess::post_document_task<Bitmap>(
+      *this, priority, [page_index, opts](PdfiumDocument& doc) { return doc.render_page(page_index, opts); },
+      std::move(on_done));
+}
+
+std::future<Result<Bitmap>> DocumentHandle::render_page(int page_index, const RenderOptions& options,
+                                                        Priority priority) const {
+  return DocumentHandleAccess::to_future<Bitmap>(
+      [=, this](std::function<void(Result<Bitmap>)> cb) { return render_page(page_index, options, priority, std::move(cb)); });
+}
+
+TaskHandle DocumentHandle::render_region(int page_index, const RenderOptions& options, const Rect& region_px,
+                                         Priority priority, std::function<void(Result<Bitmap>)> on_done) const {
+  RenderOptions opts = options;
+  return DocumentHandleAccess::post_document_task<Bitmap>(
+      *this, priority,
+      [page_index, opts, region_px](PdfiumDocument& doc) { return doc.render_region(page_index, opts, region_px); },
+      std::move(on_done));
 }
 
 std::future<Result<Bitmap>> DocumentHandle::render_region(int page_index, const RenderOptions& options,
                                                           const Rect& region_px, Priority priority) const {
-  auto promise = std::make_shared<std::promise<Result<Bitmap>>>();
-  auto future = promise->get_future();
-  render_region(page_index, options, region_px, priority,
-                [promise](Result<Bitmap> result) { promise->set_value(std::move(result)); });
-  return future;
+  return DocumentHandleAccess::to_future<Bitmap>([=, this](std::function<void(Result<Bitmap>)> cb) {
+    return render_region(page_index, options, region_px, priority, std::move(cb));
+  });
+}
+
+TaskHandle DocumentHandle::load_text(int page_index, Priority priority,
+                                     std::function<void(Result<view::PageTextIndex>)> on_done) const {
+  return DocumentHandleAccess::post_document_task<view::PageTextIndex>(
+      *this, priority, [page_index](PdfiumDocument& doc) { return doc.load_text(page_index); }, std::move(on_done));
+}
+
+std::future<Result<view::PageTextIndex>> DocumentHandle::load_text(int page_index, Priority priority) const {
+  return DocumentHandleAccess::to_future<view::PageTextIndex>(
+      [=, this](std::function<void(Result<view::PageTextIndex>)> cb) { return load_text(page_index, priority, std::move(cb)); });
 }
 
 void DocumentHandle::close() noexcept {

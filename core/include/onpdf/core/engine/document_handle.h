@@ -17,6 +17,7 @@
 #include "onpdf/core/engine/render_types.h"
 #include "onpdf/core/error.h"
 #include "onpdf/core/geometry.h"
+#include "onpdf/core/view/text_index.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -73,6 +74,12 @@ class DocumentHandle {
   [[nodiscard]] std::future<Result<Bitmap>> render_region(int page_index, const RenderOptions& options,
                                                           const Rect& region_px,
                                                           Priority priority = Priority::kNormal) const;
+
+  // 쪽 텍스트 인덱스. 계약은 render_page 와 같다 (콜백은 정확히 한 번).
+  TaskHandle load_text(int page_index, Priority priority,
+                       std::function<void(Result<view::PageTextIndex>)> on_done) const;
+  [[nodiscard]] std::future<Result<view::PageTextIndex>> load_text(int page_index,
+                                                                   Priority priority = Priority::kNormal) const;
 
   // 워커에 문서 해제를 맡긴다. 이후 render_page 는 kInvalidState.
   void close() noexcept;
