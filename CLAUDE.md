@@ -53,11 +53,11 @@ cmake --preset dev-app && cmake --build --preset dev-app        # Qt 앱 포함 
 ctest --preset dev-app                                         # app 테스트(offscreen) 포함
 ```
 
-- 테스트 PDF 생성: `python3 testdata/make_simple_pdf.py` (xref 직접 계산, 외부 의존 없음)
+- 테스트 PDF: `python3 testdata/gen/make_all.py` 로 전부 생성(표준 라이브러리만, 결정적). `--check` 가 CI 에서 커밋본과 비교. 파일별 기대값은 `testdata/manifest.tsv`, 절차는 `testdata/README.md`
 - `core` 는 `stb` 로 PNG 를 읽고 쓴다. 새 의존성은 `vcpkg.json` 에 추가하고 `builtin-baseline` 을 유지한다
 - 빌드 산출물은 `build/<preset>/` 아래에만 생성한다 (소스 트리 내 빌드 금지). 실행 파일과 PDFium 공유 라이브러리는 `build/<preset>/bin/`
 - PDFium/qpdf 바이너리는 저장소에 커밋하지 않는다 — `third_party/` 스크립트로 받아온다
-- 테스트 PDF 는 라이선스가 확인된 파일만 `testdata/` 에 넣고, 출처·라이선스를 `testdata/README.md` 에 기록한다
+- 테스트 PDF 는 라이선스가 확인된 파일만 `testdata/` 에 넣고, `manifest.tsv` 에 기대값·출처·라이선스를 적는다 (README 표는 자동 생성). 한글 파일명(`한글 파일명.pdf`)이 있으므로 경로는 항상 UTF-8 `std::filesystem::path` 로 다룬다
 
 # Architecture
 
@@ -105,7 +105,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 2. **Ownership 명확히**: raw `new`/`delete` 금지. 소유권은 `unique_ptr`, 공유는 꼭 필요할 때만 `shared_ptr`, 비소유 참조는 참조 또는 raw pointer(nullable 명시).
 3. **스레드**: PDFium 워커 외 스레드에서 PDFium 객체 접근 금지. 공유 상태는 `std::mutex` 또는 메시지 전달로 보호. 데이터 레이스는 Critical 이슈로 취급.
 4. **텍스트는 UTF-8**: 내부 문자열은 UTF-8 `std::string`. PDFium 의 UTF-16LE 와는 core/engine 경계에서만 변환. 한글(CID 폰트) 경로는 항상 테스트를 함께 만든다.
-5. **플랫폼 분기 최소화**: `#ifdef _WIN32` 는 `core/platform/` 과 `app/` 에만. 경로는 `std::filesystem::path`.
+5. **플랫폼 분기 최소화**: `#ifdef _WIN32` 는 `core/platform/`, `app/`, `cli/main.cpp`(wmain) 에만. 경로는 `std::filesystem::path` 이되 **UTF-8 문자열에서 만들 때는 반드시 `onpdf::path_from_utf8`**(`core/platform/path.h`) 를 쓴다 — Windows 는 `path(std::string)` 을 코드 페이지로 해석해 한글 경로가 깨진다. 오류 메시지 등 역변환은 `path_to_utf8`.
 6. **스타일**: `.clang-format` 준수(생기면). 클래스 `PascalCase`, 함수·변수 `snake_case`, 멤버 `name_`, 상수 `kName`. 헤더는 `#pragma once`. 주석·문서는 한국어, 식별자·커밋 메시지 제목은 영어.
 7. **i18n**: 사용자 노출 문자열은 `tr()` 로 감싸고 `app/i18n/` 에 ko/en 둘 다 추가. 하드코딩 금지.
 8. **Simplicity**: 보일러플레이트 최소화, 기존 패턴 우선. 새 의존성은 `vcpkg.json` 추가 전에 상의.
@@ -114,7 +114,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 - **단위 테스트** (`tests/unit`): core/edit. 모든 Command 는 실행 → 취소 → 재실행 후 문서 상태 비교 테스트 필수.
 - **렌더링 회귀** (`tests/render`): 테스트 PDF → PNG → 기준 이미지와 픽셀 비교. 렌더링·편집 기능 변경 시 반드시 갱신. 테스트는 `PdfiumLibrary::Options::use_system_fonts=false` 로 내장 폰트만 써서 플랫폼 간 결과를 같게 한다 (시스템 폰트 의존 테스트는 별도 표시).
 - **왕복 테스트** (`tests/roundtrip`): 열기 → 저장 → 다시 열기 후 페이지 수·텍스트·렌더링 일치 + `qpdf --check`.
-- 한글 문서, 스캔본, 폼, 암호화 파일을 테스트 집합에 항상 포함한다.
+- 한글 문서, 스캔본, 폼, 암호화 파일을 테스트 집합에 항상 포함한다. `tests/unit/testdata_manifest_test.cpp` 가 `manifest.tsv` 의 전 파일을 열어 검증하므로 새 PDF 는 manifest 한 줄로 테스트에 들어간다.
 - CI: 푸시마다 빌드 + 단위 테스트, PR 마다 렌더링 회귀까지.
 
 # Task Complexity Routing

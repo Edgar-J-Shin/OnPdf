@@ -1,6 +1,7 @@
 #include "onpdf/core/engine/pdfium_document.h"
 
 #include "onpdf/core/engine/pdfium_library.h"
+#include "onpdf/core/platform/path.h"
 
 #include <fpdfview.h>
 
@@ -32,16 +33,16 @@ Error last_pdfium_error(const std::string& context) {
 Result<std::vector<std::uint8_t>> read_file(const std::filesystem::path& path) {
   std::error_code ec;
   if (!std::filesystem::is_regular_file(path, ec)) {
-    return make_error(ErrorCode::kFileNotFound, "file not found: " + path.string());
+    return make_error(ErrorCode::kFileNotFound, "file not found: " + path_to_utf8(path));
   }
   std::ifstream in(path, std::ios::binary);
   if (!in) {
-    return make_error(ErrorCode::kIoError, "cannot open: " + path.string());
+    return make_error(ErrorCode::kIoError, "cannot open: " + path_to_utf8(path));
   }
   std::vector<std::uint8_t> data((std::istreambuf_iterator<char>(in)),
                                  std::istreambuf_iterator<char>());
   if (in.bad()) {
-    return make_error(ErrorCode::kIoError, "read failed: " + path.string());
+    return make_error(ErrorCode::kIoError, "read failed: " + path_to_utf8(path));
   }
   return data;
 }

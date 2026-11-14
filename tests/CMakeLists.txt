@@ -21,6 +21,7 @@ endfunction()
 onpdf_add_test(onpdf_unit_tests
   unit/pdfium_document_test.cpp
   unit/png_io_test.cpp
+  unit/testdata_manifest_test.cpp
 )
 target_compile_definitions(onpdf_unit_tests PRIVATE ONPDF_TEST_GLOBAL_PDFIUM=1)
 
