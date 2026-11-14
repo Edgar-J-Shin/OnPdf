@@ -13,6 +13,8 @@
 #include <QScrollBar>
 #include <QTimer>
 
+#include <cmath>
+
 namespace onpdf::app {
 namespace {
 
@@ -46,20 +48,27 @@ class DocumentViewTest : public ::testing::Test {
     o.use_system_fonts = false;
     return o;
   }
+  // 람다가 지역 변수를 참조로 잡으므로 반환 전에 반드시 연결을 끊는다 (두 번째 open 에서 죽은 스택 접근 방지)
   bool open(const char* name) {
     bool opened = false, failed = false;
-    QObject::connect(&session_, &DocumentSession::opened, &view_, [&](const QString&, int) { opened = true; });
-    QObject::connect(&session_, &DocumentSession::open_failed, &view_, [&](const QString&, const QString&) { failed = true; });
+    const auto c1 = QObject::connect(&session_, &DocumentSession::opened, &view_, [&](const QString&, int) { opened = true; });
+    const auto c2 = QObject::connect(&session_, &DocumentSession::open_failed, &view_,
+                                     [&](const QString&, const QString&) { failed = true; });
     session_.open(QString::fromStdString(onpdf::path_to_utf8(testdata(name))));
-    if (!spin_until([&] { return opened || failed; }) || failed) return false;
+    const bool ok = spin_until([&] { return opened || failed; }) && !failed;
+    QObject::disconnect(c1);
+    QObject::disconnect(c2);
+    if (!ok) return false;
     view_.set_document(session_.handle(), dispatcher_);
     return true;
   }
   bool wait_first_view() {
-    bool done = false;
-    QObject::connect(&view_, &DocumentView::first_view_rendered, &view_, [&] { done = true; });
     if (view_.pending_visible_tiles() == 0) return true;
-    return spin_until([&] { return done; });
+    bool done = false;
+    const auto c = QObject::connect(&view_, &DocumentView::first_view_rendered, &view_, [&] { done = true; });
+    const bool ok = spin_until([&] { return done; });
+    QObject::disconnect(c);
+    return ok;
   }
 
   UiDispatcher dispatcher_;
@@ -94,7 +103,8 @@ TEST_F(DocumentViewTest, ScrollingLargeDocumentRequestsBoundedTiles) {
   // 지나간 뷰포트의 요청은 취소된다
   EXPECT_GT(view_.scheduler_stats().cancelled, 0);
   ASSERT_TRUE(wait_first_view());
-  EXPECT_LE(view_.cache_stats().bytes, view_.cache_stats().count * 512u * 512u * 4u);
+  EXPECT_GT(view_.cache_stats().count, 0u);
+  EXPECT_LE(view_.cache_stats().bytes, std::size_t{256} << 20);
 }
 
 TEST_F(DocumentViewTest, ZoomKeepsAnchorAndClamps) {
@@ -110,6 +120,28 @@ TEST_F(DocumentViewTest, ZoomKeepsAnchorAndClamps) {
   EXPECT_DOUBLE_EQ(view_.zoom(), DocumentView::kMaxZoom);
   view_.set_zoom(0.0);
   EXPECT_DOUBLE_EQ(view_.zoom(), DocumentView::kMinZoom);
+}
+
+TEST_F(DocumentViewTest, HorizontalAnchorWhenDocumentNarrowerThanViewport) {
+  // bookmarks.pdf 는 전 쪽 Letter(612pt) 라 100% 에서도 문서 폭(644px)이 뷰포트보다 좁다 → 가운데 정렬 오프셋 존재
+  ASSERT_TRUE(open("bookmarks.pdf"));
+  view_.set_zoom(0.5);
+  const double vw = view_.viewport()->width();
+  ASSERT_GT(vw, 700);
+  ASSERT_EQ(view_.horizontalScrollBar()->maximum(), 0);
+  // 뷰 x = hoff + margin + page_x. 0.5 배율에서 쪽 안 x=150px(= 300pt) 지점을 앵커로 2배 확대
+  const double hoff_before = std::floor((vw - (306 + 32)) / 2.0);
+  const QPointF anchor(hoff_before + 16 + 150, 100);
+  view_.set_zoom(1.0, anchor);
+  ASSERT_EQ(view_.horizontalScrollBar()->maximum(), 0);  // 644 < vw → 여전히 스크롤 없음
+  // 같은 문서 지점(300pt = 1.0 배율에서 300px) 의 새 뷰 x
+  const double hoff_after = std::floor((vw - (612 + 32)) / 2.0);
+  const double new_view_x = hoff_after + 16 + 300 - view_.horizontalScrollBar()->value();
+  // 가로 스크롤이 불가능하므로 앵커를 정확히 고정할 수는 없지만, 오프셋을 무시한 구현은 수십 px 을 튀게 한다.
+  // 올바른 구현은 "스크롤 0 + 새 오프셋" 이라는 유일한 해를 내므로 그 값과 일치해야 한다
+  EXPECT_NEAR(new_view_x, hoff_after + 316, 1.0);
+  EXPECT_EQ(view_.horizontalScrollBar()->value(), 0);
+  EXPECT_EQ(view_.current_page(), 0);
 }
 
 TEST_F(DocumentViewTest, GoToPageAndPageSignal) {

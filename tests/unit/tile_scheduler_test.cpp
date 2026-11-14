@@ -3,7 +3,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <map>
+#include <memory>
 #include <vector>
 
 namespace onpdf::view {
@@ -16,12 +18,15 @@ class FakeTileSource : public TileSource {
     TileRequest request;
     engine::Priority priority;
     TileCallback on_done;
+    std::shared_ptr<std::atomic<bool>> cancelled;  // 스케줄러가 cancel() 하면 true
   };
   engine::TaskHandle request(const TileRequest& r, engine::Priority p, TileCallback cb) override {
-    pending[r.key] = Pending{r, p, std::move(cb)};
+    auto flag = std::make_shared<std::atomic<bool>>(false);
+    pending[r.key] = Pending{r, p, std::move(cb), flag};
     ++requested;
-    return engine::TaskHandle{};
+    return engine::TaskHandle::for_testing(flag);
   }
+  bool is_cancelled(const TileKey& key) const { return pending.at(key).cancelled->load(); }
   void complete(const TileKey& key) {
     auto it = pending.find(key);
     ASSERT_NE(it, pending.end()) << "not pending";
@@ -109,9 +114,14 @@ TEST_F(TileSchedulerTest, MovingViewportCancelsObsoleteRequests) {
   const Rect page5 = layout_.page_rect(5);
   scheduler_.update({page5.x, page5.y, 300, 300});
   EXPECT_EQ(scheduler_.stats().cancelled, 7);
-  EXPECT_EQ(scheduler_.in_flight(), 7 + 5);  // 5쪽 미리보기+타일(0,0) + 4·6쪽 미리보기+4타일 ... = 2 + 10
-  // 새로 요청된 것(가짜 소스는 취소된 항목을 지우지 않으므로 requested 로 센다)
+  // 이전 뷰포트의 7개 요청은 실제로 취소 표시되어야 한다
+  EXPECT_TRUE(source_.is_cancelled({0, 64, 0, 0}));
+  EXPECT_TRUE(source_.is_cancelled({0, 8, 0, 0}));
+  EXPECT_TRUE(source_.is_cancelled({1, 64, 1, 1}));
+  // 새 집합: 5쪽 미리보기+타일(0,0) = 2, 4·6쪽 각각 미리보기+2×2 타일 = 10 → 12
+  EXPECT_EQ(scheduler_.in_flight(), 12);
   EXPECT_EQ(source_.requested, 7 + 12);
+  EXPECT_FALSE(source_.is_cancelled({5, 64, 0, 0}));
   // 취소된 요청이 늦게 완료돼도 (가짜 소스는 아직 콜백을 들고 있음) 캐시에는 들어가되 통계만
   source_.complete({0, 64, 0, 0});
   EXPECT_TRUE(cache_.contains({0, 64, 0, 0}));
@@ -121,9 +131,12 @@ TEST_F(TileSchedulerTest, PrefetchPromotedToVisibleIsReRequestedHigh) {
   scheduler_.update({0, 0, 300, 300});
   const TileKey next_tile{1, 64, 0, 0};
   EXPECT_EQ(source_.pending.at(next_tile).priority, engine::Priority::kLow);
+  const auto low_flag = source_.pending.at(next_tile).cancelled;
   const Rect p1 = layout_.page_rect(1);
   scheduler_.update({p1.x, p1.y, 300, 300});
   EXPECT_EQ(source_.pending.at(next_tile).priority, engine::Priority::kHigh);
+  EXPECT_TRUE(low_flag->load()) << "promoted request must cancel the old kLow task";
+  EXPECT_FALSE(source_.is_cancelled(next_tile));
 }
 
 TEST_F(TileSchedulerTest, FailedTileIsNotRequestedAgainUntilLayoutReset) {

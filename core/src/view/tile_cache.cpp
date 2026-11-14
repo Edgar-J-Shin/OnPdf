@@ -1,10 +1,16 @@
 #include "onpdf/core/view/tile_cache.h"
 
+#include <algorithm>
 #include <cassert>
 
 namespace onpdf::view {
 
-TileCache::TileCache(std::size_t max_bytes) : max_bytes_(max_bytes) {}
+namespace {
+// 타일 하나(최대 1MB)보다 작은 상한이면 put 이 자기 자신을 제거해 영원히 재요청된다. 최소 4타일.
+constexpr std::size_t kMinCacheBytes = std::size_t{4} * 512 * 512 * 4;
+}  // namespace
+
+TileCache::TileCache(std::size_t max_bytes) : max_bytes_(std::max(max_bytes, kMinCacheBytes)) {}
 
 std::shared_ptr<const Bitmap> TileCache::get(const TileKey& key) {
   auto it = map_.find(key);
@@ -59,7 +65,7 @@ void TileCache::clear() {
 }
 
 void TileCache::set_max_bytes(std::size_t max_bytes) {
-  max_bytes_ = max_bytes;
+  max_bytes_ = std::max(max_bytes, kMinCacheBytes);
   evict_to(max_bytes_);
 }
 

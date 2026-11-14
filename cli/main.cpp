@@ -28,7 +28,7 @@ int usage() {
       "  onpdf_cli info   <in.pdf> [--password PW]\n"
       "  onpdf_cli render <in.pdf> <out.png> [--page N] [--scale S] [--rotate R] [--password PW]\n"
       "  onpdf_cli tiles  <in.pdf> <out-dir> [--page N] [--scale S] [--password PW]\n"
-      "                   (512px 타일 PNG 와 이어 붙인 stitched.png 출력)\n",
+      "                   (writes 512px tile PNGs, stitched.png and full.png)\n",
       stderr);
   return 2;
 }

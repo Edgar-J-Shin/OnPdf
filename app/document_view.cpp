@@ -14,6 +14,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
+#include <vector>
 
 namespace onpdf::app {
 
@@ -45,6 +47,9 @@ void DocumentView::set_document(const engine::DocumentHandle& handle, UiDispatch
   scheduler_.reset();
   source_.reset();
   cache_.clear();
+  // 스크롤바는 스케줄러를 만들기 전에 초기화한다 (setValue 가 scrollContentsBy → 요청을 일으키므로)
+  verticalScrollBar()->setValue(0);
+  horizontalScrollBar()->setValue(0);
   layout_ = std::make_unique<view::PageLayout>(handle.info().page_sizes);
   source_ = std::make_unique<DocumentTileSource>(handle, dispatcher, this);
   scheduler_ = std::make_unique<view::TileScheduler>(*source_, cache_);
@@ -53,8 +58,6 @@ void DocumentView::set_document(const engine::DocumentHandle& handle, UiDispatch
   placeholder_.clear();
   last_page_ = -1;
   first_view_pending_ = true;
-  verticalScrollBar()->setValue(0);
-  horizontalScrollBar()->setValue(0);
   relayout();
   emit_page_if_changed();
 }
@@ -92,7 +95,10 @@ void DocumentView::set_zoom(double zoom, QPointF anchor_viewport) {
   // 앵커 아래 문서 지점을 (쪽, 쪽 내 비율) 로 기록
   const double d = dpr();
   const onpdf::Rect vp = viewport_doc();
-  const onpdf::Point doc_before{vp.x + anchor_viewport.x() * d, vp.y + anchor_viewport.y() * d};
+  // 문서가 뷰보다 좁으면 가운데 정렬 오프셋만큼 뷰 x 와 문서 x 가 어긋난다
+  const double hoff_before = horizontal_offset_logical();
+  const onpdf::Point doc_before{vp.x + (anchor_viewport.x() - hoff_before) * d,
+                                vp.y + anchor_viewport.y() * d};
   const int page = layout_->page_at(doc_before.y);
   const onpdf::Rect r0 = layout_->page_rect(page);
   const double fx = (doc_before.x - r0.x) / std::max(1.0, r0.w);
@@ -104,7 +110,8 @@ void DocumentView::set_zoom(double zoom, QPointF anchor_viewport) {
   const onpdf::Rect r1 = layout_->page_rect(page);
   const onpdf::Point doc_after{r1.x + fx * r1.w, r1.y + fy * r1.h};
   verticalScrollBar()->setValue(static_cast<int>(std::lround(doc_after.y / d - anchor_viewport.y())));
-  horizontalScrollBar()->setValue(static_cast<int>(std::lround(doc_after.x / d - anchor_viewport.x())));
+  horizontalScrollBar()->setValue(
+      static_cast<int>(std::lround(doc_after.x / d - (anchor_viewport.x() - horizontal_offset_logical()))));
   schedule_update();
   viewport()->update();
   emit zoom_changed(zoom_);
@@ -151,7 +158,7 @@ onpdf::Rect DocumentView::viewport_doc() const {
 double DocumentView::horizontal_offset_logical() const {
   if (!layout_) return 0.0;
   const double doc_w = layout_->document_width() / dpr();
-  return doc_w < viewport()->width() ? (viewport()->width() - doc_w) / 2.0 : 0.0;
+  return doc_w < viewport()->width() ? std::floor((viewport()->width() - doc_w) / 2.0) : 0.0;
 }
 
 void DocumentView::relayout() {
@@ -279,19 +286,7 @@ void DocumentView::paint_page(QPainter& painter, int page, const QRectF& page_lo
   const engine::PageSize pt = layout_->page_size_pt(page);
   const double cur = view::dequantize_scale(scale_q);
 
-  // 1. 대체 타일: 다른 배율(미리보기·이전 배율)을 현재 배율로 늘려 그린다. 작은 배율(흐린 것)부터
-  auto others = cache_.tiles_for_page(page);
-  std::sort(others.begin(), others.end(), [](const auto& a, const auto& b) { return a.first.scale_q < b.first.scale_q; });
-  for (const auto& [key, bitmap] : others) {
-    if (key.scale_q == scale_q) continue;
-    const double factor = cur / view::dequantize_scale(key.scale_q);
-    const onpdf::Rect src = view::tile_rect_px(key, pt);
-    const QRectF target(page_logical.x() + src.x * factor / d, page_logical.y() + src.y * factor / d,
-                        src.w * factor / d, src.h * factor / d);
-    painter.drawImage(target, to_qimage_shared(bitmap, 1.0));  // 복사 없음
-  }
-
-  // 2. 현재 배율 타일 (뷰포트와 교차하는 것만)
+  // 뷰포트와 교차하는 현재 배율 타일 범위 (쪽 픽셀 좌표)
   const onpdf::Rect vp = viewport_doc();
   const onpdf::Rect pr = layout_->page_rect(page);
   const onpdf::Rect vis = vp.intersected(pr).translated(-pr.x, -pr.y);
@@ -301,15 +296,44 @@ void DocumentView::paint_page(QPainter& painter, int page, const QRectF& page_lo
   const int ty0 = static_cast<int>(vis.y) / view::kTileSize;
   const int tx1 = std::min(view::tiles_across(px.w) - 1, static_cast<int>(std::ceil(vis.right()) - 1) / view::kTileSize);
   const int ty1 = std::min(view::tiles_across(px.h) - 1, static_cast<int>(std::ceil(vis.bottom()) - 1) / view::kTileSize);
+
+  // 1. 현재 배율 타일을 모으고, 빠진 것이 있는지 본다
+  struct Ready { view::TileKey key; std::shared_ptr<const onpdf::Bitmap> bitmap; };
+  std::vector<Ready> ready;
+  bool missing = false;
   for (int ty = ty0; ty <= ty1; ++ty) {
     for (int tx = tx0; tx <= tx1; ++tx) {
       const view::TileKey key{page, scale_q, tx, ty};
-      auto bitmap = cache_.get(key);
-      if (!bitmap) continue;
-      const onpdf::Rect src = view::tile_rect_px(key, pt);
-      painter.drawImage(QPointF(page_logical.x() + src.x / d, page_logical.y() + src.y / d),
-                        to_qimage_shared(bitmap, d));  // 복사 없음
+      if (auto bitmap = cache_.get(key)) {
+        ready.push_back({key, std::move(bitmap)});
+      } else {
+        missing = true;
+      }
     }
+  }
+
+  // 2. 빠진 타일이 있을 때만 대체 타일(미리보기·이전 배율)을 뷰포트와 교차하는 것만 늘려 그린다.
+  //    흐린 것(작은 배율)부터 그려 선명한 것이 위에 오게 한다
+  if (missing) {
+    auto others = cache_.tiles_for_page(page);
+    std::sort(others.begin(), others.end(),
+              [](const auto& a, const auto& b) { return a.first.scale_q < b.first.scale_q; });
+    for (const auto& [key, bitmap] : others) {
+      if (key.scale_q == scale_q) continue;
+      const double factor = cur / view::dequantize_scale(key.scale_q);
+      const onpdf::Rect src = view::tile_rect_px(key, pt);
+      const onpdf::Rect in_cur{src.x * factor, src.y * factor, src.w * factor, src.h * factor};
+      if (!in_cur.intersects(vis)) continue;
+      const QRectF target(page_logical.x() + in_cur.x / d, page_logical.y() + in_cur.y / d, in_cur.w / d, in_cur.h / d);
+      painter.drawImage(target, to_qimage_shared(bitmap, 1.0));  // 복사 없음
+    }
+  }
+
+  // 3. 현재 배율 타일
+  for (const auto& [key, bitmap] : ready) {
+    const onpdf::Rect src = view::tile_rect_px(key, pt);
+    painter.drawImage(QPointF(page_logical.x() + src.x / d, page_logical.y() + src.y / d),
+                      to_qimage_shared(bitmap, d));  // 복사 없음
   }
 }
 
@@ -326,10 +350,9 @@ void DocumentView::resizeEvent(QResizeEvent* event) {
 }
 
 void DocumentView::scrollContentsBy(int dx, int dy) {
-  QAbstractScrollArea::scrollContentsBy(dx, dy);
+  QAbstractScrollArea::scrollContentsBy(dx, dy);  // viewport()->update() 포함
   schedule_update();
   emit_page_if_changed();
-  viewport()->update();
 }
 
 void DocumentView::wheelEvent(QWheelEvent* event) {
@@ -354,13 +377,23 @@ void DocumentView::keyPressEvent(QKeyEvent* event) {
   event->accept();
 }
 
-bool DocumentView::event(QEvent* event) {
+bool DocumentView::viewportEvent(QEvent* event) {
+  // 네이티브 제스처(트랙패드 핀치)는 viewport 위젯에 오며, QAbstractScrollArea 는 이를
+  // 서브클래스 event() 로 넘기지 않으므로 여기서 받는다
   if (event->type() == QEvent::NativeGesture) {
     auto* gesture = static_cast<QNativeGestureEvent*>(event);
     if (gesture->gestureType() == Qt::ZoomNativeGesture) {
       set_zoom(zoom_ * (1.0 + gesture->value()), gesture->position());
       return true;
     }
+  }
+  return QAbstractScrollArea::viewportEvent(event);
+}
+
+bool DocumentView::event(QEvent* event) {
+  if (event->type() == QEvent::DevicePixelRatioChange) {
+    // 다른 DPR 모니터로 이동: 타일 배율을 새 dpr 로 다시 계산
+    relayout();
   }
   return QAbstractScrollArea::event(event);
 }

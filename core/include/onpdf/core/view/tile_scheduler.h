@@ -2,6 +2,8 @@
 
 // 뷰포트에 필요한 타일을 계산해 캐시 미스만 요청하고, 더는 필요 없는 요청을 취소한다.
 // 메인 스레드 전용. 콜백은 weak_ptr 로 상태를 잡으므로 스케줄러가 교체·소멸된 뒤 도착한 타일은 무시된다.
+// 재진입 금지: on_tile 콜백 안에서 update() 를 부르면 안 된다 (동기 소스에서는 update() 의 반복 중에
+// 콜백이 실행된다). 앱의 DocumentTileSource 는 항상 이벤트 루프로 지연하므로 해당 없음.
 
 #include "onpdf/core/engine/pdfium_worker.h"
 #include "onpdf/core/geometry.h"

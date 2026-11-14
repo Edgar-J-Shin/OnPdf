@@ -77,8 +77,11 @@ TEST(PageLayout, FitScales) {
   EXPECT_EQ(layout.fit_width_scale_q(875), 64);
   EXPECT_EQ(layout.fit_width_scale_q(874), 63);  // 841/841.89 < 1.0 → 내림
   EXPECT_EQ(layout.fit_width_scale_q(437 + 33), 33);  // 437/841.89 ≈ 0.519 → floor(33.2)
-  // Letter(612×792) 를 400×400 에 맞추면 높이 기준 (400-33)/792 ≈ 0.4634 → floor(29.66) = 29
-  EXPECT_EQ(layout.fit_page_scale_q(400, 400, 2), 29);
+  // Letter(612×792) 를 400×400 에 맞추면 높이 기준은 (400-33)/792 ≈ 0.4634 이지만, 가장 넓은 쪽(841.89pt) 도
+  // 뷰 너비에 들어가야 하므로 (400-33)/841.89 ≈ 0.4359 → floor(27.9) = 27 로 상한된다 (가로 스크롤바 진동 방지)
+  EXPECT_EQ(layout.fit_page_scale_q(400, 400, 2), 27);
+  // 높이 제한이 더 빡빡한 경우: 세로 200px → (200-33)/792 ≈ 0.2109 → 13
+  EXPECT_EQ(layout.fit_page_scale_q(2000, 200, 2), 13);
   // 맞춤 결과로 배치한 문서는 뷰포트보다 넓지 않다
   layout.set_scale_q(layout.fit_width_scale_q(700));
   EXPECT_LE(layout.document_width(), 700.0);

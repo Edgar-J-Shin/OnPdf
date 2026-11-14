@@ -36,7 +36,7 @@ void PageLayout::rebuild() {
 Rect PageLayout::page_rect(int page) const {
   const auto i = static_cast<std::size_t>(page);
   const Size px = page_pixel_size(pages_pt_[i], scale_q_);
-  const double x = options_.margin + (max_page_width_px_ - px.w) / 2.0;
+  const double x = options_.margin + std::floor((max_page_width_px_ - px.w) / 2.0);  // 정수 px 정렬
   return {x, tops_[i], px.w, px.h};
 }
 
@@ -105,7 +105,10 @@ int PageLayout::fit_page_scale_q(double viewport_w, double viewport_h, int page)
   const auto& pt = pages_pt_[static_cast<std::size_t>(std::clamp(page, 0, page_count() - 1))];
   const double aw = std::max(1.0, viewport_w - 2.0 * options_.margin - 1.0);
   const double ah = std::max(1.0, viewport_h - 2.0 * options_.margin - 1.0);
-  return quantize_floor(std::min(aw / pt.width, ah / pt.height));
+  // 가장 넓은 쪽도 뷰 너비 안에 들어가게 상한을 둔다. 아니면 가로 스크롤바가 생겼다 사라지며
+  // 리사이즈 → relayout 진동이 일어난다
+  const double cap = max_page_width_pt_ > 0.0 ? aw / max_page_width_pt_ : aw / pt.width;
+  return quantize_floor(std::min({aw / pt.width, ah / pt.height, cap}));
 }
 
 }  // namespace onpdf::view

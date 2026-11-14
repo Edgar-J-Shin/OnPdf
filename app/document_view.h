@@ -72,7 +72,8 @@ class DocumentView : public QAbstractScrollArea {
   void scrollContentsBy(int dx, int dy) override;
   void wheelEvent(QWheelEvent* event) override;
   void keyPressEvent(QKeyEvent* event) override;
-  bool event(QEvent* event) override;
+  bool viewportEvent(QEvent* event) override;  // 핀치(NativeGesture)는 viewport 로 온다
+  bool event(QEvent* event) override;          // DPR 변경
 
  private:
   [[nodiscard]] double dpr() const;
