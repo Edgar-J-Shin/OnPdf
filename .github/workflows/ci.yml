@@ -29,12 +29,20 @@ jobs:
         with:
           arch: x64
 
-      - name: Install Qt
-        if: matrix.qt
+      - name: Install Qt (Windows)
+        if: matrix.qt && runner.os != 'macOS'
         uses: jurplel/install-qt-action@v4
         with:
           version: "6.8.*"
           cache: true
+
+      # macOS: install-qt-action 의 6.8 사전 빌드는 Xcode 16 SDK 에서 제거된 AGL 프레임워크를 링크해
+      # 실패한다. 개발 머신과 같은 Homebrew Qt 를 쓴다.
+      - name: Install Qt (Homebrew)
+        if: matrix.qt && runner.os == 'macOS'
+        run: |
+          brew install qt
+          echo "QT_ROOT_DIR=$(brew --prefix qt)" >> "$GITHUB_ENV"
 
       - name: Set up vcpkg
         uses: lukka/run-vcpkg@v11
