@@ -161,4 +161,50 @@ Result<Bitmap> PdfiumDocument::render_page(int page_index, const RenderOptions& 
   return out;
 }
 
+Result<Bitmap> PdfiumDocument::render_region(int page_index, const RenderOptions& options,
+                                             const Rect& region_px) const {
+  PdfiumLibrary::assert_current_thread();
+  if (!(options.scale > 0.0f) || !std::isfinite(options.scale)) {
+    return make_error(ErrorCode::kInvalidArgument, "scale must be positive");
+  }
+  const int width = static_cast<int>(std::ceil(region_px.w));
+  const int height = static_cast<int>(std::ceil(region_px.h));
+  if (width <= 0 || height <= 0) {
+    return make_error(ErrorCode::kInvalidArgument, "region must be non-empty");
+  }
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+
+  ScopedBitmap bitmap(FPDFBitmap_CreateEx(width, height, FPDFBitmap_BGRA, nullptr, 0));
+  if (!bitmap) return make_error(ErrorCode::kRenderFailed, "FPDFBitmap_CreateEx failed");
+  FPDFBitmap_FillRect(bitmap.get(), 0, 0, width, height, 0xFFFFFFFF);
+
+  // 매트릭스는 "회전 0, 쪽 크기 그대로 렌더했을 때의 장치 좌표(좌상단 원점)" 에 적용된다.
+  // 배율 s 로 키우고 영역 원점이 (0,0) 에 오도록 평행이동.
+  const FS_MATRIX matrix{options.scale, 0.0f, 0.0f, options.scale,
+                         static_cast<float>(-region_px.x), static_cast<float>(-region_px.y)};
+  const FS_RECTF clip{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height)};
+  int flags = 0;
+  if (options.render_annotations) flags |= FPDF_ANNOT;
+  if (options.lcd_text) flags |= FPDF_LCD_TEXT;
+  FPDF_RenderPageBitmapWithMatrix(bitmap.get(), page->get(), &matrix, &clip, flags);
+
+  const int stride = FPDFBitmap_GetStride(bitmap.get());
+  const auto* buffer = static_cast<const std::uint8_t*>(FPDFBitmap_GetBuffer(bitmap.get()));
+  if (buffer == nullptr || stride <= 0) {
+    return make_error(ErrorCode::kRenderFailed, "FPDFBitmap_GetBuffer failed");
+  }
+  Bitmap out;
+  out.width = width;
+  out.height = height;
+  out.stride = width * 4;
+  out.pixels.resize(static_cast<std::size_t>(out.stride) * static_cast<std::size_t>(height));
+  for (int y = 0; y < height; ++y) {
+    std::memcpy(out.pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(out.stride),
+                buffer + static_cast<std::size_t>(y) * static_cast<std::size_t>(stride),
+                static_cast<std::size_t>(out.stride));
+  }
+  return out;
+}
+
 }  // namespace onpdf::engine

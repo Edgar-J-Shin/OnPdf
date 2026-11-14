@@ -4,6 +4,10 @@ add_library(onpdf_core STATIC
   src/engine/pdfium_worker.cpp
   src/engine/document_handle.cpp
   src/image/png_io.cpp
+  src/view/page_layout.cpp
+  src/view/tile_cache.cpp
+  src/view/tile_source.cpp
+  src/view/tile_scheduler.cpp
 )
 add_library(onpdf::core ALIAS onpdf_core)
 

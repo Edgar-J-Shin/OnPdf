@@ -49,6 +49,9 @@ class TaskHandle {
   }
   [[nodiscard]] bool valid() const noexcept { return static_cast<bool>(cancelled_); }
 
+  // 테스트용: 가짜 TileSource 등이 취소 가능한 핸들을 만들 수 있게 한다
+  static TaskHandle for_testing(std::shared_ptr<std::atomic<bool>> flag) { return TaskHandle(std::move(flag)); }
+
  private:
   friend struct PdfiumWorkerImpl;
   explicit TaskHandle(std::shared_ptr<std::atomic<bool>> flag) : cancelled_(std::move(flag)) {}

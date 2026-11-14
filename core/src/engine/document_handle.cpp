@@ -207,6 +207,53 @@ std::future<Result<Bitmap>> DocumentHandle::render_page(int page_index,
   return future;
 }
 
+TaskHandle DocumentHandle::render_region(int page_index, const RenderOptions& options,
+                                         const Rect& region_px, Priority priority,
+                                         std::function<void(Result<Bitmap>)> on_done) const {
+  assert(on_done && "render 콜백은 비어 있을 수 없다");
+  if (!state_) {
+    on_done(make_error(ErrorCode::kInvalidState, "empty document handle"));
+    return TaskHandle{};
+  }
+  std::shared_ptr<PdfiumWorkerImpl> impl = state_->worker.lock();
+  if (!impl) {
+    on_done(make_error(ErrorCode::kInvalidState, "worker destroyed"));
+    return TaskHandle{};
+  }
+  std::shared_ptr<State> state = state_;
+  RenderOptions opts = options;
+  return impl->post(
+      [impl, state, page_index, opts, region_px, on_done = std::move(on_done)](bool cancelled) {
+        Result<Bitmap> result = make_error(ErrorCode::kUnknown, "unreachable");
+        try {
+          if (cancelled) {
+            result = make_error(ErrorCode::kCancelled, "render cancelled");
+          } else if (state->closed.load(std::memory_order_relaxed)) {
+            result = make_error(ErrorCode::kInvalidState, "document closed");
+          } else if (PdfiumDocument* doc = impl->find_document(state->id); doc == nullptr) {
+            result = make_error(ErrorCode::kInvalidState, "document not registered");
+          } else {
+            result = doc->render_region(page_index, opts, region_px);
+          }
+        } catch (const std::exception& e) {
+          result = make_error(ErrorCode::kUnknown, std::string("render threw: ") + e.what());
+        } catch (...) {
+          result = make_error(ErrorCode::kUnknown, "render threw unknown exception");
+        }
+        on_done(std::move(result));  // 정확히 한 번
+      },
+      priority);
+}
+
+std::future<Result<Bitmap>> DocumentHandle::render_region(int page_index, const RenderOptions& options,
+                                                          const Rect& region_px, Priority priority) const {
+  auto promise = std::make_shared<std::promise<Result<Bitmap>>>();
+  auto future = promise->get_future();
+  render_region(page_index, options, region_px, priority,
+                [promise](Result<Bitmap> result) { promise->set_value(std::move(result)); });
+  return future;
+}
+
 void DocumentHandle::close() noexcept {
   if (state_) state_->request_close();
 }

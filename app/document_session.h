@@ -29,6 +29,7 @@ class DocumentSession : public QObject {
   void close();
 
   [[nodiscard]] bool has_document() const noexcept { return handle_.valid(); }
+  [[nodiscard]] const engine::DocumentHandle& handle() const noexcept { return handle_; }
   [[nodiscard]] const engine::DocumentInfo& info() const { return handle_.info(); }
   [[nodiscard]] QString path() const { return path_; }
 

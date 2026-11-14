@@ -4,6 +4,7 @@
 #include "onpdf/core/engine/pdfium_handles.h"
 #include "onpdf/core/engine/render_types.h"
 #include "onpdf/core/error.h"
+#include "onpdf/core/geometry.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -30,6 +31,10 @@ class PdfiumDocument {
   [[nodiscard]] int page_count() const noexcept;
   [[nodiscard]] Result<PageSize> page_size(int page_index) const;
   [[nodiscard]] Result<Bitmap> render_page(int page_index, const RenderOptions& options) const;
+  // 쪽을 options.scale 로 렌더한 픽셀 평면에서 region_px 사각형만 그린다 (타일 렌더).
+  // options.rotation 은 무시한다 — 쪽 크기(page_size)가 이미 /Rotate 를 반영하므로 회전 0 기준.
+  [[nodiscard]] Result<Bitmap> render_region(int page_index, const RenderOptions& options,
+                                             const Rect& region_px) const;
 
  private:
   PdfiumDocument(std::vector<std::uint8_t> data, ScopedDocument doc);

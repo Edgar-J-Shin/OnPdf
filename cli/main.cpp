@@ -6,9 +6,12 @@
 #include "onpdf/core/engine/pdfium_library.h"
 #include "onpdf/core/image/png_io.h"
 #include "onpdf/core/platform/path.h"
+#include "onpdf/core/view/tile.h"
+#include "onpdf/core/view/tile_source.h"
 
 #include <charconv>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -23,7 +26,9 @@ int usage() {
   std::fputs(
       "usage:\n"
       "  onpdf_cli info   <in.pdf> [--password PW]\n"
-      "  onpdf_cli render <in.pdf> <out.png> [--page N] [--scale S] [--rotate R] [--password PW]\n",
+      "  onpdf_cli render <in.pdf> <out.png> [--page N] [--scale S] [--rotate R] [--password PW]\n"
+      "  onpdf_cli tiles  <in.pdf> <out-dir> [--page N] [--scale S] [--password PW]\n"
+      "                   (writes 512px tile PNGs, stitched.png and full.png)\n",
       stderr);
   return 2;
 }
@@ -116,6 +121,65 @@ int cmd_render(const Args& args) {
   return 0;
 }
 
+int cmd_tiles(const Args& args) {
+  if (args.positional.size() != 2) return usage();
+  auto doc = PdfiumDocument::open(onpdf::path_from_utf8(args.positional[0]), args.password);
+  if (!doc) return fail(doc.error());
+  auto size = doc->page_size(args.page);
+  if (!size) return fail(size.error());
+
+  const std::filesystem::path out_dir = onpdf::path_from_utf8(args.positional[1]);
+  std::error_code ec;
+  std::filesystem::create_directories(out_dir, ec);
+  if (ec) {
+    std::fprintf(stderr, "error: cannot create %s\n", args.positional[1].c_str());
+    return 1;
+  }
+  const int scale_q = onpdf::view::quantize_scale(args.scale);
+  const onpdf::Size px = onpdf::view::page_pixel_size(*size, scale_q);
+  onpdf::Bitmap stitched;
+  stitched.width = static_cast<int>(px.w);
+  stitched.height = static_cast<int>(px.h);
+  stitched.stride = stitched.width * 4;
+  stitched.pixels.assign(static_cast<std::size_t>(stitched.stride) * static_cast<std::size_t>(stitched.height), 255);
+
+  onpdf::view::SyncTileSource source(*doc);
+  int count = 0;
+  int failed = 0;
+  for (int ty = 0; ty < onpdf::view::tiles_across(px.h); ++ty) {
+    for (int tx = 0; tx < onpdf::view::tiles_across(px.w); ++tx) {
+      const onpdf::view::TileKey key{args.page, scale_q, tx, ty};
+      source.request({key, *size}, onpdf::engine::Priority::kHigh,
+                     [&](const onpdf::view::TileKey&, onpdf::Result<onpdf::Bitmap> r) {
+                       if (!r) {
+                         ++failed;
+                         return;
+                       }
+                       const onpdf::Rect rect = onpdf::view::tile_rect_px(key, *size);
+                       for (int y = 0; y < r->height; ++y) {
+                         std::memcpy(stitched.pixels.data() +
+                                         static_cast<std::size_t>(static_cast<int>(rect.y) + y) * static_cast<std::size_t>(stitched.stride) +
+                                         static_cast<std::size_t>(rect.x) * 4,
+                                     r->row(y), static_cast<std::size_t>(r->width) * 4);
+                       }
+                       const auto name = "tile-" + std::to_string(tx) + "-" + std::to_string(ty) + ".png";
+                       if (!onpdf::image::write_png(*r, out_dir / name)) ++failed;
+                       ++count;
+                     });
+    }
+  }
+  auto written = onpdf::image::write_png(stitched, out_dir / "stitched.png");
+  if (!written) return fail(written.error());
+  // 비교용: 쪽 전체를 한 영역으로 렌더
+  onpdf::engine::RenderOptions full_opts;
+  full_opts.scale = static_cast<float>(onpdf::view::dequantize_scale(scale_q));
+  auto full = doc->render_region(args.page, full_opts, onpdf::Rect{0, 0, px.w, px.h});
+  if (full) (void)onpdf::image::write_png(*full, out_dir / "full.png");
+  std::printf("page %d @%.3f: %d tiles (%d failed) -> %s\n", args.page, onpdf::view::dequantize_scale(scale_q),
+              count, failed, args.positional[1].c_str());
+  return failed == 0 ? 0 : 1;
+}
+
 }  // namespace
 
 int run(int argc, char** argv) {
@@ -125,6 +189,7 @@ int run(int argc, char** argv) {
   onpdf::engine::PdfiumLibrary library;
   if (args.command == "info") return cmd_info(args);
   if (args.command == "render") return cmd_render(args);
+  if (args.command == "tiles") return cmd_tiles(args);
   return usage();
 }
 

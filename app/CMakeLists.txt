@@ -5,20 +5,21 @@ qt_standard_project_setup()
 # .ui 파일을 쓰지 않는다. AUTOUIC 가 켜져 있으면 "ui_*.h" 헤더를 uic 산출물로 오해한다.
 set(CMAKE_AUTOUIC OFF)
 
-# 위젯이 없는 로직 (테스트 대상). Qt Core/Gui 만 의존.
+# 메인 창을 제외한 로직·위젯 (테스트 대상).
 add_library(onpdf_app_lib STATIC
   ui_dispatcher.h ui_dispatcher.cpp
   qt_image.h qt_image.cpp
   document_session.h document_session.cpp
+  document_tile_source.h document_tile_source.cpp
+  document_view.h document_view.cpp
 )
 target_include_directories(onpdf_app_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(onpdf_app_lib PUBLIC onpdf::core Qt6::Core Qt6::Gui)
+target_link_libraries(onpdf_app_lib PUBLIC onpdf::core Qt6::Core Qt6::Gui Qt6::Widgets)
 onpdf_set_warnings(onpdf_app_lib)
 
 qt_add_executable(onpdf_app
   main.cpp
   main_window.h main_window.cpp
-  page_view.h page_view.cpp
 )
 set_target_properties(onpdf_app PROPERTIES MACOSX_BUNDLE OFF WIN32_EXECUTABLE ON)
 target_link_libraries(onpdf_app PRIVATE onpdf_app_lib Qt6::Widgets)

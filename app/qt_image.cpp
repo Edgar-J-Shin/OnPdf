@@ -9,6 +9,7 @@ namespace onpdf::app {
 namespace {
 
 void release_bitmap(void* info) { delete static_cast<onpdf::Bitmap*>(info); }
+void release_shared_bitmap(void* info) { delete static_cast<std::shared_ptr<const onpdf::Bitmap>*>(info); }
 
 }  // namespace
 
@@ -20,6 +21,18 @@ QImage to_qimage(onpdf::Bitmap&& bitmap, qreal device_pixel_ratio) {
   onpdf::Bitmap& b = *owner;
   QImage image(b.pixels.data(), b.width, b.height, b.stride, QImage::Format_RGB32, release_bitmap,
                owner);
+  image.setDevicePixelRatio(device_pixel_ratio);
+  return image;
+}
+
+QImage to_qimage_shared(std::shared_ptr<const onpdf::Bitmap> bitmap, qreal device_pixel_ratio) {
+  if (!bitmap || bitmap->empty()) return QImage();
+  // QImage 의 uchar* 생성자는 비const 버퍼를 요구하지만 RGB32 로 읽기만 하므로 const 를 벗긴다.
+  // const 생성자를 쓰면 ro_data 가 되어 setDevicePixelRatio 가 깊은 복사를 한다.
+  auto* owner = new std::shared_ptr<const onpdf::Bitmap>(std::move(bitmap));
+  const onpdf::Bitmap& b = **owner;
+  QImage image(const_cast<uchar*>(b.pixels.data()), b.width, b.height, b.stride, QImage::Format_RGB32,
+               release_shared_bitmap, owner);
   image.setDevicePixelRatio(device_pixel_ratio);
   return image;
 }
