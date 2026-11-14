@@ -22,5 +22,6 @@ qt_add_executable(onpdf_app
 )
 set_target_properties(onpdf_app PROPERTIES MACOSX_BUNDLE OFF WIN32_EXECUTABLE ON)
 target_link_libraries(onpdf_app PRIVATE onpdf_app_lib Qt6::Widgets)
+target_compile_definitions(onpdf_app PRIVATE ONPDF_VERSION="${PROJECT_VERSION}")
 onpdf_set_warnings(onpdf_app)
 onpdf_set_runtime_rpath(onpdf_app)

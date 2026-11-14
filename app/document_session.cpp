@@ -40,11 +40,13 @@ void DocumentSession::open(const QString& path, const QString& password) {
       // 워커 스레드: 결과를 메인 스레드로 넘기기만 한다.
       [dispatcher, self, gen, path](onpdf::Result<engine::DocumentHandle> result) {
         auto shared = std::make_shared<onpdf::Result<engine::DocumentHandle>>(std::move(result));
-        dispatcher->post_to(self.data(), [gen, path, shared](DocumentSession* s) {
+        dispatcher->post_to(self, [gen, path, shared](DocumentSession* s) {
           if (gen != s->open_generation_) return;  // 늦게 도착한 이전 요청
           onpdf::Result<engine::DocumentHandle>& r = *shared;
           if (r) {
+            // 이전 문서의 렌더가 실행 중이었다면 그 결과는 세대 불일치로 버려진다
             s->pending_render_.cancel();
+            ++s->render_generation_;
             s->handle_.close();
             s->handle_ = std::move(*r);
             s->path_ = path;
@@ -84,7 +86,7 @@ void DocumentSession::render_page(int page_index, float scale, qreal device_pixe
             std::chrono::steady_clock::now() - started);
         auto shared = std::make_shared<onpdf::Result<onpdf::Bitmap>>(std::move(result));
         dispatcher->post_to(
-            self.data(), [gen, page_index, device_pixel_ratio, elapsed, shared](DocumentSession* s) {
+            self, [gen, page_index, device_pixel_ratio, elapsed, shared](DocumentSession* s) {
               if (gen != s->render_generation_) return;  // 취소되었거나 더 새 요청이 있음
               onpdf::Result<onpdf::Bitmap>& r = *shared;
               if (!r) {

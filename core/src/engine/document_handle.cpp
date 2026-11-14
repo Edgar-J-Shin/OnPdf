@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <exception>
 #include <utility>
 
@@ -72,6 +73,7 @@ struct DocumentHandleAccess {
   template <class Opener>
   static TaskHandle open_with_callback(PdfiumWorker& worker, Opener opener, Priority priority,
                                        DocumentHandle::OpenCallback on_done) {
+    assert(on_done && "open 콜백은 비어 있을 수 없다");
     std::shared_ptr<PdfiumWorkerImpl> impl = impl_of(worker);
     return impl->post(
         [impl, opener = std::move(opener), on_done = std::move(on_done)](bool cancelled) mutable {
@@ -160,6 +162,7 @@ const DocumentInfo& DocumentHandle::info() const {
 TaskHandle DocumentHandle::render_page(int page_index, const RenderOptions& options,
                                        Priority priority,
                                        std::function<void(Result<Bitmap>)> on_done) const {
+  assert(on_done && "render 콜백은 비어 있을 수 없다");
   if (!state_) {
     on_done(make_error(ErrorCode::kInvalidState, "empty document handle"));
     return TaskHandle{};

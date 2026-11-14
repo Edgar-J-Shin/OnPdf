@@ -8,17 +8,17 @@ namespace onpdf::app {
 
 namespace {
 
-void release_bitmap(void* info) { delete static_cast<std::shared_ptr<onpdf::Bitmap>*>(info); }
+void release_bitmap(void* info) { delete static_cast<onpdf::Bitmap*>(info); }
 
 }  // namespace
 
 QImage to_qimage(onpdf::Bitmap&& bitmap, qreal device_pixel_ratio) {
   if (bitmap.empty()) return QImage();
-  // QImage 의 cleanup 콜백은 void* 하나만 받으므로 shared_ptr 을 힙에 하나 두고 그 포인터를 넘긴다.
-  auto* owner = new std::shared_ptr<onpdf::Bitmap>(
-      std::make_shared<onpdf::Bitmap>(std::move(bitmap)));
-  onpdf::Bitmap& b = **owner;
-  QImage image(b.pixels.data(), b.width, b.height, b.stride, QImage::Format_ARGB32, release_bitmap,
+  // QImage 의 cleanup 콜백이 Bitmap 을 소유한다 (QImageData 가 마지막으로 사라질 때 한 번 호출).
+  // PDFium 출력은 불투명하므로 RGB32 로 두면 drawImage 가 블렌딩 없이 복사한다.
+  onpdf::Bitmap* owner = std::make_unique<onpdf::Bitmap>(std::move(bitmap)).release();
+  onpdf::Bitmap& b = *owner;
+  QImage image(b.pixels.data(), b.width, b.height, b.stride, QImage::Format_RGB32, release_bitmap,
                owner);
   image.setDevicePixelRatio(device_pixel_ratio);
   return image;

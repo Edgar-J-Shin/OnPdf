@@ -3,7 +3,7 @@
 // 워커 스레드에 사는 PdfiumDocument 를 가리키는 스레드 안전 핸들.
 // UI 는 이 헤더만 보고 PDFium 헤더나 PdfiumDocument 를 보지 않는다.
 //
-//  - open()/open_from_memory() 는 워커에 열기를 맡기고 future 로 핸들을 돌려준다.
+//  - open()/open_from_memory() 는 워커에 열기를 맡긴다. 콜백 오버로드(UI 용)와 future 오버로드(CLI·테스트)가 있다.
 //  - info() 는 열 때 찍은 스냅샷이라 잠금 없이 어디서나 읽을 수 있다. (M2 편집 시 갱신 경로 추가)
 //  - render_page() 콜백은 정확히 한 번 호출된다. 보통은 워커 스레드에서 호출되지만,
 //    빈 핸들이거나 워커가 이미 멈춘 경우에는 호출 스레드에서 즉시 호출된다.

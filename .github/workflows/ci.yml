@@ -13,9 +13,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: windows-x64, os: windows-latest, pdfium: win-x64 }
-          - { name: macos-arm64, os: macos-latest,   pdfium: mac-arm64 }
-          - { name: linux-x64,   os: ubuntu-latest,  pdfium: linux-x64 }
+          # 주 타깃 Windows 는 Qt 앱까지 빌드·테스트한다 (dev-app). 나머지는 core 만.
+          - { name: windows-x64, os: windows-latest, pdfium: win-x64,   preset: dev-app, qt: true }
+          - { name: macos-arm64, os: macos-latest,   pdfium: mac-arm64, preset: dev,     qt: false }
+          - { name: linux-x64,   os: ubuntu-latest,  pdfium: linux-x64, preset: dev,     qt: false }
 
     steps:
       - uses: actions/checkout@v4
@@ -28,6 +29,13 @@ jobs:
         with:
           arch: x64
 
+      - name: Install Qt
+        if: matrix.qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.*"
+          cache: true
+
       - name: Set up vcpkg
         uses: lukka/run-vcpkg@v11
         with:
@@ -37,13 +45,17 @@ jobs:
         run: python3 third_party/fetch_pdfium.py --platform ${{ matrix.pdfium }}
 
       - name: Configure
-        run: cmake --preset dev
+        run: cmake --preset ${{ matrix.preset }}
+        env:
+          QT_ROOT: ${{ env.QT_ROOT_DIR }}
 
       - name: Build
-        run: cmake --build --preset dev
+        run: cmake --build --preset ${{ matrix.preset }}
 
       - name: Test
-        run: ctest --preset dev
+        run: ctest --preset ${{ matrix.preset }}
+        env:
+          QT_QPA_PLATFORM: offscreen
 
   app:
     name: app-linux (Qt)

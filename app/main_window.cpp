@@ -32,7 +32,7 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
 
   status_label_ = new QLabel(this);
   statusBar()->addWidget(status_label_, 1);
-  set_status(tr("준비"));
+  set_document_status(tr("문서 없음"));
 
   build_menus();
 
@@ -53,21 +53,35 @@ void MainWindow::build_menus() {
                                   &MainWindow::on_open_action);
   open->setStatusTip(tr("PDF 파일을 연다"));
   file->addSeparator();
-  file->addAction(tr("종료(&Q)"), QKeySequence::Quit, qApp, &QApplication::quit);
+  // QKeySequence::Quit 은 Windows 에서 비어 있으므로 Ctrl+Q 를 명시한다
+  file->addAction(tr("종료(&Q)"), QKeySequence(Qt::CTRL | Qt::Key_Q), qApp, &QApplication::quit);
 
   QMenu* help = menuBar()->addMenu(tr("도움말(&H)"));
   help->addAction(tr("OnPdf 정보(&A)"), this, [this] {
     QMessageBox::about(this, tr("OnPdf 정보"),
-                       tr("OnPdf 0.0.1 — PDFium 기반 PDF 뷰어·편집기\nApache License 2.0"));
+                       tr("OnPdf %1 — PDFium 기반 PDF 뷰어·편집기\nApache License 2.0")
+                           .arg(QApplication::applicationVersion()));
   });
 }
 
 void MainWindow::open_file(const QString& path) {
-  set_status(tr("여는 중: %1").arg(QFileInfo(path).fileName()));
+  show_transient(tr("여는 중: %1").arg(QFileInfo(path).fileName()));
   session_.open(path);
 }
 
-void MainWindow::screenshot_after_render(const QString& png_path) { screenshot_path_ = png_path; }
+void MainWindow::screenshot_after_render(const QString& png_path) {
+  screenshot_path_ = png_path;
+  // 어떤 경로로든 렌더가 끝나지 않으면 CI 가 멈추지 않도록 워치독을 둔다
+  QTimer::singleShot(15000, this, [this] {
+    if (!screenshot_path_.isEmpty()) fail_screenshot(QStringLiteral("timeout"));
+  });
+}
+
+void MainWindow::fail_screenshot(const QString& reason) {
+  qWarning("screenshot failed: %s", qPrintable(reason));
+  screenshot_path_.clear();
+  QApplication::exit(1);
+}
 
 void MainWindow::on_open_action() {
   const QString path = QFileDialog::getOpenFileName(this, tr("PDF 열기"), QString(),
@@ -78,7 +92,7 @@ void MainWindow::on_open_action() {
 void MainWindow::on_opened(const QString& path, int page_count) {
   current_page_ = 0;
   setWindowTitle(QStringLiteral("OnPdf — %1").arg(QFileInfo(path).fileName()));
-  set_status(tr("%1 · %2 쪽").arg(QFileInfo(path).fileName()).arg(page_count));
+  set_document_status(tr("%1 · %2 쪽").arg(QFileInfo(path).fileName()).arg(page_count));
   if (page_count <= 0) {
     page_view_->clear(tr("쪽이 없는 문서입니다"));
     return;
@@ -87,19 +101,27 @@ void MainWindow::on_opened(const QString& path, int page_count) {
 }
 
 void MainWindow::on_password_required(const QString& path) {
+  if (!screenshot_path_.isEmpty()) {
+    fail_screenshot(QStringLiteral("password required"));
+    return;
+  }
   bool ok = false;
   const QString password = QInputDialog::getText(
       this, tr("암호 필요"), tr("%1 의 암호를 입력하세요:").arg(QFileInfo(path).fileName()),
       QLineEdit::Password, QString(), &ok);
   if (!ok) {
-    set_status(tr("열기 취소"));
+    show_transient(tr("열기 취소"));
     return;
   }
   session_.open(path, password);
 }
 
 void MainWindow::on_open_failed(const QString& path, const QString& message) {
-  set_status(tr("열기 실패"));
+  if (!screenshot_path_.isEmpty()) {
+    fail_screenshot(message);
+    return;
+  }
+  show_transient(tr("열기 실패: %1").arg(QFileInfo(path).fileName()));
   QMessageBox::warning(this, tr("열 수 없는 파일입니다"),
                        tr("%1\n\n%2").arg(QFileInfo(path).fileName(), message));
 }
@@ -107,9 +129,11 @@ void MainWindow::on_open_failed(const QString& path, const QString& message) {
 void MainWindow::on_page_rendered(int page_index, const QImage& image, int elapsed_ms) {
   if (page_index != current_page_ || !session_.has_document()) return;
   const auto& info = session_.info();
+  // 세션이 세대 불일치 결과를 걸러 주지만, 문서가 바뀐 직후를 대비해 범위를 한 번 더 확인한다
+  if (page_index < 0 || static_cast<std::size_t>(page_index) >= info.page_sizes.size()) return;
   const engine::PageSize size = info.page_sizes[static_cast<std::size_t>(page_index)];
   page_view_->set_page(image, size);
-  set_status(tr("%1 · %2 / %3 쪽 · %4×%5 pt · %6 ms")
+  set_document_status(tr("%1 · %2 / %3 쪽 · %4×%5 pt · %6 ms")
                  .arg(QFileInfo(session_.path()).fileName())
                  .arg(page_index + 1)
                  .arg(info.page_count)
@@ -122,15 +146,21 @@ void MainWindow::on_page_rendered(int page_index, const QImage& image, int elaps
     screenshot_path_.clear();
     // 이번 paint 가 끝난 뒤 캡처
     QTimer::singleShot(0, this, [this, path] {
-      const bool ok = grab().save(path);
-      if (!ok) qWarning("screenshot failed: %s", qPrintable(path));
-      QApplication::exit(ok ? 0 : 1);
+      if (!grab().save(path)) {
+        fail_screenshot(path);
+        return;
+      }
+      QApplication::exit(0);
     });
   }
 }
 
 void MainWindow::on_render_failed(int page_index, const QString& message) {
-  set_status(tr("%1 쪽 렌더 실패: %2").arg(page_index + 1).arg(message));
+  if (!screenshot_path_.isEmpty()) {
+    fail_screenshot(message);
+    return;
+  }
+  show_transient(tr("%1 쪽 렌더 실패: %2").arg(page_index + 1).arg(message));
 }
 
 void MainWindow::request_render() {
@@ -143,7 +173,9 @@ void MainWindow::request_render() {
   session_.render_page(current_page_, scale, dpr);
 }
 
-void MainWindow::set_status(const QString& text) { status_label_->setText(text); }
+void MainWindow::set_document_status(const QString& text) { status_label_->setText(text); }
+
+void MainWindow::show_transient(const QString& text) { statusBar()->showMessage(text, 5000); }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
   if (event->mimeData()->hasUrls()) event->acceptProposedAction();
@@ -154,7 +186,7 @@ void MainWindow::dropEvent(QDropEvent* event) {
   if (urls.isEmpty()) return;
   const QString path = urls.first().toLocalFile();
   if (!path.toLower().endsWith(QStringLiteral(".pdf"))) {
-    set_status(tr("PDF 파일만 열 수 있습니다"));
+    show_transient(tr("PDF 파일만 열 수 있습니다"));
     return;
   }
   event->acceptProposedAction();

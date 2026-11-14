@@ -21,12 +21,20 @@ class UiDispatcher : public QObject {
   void post(std::function<void()> fn);
 
   // receiver 가 살아 있을 때만 fn(receiver) 를 메인 스레드에서 실행한다.
+  // 어느 스레드에서든 호출 가능: QPointer 는 값으로만 복사·소멸되며(원자적 weakref) 역참조는
+  // 메인 스레드의 posted 람다 안에서만 일어난다.
+  template <class R, class F>
+  void post_to(QPointer<R> receiver, F fn) {
+    post([receiver = std::move(receiver), fn = std::move(fn)]() mutable {
+      if (receiver) fn(receiver.data());
+    });
+  }
+
+  // 메인 스레드 전용. raw 포인터로 QPointer 를 만드는 과정이 대상 QObject 를 건드리므로
+  // 워커 스레드에서는 쓰지 않는다 — 워커에서는 미리 만들어 둔 QPointer 를 넘긴다.
   template <class R, class F>
   void post_to(R* receiver, F fn) {
-    QPointer<R> guard(receiver);
-    post([guard, fn = std::move(fn)]() mutable {
-      if (guard) fn(guard.data());
-    });
+    post_to(QPointer<R>(receiver), std::move(fn));
   }
 };
 

@@ -16,23 +16,26 @@
 int main(int argc, char** argv) {
   QApplication app(argc, argv);
   QApplication::setApplicationName(QStringLiteral("OnPdf"));
-  QApplication::setApplicationVersion(QStringLiteral("0.0.1"));
+  QApplication::setApplicationVersion(QStringLiteral(ONPDF_VERSION));
+
+  // --help / --version 은 여기서 종료하므로 워커보다 먼저 처리한다
+  QCommandLineParser parser;
+  parser.addHelpOption();
+  parser.addVersionOption();
+  parser.addPositionalArgument(QStringLiteral("file"),
+                               QCoreApplication::translate("main", "열 PDF 파일"));
+  QCommandLineOption screenshot(
+      QStringLiteral("screenshot"),
+      QCoreApplication::translate("main", "첫 쪽을 그린 뒤 창을 PNG 로 저장하고 종료"),
+      QStringLiteral("png"));
+  parser.addOption(screenshot);
+  parser.process(app);
 
   onpdf::app::UiDispatcher dispatcher;
 
   onpdf::engine::PdfiumWorker::Options options;
   options.use_system_fonts = true;
   onpdf::engine::PdfiumWorker worker(options);
-
-  QCommandLineParser parser;
-  parser.addHelpOption();
-  parser.addVersionOption();
-  parser.addPositionalArgument(QStringLiteral("file"), QStringLiteral("열 PDF 파일"));
-  QCommandLineOption screenshot(QStringLiteral("screenshot"),
-                                QStringLiteral("첫 쪽을 그린 뒤 창을 PNG 로 저장하고 종료"),
-                                QStringLiteral("png"));
-  parser.addOption(screenshot);
-  parser.process(app);
 
   onpdf::app::MainWindow window(worker, dispatcher);
   if (parser.isSet(screenshot)) window.screenshot_after_render(parser.value(screenshot));

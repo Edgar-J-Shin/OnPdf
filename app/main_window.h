@@ -34,7 +34,9 @@ class MainWindow : public QMainWindow {
   void on_page_rendered(int page_index, const QImage& image, int elapsed_ms);
   void on_render_failed(int page_index, const QString& message);
   void request_render();
-  void set_status(const QString& text);
+  void set_document_status(const QString& text);   // 문서 정보 (지속)
+  void show_transient(const QString& text);        // 진행·오류 안내 (몇 초 뒤 사라짐)
+  void fail_screenshot(const QString& reason);     // --screenshot 모드에서 실패 시 종료
 
   DocumentSession session_;
   PageView* page_view_ = nullptr;

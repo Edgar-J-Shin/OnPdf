@@ -25,7 +25,7 @@ TEST(QtImage, WrapsBgraWithoutCopy) {
   const uchar* original = b.pixels.data();
   QImage image = to_qimage(std::move(b), 2.0);
   ASSERT_FALSE(image.isNull());
-  EXPECT_EQ(image.format(), QImage::Format_ARGB32);
+  EXPECT_EQ(image.format(), QImage::Format_RGB32);
   EXPECT_EQ(image.width(), 3);
   EXPECT_EQ(image.height(), 2);
   EXPECT_EQ(image.constBits(), original);  // 복사 없음
