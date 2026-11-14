@@ -4,6 +4,8 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QClipboard>
+#include <QDesktopServices>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFileDialog>
@@ -37,9 +39,11 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   page_spin_->setKeyboardTracking(false);
   page_total_label_ = new QLabel(this);
   status_label_ = new QLabel(this);
+  link_label_ = new QLabel(this);
   statusBar()->addWidget(page_spin_);
   statusBar()->addWidget(page_total_label_);
   statusBar()->addWidget(status_label_, 1);
+  statusBar()->addPermanentWidget(link_label_);
   set_document_status(tr("문서 없음"));
 
   build_menus();
@@ -50,6 +54,9 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(view_, &DocumentView::current_page_changed, this, &MainWindow::on_current_page_changed);
   connect(view_, &DocumentView::zoom_changed, this, &MainWindow::on_zoom_changed);
   connect(view_, &DocumentView::first_view_rendered, this, &MainWindow::on_first_view_rendered);
+  connect(view_, &DocumentView::selection_changed, this, [this](bool has) { copy_action_->setEnabled(has); });
+  connect(view_, &DocumentView::link_activated, this, &MainWindow::on_link_activated);
+  connect(view_, &DocumentView::link_hovered, this, &MainWindow::on_link_hovered);
   connect(page_spin_, &QSpinBox::valueChanged, this, [this](int value) {
     if (view_->has_document() && view_->current_page() != value - 1) view_->go_to_page(value - 1);
   });
@@ -64,6 +71,12 @@ void MainWindow::build_menus() {
   file->addSeparator();
   // QKeySequence::Quit 은 Windows 에서 비어 있으므로 Ctrl+Q 를 명시한다
   file->addAction(tr("종료(&Q)"), QKeySequence(Qt::CTRL | Qt::Key_Q), qApp, &QApplication::quit);
+
+  QMenu* edit = menuBar()->addMenu(tr("편집(&E)"));
+  copy_action_ = edit->addAction(tr("복사(&C)"), QKeySequence::Copy, this, &MainWindow::on_copy);
+  copy_action_->setEnabled(false);
+  select_all_action_ = edit->addAction(tr("현재 쪽 전체 선택(&A)"), QKeySequence::SelectAll, this,
+                                       &MainWindow::on_select_all);
 
   QMenu* view = menuBar()->addMenu(tr("보기(&V)"));
   view->addAction(tr("너비 맞춤(&W)"), QKeySequence(Qt::CTRL | Qt::Key_1), this,
@@ -169,6 +182,45 @@ void MainWindow::on_first_view_rendered() {
     }
     QApplication::exit(0);
   });
+}
+
+void MainWindow::on_copy() {
+  bool truncated = false;
+  const QString text = view_->selected_text(&truncated);
+  if (text.isEmpty()) return;
+  QGuiApplication::clipboard()->setText(text);
+  const auto count = text.toUcs4().size();
+  show_transient(truncated ? tr("%1자 복사됨 (선택이 너무 길어 일부만 복사)").arg(count)
+                           : tr("%1자 복사됨").arg(count));
+}
+
+void MainWindow::on_select_all() { view_->select_all_on_current_page(); }
+
+void MainWindow::on_link_activated(const onpdf::view::Link& link) {
+  if (link.kind == onpdf::view::LinkKind::kPage) {
+    if (link.location) {
+      view_->scroll_to_page_point(link.page, *link.location);
+    } else {
+      view_->go_to_page(link.page);
+    }
+    return;
+  }
+  const QString uri = QString::fromUtf8(link.uri.data(), static_cast<qsizetype>(link.uri.size()));
+  const QUrl url(uri);
+  const bool well_formed = url.isValid() && (url.scheme() == QStringLiteral("mailto") ? !url.path().isEmpty()
+                                                                                       : !url.host().isEmpty());
+  if (!onpdf::view::is_safe_uri(link.uri) || !well_formed) {
+    show_transient(tr("차단된 링크: %1").arg(uri.left(80)));
+    return;
+  }
+  const QString shown = uri.size() > 200 ? uri.left(200) + QStringLiteral("…") : uri;
+  const auto answer = QMessageBox::question(this, tr("외부 링크 열기"), tr("외부 링크를 엽니다:\n%1").arg(shown),
+                                            QMessageBox::Open | QMessageBox::Cancel, QMessageBox::Cancel);
+  if (answer == QMessageBox::Open && !QDesktopServices::openUrl(url)) show_transient(tr("링크를 열지 못했습니다"));
+}
+
+void MainWindow::on_link_hovered(const QString& target) {
+  link_label_->setText(target.isEmpty() ? QString() : tr("링크: %1").arg(target.left(80)));
 }
 
 void MainWindow::on_current_page_changed(int page) {

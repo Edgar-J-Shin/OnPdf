@@ -404,6 +404,7 @@ def make_annotations() -> bytes:
     pages = w.reserve()
     helv = g.simple_font(w)
     page_num = w.reserve()
+    page2_num = w.reserve()
     # 하이라이트는 Multiply 블렌드로 글자가 비치게 한다 (Acrobat 과 같은 방식)
     gs = w.add(b"<< /Type /ExtGState /BM /Multiply >>")
     hl_ap = w.stream(b"/Type /XObject /Subtype /Form /BBox [70 696 330 722] /Resources << /ExtGState << /GS0 %d 0 R >> >>" % gs,
@@ -418,15 +419,25 @@ def make_annotations() -> bytes:
               b"/F 28 /P %d 0 R /T " % page_num + text_string("작성자") + b" /Contents " + text_string("메모 주석입니다") + b" >>"),
         w.add(b"<< /Type /Annot /Subtype /Link /Rect [72 400 300 420] /Border [0 0 1] /C [0 0 1] "
               b"/A << /S /URI /URI (https://github.com/Edgar-J-Shin/OnPdf) >> /F 4 /P %d 0 R >>" % page_num),
+        # 내부 링크: 2쪽의 (72, 700) 으로 (/XYZ 위치 포함)
+        w.add(b"<< /Type /Annot /Subtype /Link /Rect [72 360 300 380] /Border [0 0 1] /C [0 0.5 0] "
+              b"/Dest [%d 0 R /XYZ 72 700 0] /F 4 /P %d 0 R >>" % (page2_num, page_num)),
+        # 차단되어야 하는 스킴 (보안 테스트)
+        w.add(b"<< /Type /Annot /Subtype /Link /Rect [72 320 300 340] /Border [0 0 0] "
+              b"/A << /S /URI /URI (javascript:alert(1)) >> /F 4 /P %d 0 R >>" % page_num),
     ]
     c = w.stream(b"", content(
         _label(72, 740, 18, "Annotations test"),
         _label(72, 702, 14, "This sentence is highlighted in yellow."),
         _label(72, 460, 11, "Square annotation above, text (note) annotation to the right."),
         "0 0 1 rg " + _label(72, 406, 12, "Link annotation: github.com/Edgar-J-Shin/OnPdf"),
+        "0 0.5 0 rg " + _label(72, 366, 12, "Internal link: go to page 2"),
+        "0.5 g " + _label(72, 326, 12, "Blocked link (javascript: scheme)"),
     ))
     g.page(w, pages, g.LETTER, c, _helv_resources(helv), annots=annots, num=page_num)
-    g.pages_tree(w, pages, [page_num])
+    c2 = w.stream(b"", content(_label(72, 700, 18, "Link target: page 2"), _label(72, 670, 12, "The internal link lands here.")))
+    g.page(w, pages, g.LETTER, c2, _helv_resources(helv), num=page2_num)
+    g.pages_tree(w, pages, [page_num, page2_num])
     root = g.catalog(w, pages)
     info = g.info_dict(w, "Annotations")
     return w.write(root=root, info=info, file_id=g.file_id_for("annotations.pdf"))
@@ -457,6 +468,29 @@ def make_unicode_metadata() -> bytes:
                  + b" /Subject " + text_string("주제: 유니코드") + b" /Keywords " + text_string("한글, PDF, 테스트")
                  + b" /Producer (onpdf pdfgen) /CreationDate (D:20260101000000Z) >>")
     return w.write(root=root, info=info, file_id=g.file_id_for("unicode-metadata.pdf"))
+
+
+def make_text_layout() -> bytes:
+    """줄 묶음 휴리스틱 회귀용: 회전 텍스트 매트릭스, `1 Tf` + Tm 스케일, 위첨자, 2단 배치."""
+    w = PdfWriter()
+    pages = w.reserve()
+    helv = g.simple_font(w)
+    c = w.stream(b"", content(
+        "BT /F1 12 Tf 1 0 0 1 72 700 Tm (Normal line of text) Tj ET",
+        # 90도 회전 텍스트 매트릭스: 글이 위로 흐른다 (세로 축 라벨)
+        "BT /F1 12 Tf 0 1 -1 0 520 300 Tm (Rotated text matrix) Tj ET",
+        # Cairo/Skia 식: 1 Tf + Tm 스케일 12, 위첨자는 8 스케일로 4pt 올림
+        "BT /F1 1 Tf 12 0 0 12 72 600 Tm (E=mc) Tj ET",
+        "BT /F1 1 Tf 8 0 0 8 103 604 Tm (2) Tj ET",
+        # 같은 기준선의 두 단 (x 가 크게 뒤로 감 → 새 줄이 아니라 같은 줄로 취급되면 안 됨: 두 번째 Tj 가 앞 x 로 돌아감)
+        "BT /F1 12 Tf 1 0 0 1 300 500 Tm (Right column) Tj ET",
+        "BT /F1 12 Tf 1 0 0 1 72 500 Tm (Left column) Tj ET",
+    ))
+    p = g.page(w, pages, g.LETTER, c, _helv_resources(helv))
+    g.pages_tree(w, pages, [p])
+    root = g.catalog(w, pages)
+    info = g.info_dict(w, "Text layout heuristics")
+    return w.write(root=root, info=info, file_id=g.file_id_for("text-layout.pdf"))
 
 
 def make_transparency() -> bytes:

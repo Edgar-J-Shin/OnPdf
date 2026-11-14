@@ -48,6 +48,7 @@ ctest --preset dev                      # unit + rendering regression
 ./build/dev/bin/onpdf_cli info in.pdf
 ./build/dev/bin/onpdf_cli render in.pdf out.png --page 0 --scale 2
 ./build/dev/bin/onpdf_cli tiles in.pdf out-dir --page 0 --scale 2   # 타일 PNG + stitched.png + full.png
+./build/dev/bin/onpdf_cli text in.pdf --page 0                       # 글자·줄·링크 수 + 추출 텍스트
 ONPDF_UPDATE_REFERENCES=1 ./build/dev/bin/onpdf_render_tests   # 렌더링 기준 이미지 갱신
 cmake --preset dev-app && cmake --build --preset dev-app        # Qt 앱 포함 빌드
 ./build/dev-app/bin/onpdf_app testdata/simple.pdf              # 앱 실행
@@ -66,11 +67,12 @@ ctest --preset dev-app                                         # app 테스트(o
 app/          Qt UI (Qt 의존). onpdf_app_lib(UiDispatcher·DocumentSession·qt_image·DocumentTileSource·DocumentView) + onpdf_app(MainWindow·main)
 edit/         Command, 실행 취소 스택, 선택 모델, 텍스트 블록 모델, 폰트 매니저
 core/         Document, Page, 렌더 캐시(타일 LRU), 텍스트 인덱스       (Qt 의존 금지)
-core/engine/  PdfiumLibrary(init RAII) · PdfiumDocument(열기·크기·렌더) · pdfium_handles(ScopedFPDF* 별칭)
+core/engine/  PdfiumLibrary(init RAII) · PdfiumDocument(열기·크기·렌더·load_text) · TextPage(FPDFText/FPDFLink 추출, 좌표 변환) · pdfium_handles
               PdfiumWorker(전용 스레드 + High/Normal/Low 큐 + 취소) · DocumentHandle(워커 쪽 문서의 스레드 안전 핸들), QpdfTools(M2)
 core/image/   png_io (stb 기반 PNG 읽기/쓰기, BGRA↔RGBA)
 core/view/    PageLayout(세로 연속 레이아웃·좌표 변환) · tile.h(TileKey, 512px, 1/64 배율 양자화) · TileCache(바이트 상한 LRU)
-              TileScheduler(뷰포트→필요 타일, High/Low 요청·취소·실패 집합) · TileSource(SyncTileSource=CLI·테스트)   (메인 스레드 전용, Qt 금지)
+              TileScheduler(뷰포트→필요 타일, High/Low 요청·취소·실패 집합) · TileSource(SyncTileSource=CLI·테스트)
+              PageTextIndex(쪽 텍스트 불변 스냅샷: 글자·줄·링크, hit-test, 선택 사각형 — 생성은 워커, 조회는 메인) · TextSelection(다중 쪽 선택)   (Qt 금지)
 core/platform/ path.h (UTF-8 ↔ std::filesystem::path)
 cli/          렌더·병합·검증용 명령줄 도구                            (core/edit 만 사용)
 tests/        단위 테스트, 렌더링 회귀, 왕복 테스트
@@ -97,7 +99,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 3. **모든 문서 변경은 Command 로.** `execute()` / `undo()` 를 가진 명령 객체 외의 경로로 문서를 바꾸지 않는다.
 4. **핸들은 RAII.** `FPDF_DOCUMENT`, `FPDF_PAGE`, `FPDF_TEXTPAGE`, `FPDF_BITMAP` 등은 `std::unique_ptr` + 커스텀 삭제자로만 보유한다. raw 핸들을 반환하는 public API 금지.
 5. **원본 파일은 건드리지 않는다.** 저장은 임시 파일 → 다시 열어 검증(페이지 수·렌더링·qpdf check) → 교체. 서명된 문서는 증분 저장.
-6. **JavaScript 실행은 기본 비활성화.** 악성 PDF 대응.
+6. **JavaScript 실행은 기본 비활성화.** 악성 PDF 대응. 외부 링크는 `view::is_safe_uri`(http/https/mailto) 를 통과한 것만 사용자 확인 후 연다. `file:`·`javascript:`·`data:` 와 Launch/RemoteGoTo 액션은 무시한다.
 
 ### 렌더링 (구현: core/view + app/DocumentView)
 - 쪽을 512×512 타일로 나눠 `PdfiumDocument::render_region`(`FPDF_RenderPageBitmapWithMatrix`, 회전 0 기준 — `page_size` 가 /Rotate 반영) 으로 그리고 `TileCache`(기본 256MB LRU) 에 보관
@@ -110,7 +112,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 1. **Safety First**: 모든 PDFium 반환값(nullptr, FALSE, 음수)을 검사한다. 파일 I/O 와 외부 라이브러리 호출은 `std::expected` 또는 명시적 에러 타입으로 전파하고, 예외는 경계(UI·CLI)에서만 잡는다.
 2. **Ownership 명확히**: raw `new`/`delete` 금지. 소유권은 `unique_ptr`, 공유는 꼭 필요할 때만 `shared_ptr`, 비소유 참조는 참조 또는 raw pointer(nullable 명시).
 3. **스레드**: PDFium 워커 외 스레드에서 PDFium 객체 접근 금지. 공유 상태는 `std::mutex` 또는 메시지 전달로 보호. 데이터 레이스는 Critical 이슈로 취급.
-4. **텍스트는 UTF-8**: 내부 문자열은 UTF-8 `std::string`. PDFium 의 UTF-16LE 와는 core/engine 경계에서만 변환. 한글(CID 폰트) 경로는 항상 테스트를 함께 만든다.
+4. **텍스트는 UTF-8**: 내부 문자열은 UTF-8 `std::string`. PDFium 의 UTF-16LE 와는 core/engine 경계에서만 변환. 한글(CID 폰트) 경로는 항상 테스트를 함께 만든다. 글자 좌표는 PDFium 사용자 좌표(좌하단, 회전 전)가 아니라 `TextPage` 가 `FPDF_PageToDevice`(×1000 트릭)로 바꾼 "쪽 포인트"(좌상단, 회전 반영)를 쓴다.
 5. **플랫폼 분기 최소화**: `#ifdef _WIN32` 는 `core/platform/`, `app/`, `cli/main.cpp`(wmain) 에만. 경로는 `std::filesystem::path` 이되 **UTF-8 문자열에서 만들 때는 반드시 `onpdf::path_from_utf8`**(`core/platform/path.h`) 를 쓴다 — Windows 는 `path(std::string)` 을 코드 페이지로 해석해 한글 경로가 깨진다. 오류 메시지 등 역변환은 `path_to_utf8`.
 6. **스타일**: `.clang-format` 준수(생기면). 클래스 `PascalCase`, 함수·변수 `snake_case`, 멤버 `name_`, 상수 `kName`. 헤더는 `#pragma once`. 주석·문서는 한국어, 식별자·커밋 메시지 제목은 영어.
 7. **i18n**: 사용자 노출 문자열은 `tr()` 로 감싸고 `app/i18n/` 에 ko/en 둘 다 추가. 하드코딩 금지.

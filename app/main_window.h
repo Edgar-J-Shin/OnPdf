@@ -2,6 +2,7 @@
 
 #include "document_session.h"
 #include "onpdf/core/engine/pdfium_worker.h"
+#include "onpdf/core/view/text_index.h"
 
 #include <QMainWindow>
 #include <QString>
@@ -33,6 +34,10 @@ class MainWindow : public QMainWindow {
   void on_password_required(const QString& path);
   void on_open_failed(const QString& path, const QString& message);
   void on_first_view_rendered();
+  void on_copy();
+  void on_select_all();
+  void on_link_activated(const onpdf::view::Link& link);
+  void on_link_hovered(const QString& target);
   void on_current_page_changed(int page);
   void on_zoom_changed(double zoom);
   void refresh_status();
@@ -46,6 +51,9 @@ class MainWindow : public QMainWindow {
   QSpinBox* page_spin_ = nullptr;
   QLabel* page_total_label_ = nullptr;
   QLabel* status_label_ = nullptr;
+  QLabel* link_label_ = nullptr;
+  QAction* copy_action_ = nullptr;
+  QAction* select_all_action_ = nullptr;
   QString screenshot_path_;
 };
 

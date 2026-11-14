@@ -19,10 +19,11 @@
 | `mixed-sizes.pdf` | ok |  | 7 | gen | Apache-2.0 | A4/Letter/A5/명함, /Rotate 90·270 (p5 렌더 비교) |
 | `xref-stream.pdf` | ok |  | 2 | gen | Apache-2.0 | PDF 1.5 xref 스트림 + 객체 스트림 |
 | `incremental-update.pdf` | ok |  | 3 | gen | Apache-2.0 | 증분 갱신으로 3쪽 추가 (/Prev) |
-| `annotations.pdf` | ok |  | 1 | gen | Apache-2.0 | Highlight(AP, BM Multiply)·Square·Text(PDFium 생성 AP)·Link 주석 |
+| `annotations.pdf` | ok |  | 2 | gen | Apache-2.0 | Highlight(AP, BM Multiply)·Square·Text(PDFium 생성 AP)·Link 3종(URI, 내부 GoTo, 차단 스킴) |
 | `empty-page.pdf` | ok |  | 1 | gen | Apache-2.0 | 내용 없는 1쪽 |
 | `unicode-metadata.pdf` | ok |  | 1 | gen | Apache-2.0 | Info 한글 제목·작성자(UTF-16BE) |
 | `transparency.pdf` | ok |  | 1 | gen | Apache-2.0 | ExtGState ca/CA 0.5 겹친 원 |
+| `text-layout.pdf` | ok |  | 1 | gen | Apache-2.0 | 줄 묶음 휴리스틱: 회전 Tm, 1 Tf+Tm 스케일, 위첨자, 2단 |
 | `truncated.pdf` | invalid |  | 0 | gen | Apache-2.0 | bookmarks.pdf 뒤 40% 절단(쪽 트리 소실) → 복구 불가, 크래시 없이 invalid |
 | `bad-xref.pdf` | ok |  | 2 | gen | Apache-2.0 | xref 오프셋 전부 오류 → 복구 파서 |
 | `garbage-header.pdf` | ok |  | 2 | gen | Apache-2.0 | %PDF 앞 1KB 쓰레기 → 헤더 탐색 |

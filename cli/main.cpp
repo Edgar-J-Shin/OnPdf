@@ -28,6 +28,7 @@ int usage() {
       "  onpdf_cli info   <in.pdf> [--password PW]\n"
       "  onpdf_cli render <in.pdf> <out.png> [--page N] [--scale S] [--rotate R] [--password PW]\n"
       "  onpdf_cli tiles  <in.pdf> <out-dir> [--page N] [--scale S] [--password PW]\n"
+      "  onpdf_cli text   <in.pdf> [--page N] [--password PW]   (chars/lines/links + extracted text)\n"
       "                   (writes 512px tile PNGs, stitched.png and full.png)\n",
       stderr);
   return 2;
@@ -180,6 +181,42 @@ int cmd_tiles(const Args& args) {
   return failed == 0 ? 0 : 1;
 }
 
+int cmd_text(const Args& args) {
+  if (args.positional.size() != 1) return usage();
+  auto doc = PdfiumDocument::open(onpdf::path_from_utf8(args.positional[0]), args.password);
+  if (!doc) return fail(doc.error());
+  auto index = doc->load_text(args.page);
+  if (!index) return fail(index.error());
+  std::printf("page %d: chars=%d lines=%zu links=%zu\n", args.page, index->char_count(), index->lines.size(),
+              index->links.size());
+  auto printable = [](const std::string& raw) {  // 터미널 이스케이프 주입 방지
+    std::string out;
+    for (char ch : raw) {
+      const auto c = static_cast<unsigned char>(ch);
+      if (c < 0x20 || c == 0x7F) {
+        char buf[8];
+        std::snprintf(buf, sizeof buf, "\\x%02X", c);
+        out += buf;
+      } else {
+        out += static_cast<char>(c);
+      }
+    }
+    return out;
+  };
+  for (const auto& link : index->links) {
+    if (link.kind == onpdf::view::LinkKind::kUri) {
+      std::printf("  link uri %s%s\n", printable(link.uri).c_str(),
+                  onpdf::view::is_safe_uri(link.uri) ? "" : " (blocked)");
+    } else {
+      std::printf("  link page %d%s\n", link.page, link.location ? " (with location)" : "");
+    }
+  }
+  const std::string text = index->all_text();
+  std::fwrite(text.data(), 1, text.size(), stdout);
+  if (!text.empty() && text.back() != '\n') std::printf("\n");
+  return 0;
+}
+
 }  // namespace
 
 int run(int argc, char** argv) {
@@ -190,6 +227,7 @@ int run(int argc, char** argv) {
   if (args.command == "info") return cmd_info(args);
   if (args.command == "render") return cmd_render(args);
   if (args.command == "tiles") return cmd_tiles(args);
+  if (args.command == "text") return cmd_text(args);
   return usage();
 }
 

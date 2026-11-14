@@ -37,6 +37,7 @@ GENERATED = {
     "empty-page.pdf": docs.make_empty_page,
     "unicode-metadata.pdf": docs.make_unicode_metadata,
     "transparency.pdf": docs.make_transparency,
+    "text-layout.pdf": docs.make_text_layout,
 }
 
 
