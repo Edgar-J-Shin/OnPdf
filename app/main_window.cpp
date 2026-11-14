@@ -185,10 +185,13 @@ void MainWindow::on_first_view_rendered() {
 }
 
 void MainWindow::on_copy() {
-  const QString text = view_->selected_text();
+  bool truncated = false;
+  const QString text = view_->selected_text(&truncated);
   if (text.isEmpty()) return;
   QGuiApplication::clipboard()->setText(text);
-  show_transient(tr("%1자 복사됨").arg(text.size()));
+  const auto count = text.toUcs4().size();
+  show_transient(truncated ? tr("%1자 복사됨 (선택이 너무 길어 일부만 복사)").arg(count)
+                           : tr("%1자 복사됨").arg(count));
 }
 
 void MainWindow::on_select_all() { view_->select_all_on_current_page(); }
@@ -202,14 +205,18 @@ void MainWindow::on_link_activated(const onpdf::view::Link& link) {
     }
     return;
   }
-  const QString uri = QString::fromStdString(link.uri);
-  if (!onpdf::view::is_safe_uri(link.uri)) {
+  const QString uri = QString::fromUtf8(link.uri.data(), static_cast<qsizetype>(link.uri.size()));
+  const QUrl url(uri);
+  const bool well_formed = url.isValid() && (url.scheme() == QStringLiteral("mailto") ? !url.path().isEmpty()
+                                                                                       : !url.host().isEmpty());
+  if (!onpdf::view::is_safe_uri(link.uri) || !well_formed) {
     show_transient(tr("차단된 링크: %1").arg(uri.left(80)));
     return;
   }
-  const auto answer = QMessageBox::question(this, tr("외부 링크 열기"), tr("외부 링크를 엽니다:\n%1").arg(uri),
+  const QString shown = uri.size() > 200 ? uri.left(200) + QStringLiteral("…") : uri;
+  const auto answer = QMessageBox::question(this, tr("외부 링크 열기"), tr("외부 링크를 엽니다:\n%1").arg(shown),
                                             QMessageBox::Open | QMessageBox::Cancel, QMessageBox::Cancel);
-  if (answer == QMessageBox::Open) QDesktopServices::openUrl(QUrl(uri));
+  if (answer == QMessageBox::Open && !QDesktopServices::openUrl(url)) show_transient(tr("링크를 열지 못했습니다"));
 }
 
 void MainWindow::on_link_hovered(const QString& target) {

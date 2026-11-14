@@ -136,6 +136,47 @@ TEST(TextPage, LinksFromAnnotationsPdf) {
   EXPECT_EQ(hit->kind, view::LinkKind::kPage);
 }
 
+// 줄 묶음 휴리스틱: 회전 텍스트 매트릭스·1 Tf+Tm 스케일·위첨자·2단 (리뷰 W1/W2 회귀)
+TEST(TextPage, LineHeuristicsHandleRotatedMatrixAndScaledFont) {
+  auto doc = PdfiumDocument::open(testdata("text-layout.pdf"));
+  ASSERT_TRUE(doc) << doc.error().message;
+  auto index = doc->load_text(0);
+  ASSERT_TRUE(index) << index.error().message;
+  std::vector<std::string> lines;
+  for (const auto& line : index->lines) lines.push_back(index->text(line.chars));
+  auto has = [&](const char* needle) {
+    return std::any_of(lines.begin(), lines.end(), [&](const std::string& l) { return l == needle; });
+  };
+  EXPECT_TRUE(has("Normal line of text")) << index->all_text();
+  EXPECT_TRUE(has("Rotated text matrix")) << index->all_text();   // 회전 Tm 이 한 줄
+  EXPECT_TRUE(has("E=mc2")) << index->all_text();                 // 1 Tf 스케일 + 위첨자가 한 줄
+  // 같은 기준선의 두 단은 PDFium 이 읽기 순서로 합치거나 나눌 수 있다 — 어느 쪽이든 한 줄에 두 단어가 모두 있거나 각각 한 줄
+  const bool columns_ok = has("Left column Right column") || has("Right column Left column") ||
+                          (has("Left column") && has("Right column"));
+  EXPECT_TRUE(columns_ok) << index->all_text();
+  EXPECT_LE(index->lines.size(), 5u) << index->all_text();
+  // 회전 줄은 세로로 길고, 그 줄에서 nearest_position 이 y 축으로 동작한다
+  const auto rotated = std::find_if(index->lines.begin(), index->lines.end(),
+                                    [&](const view::TextLine& l) { return index->text(l.chars) == "Rotated text matrix"; });
+  ASSERT_NE(rotated, index->lines.end());
+  EXPECT_GT(rotated->box.h, rotated->box.w);
+  const int first = rotated->chars.start;
+  const auto& c0 = index->chars[static_cast<std::size_t>(first)].box;
+  const auto& c1 = index->chars[static_cast<std::size_t>(first + 1)].box;
+  EXPECT_LT(c1.y, c0.y);  // 위로 흐르는 글: 둘째 글자가 더 위
+  // 첫 글자 중심에서 읽기 방향으로 살짝 지난 지점(둘째 글자 쪽) → 첫 글자 뒤 = first+1
+  const double c0_center = c0.y + c0.h / 2, c1_center = c1.y + c1.h / 2;
+  const int just_after_first = index->nearest_position({c0.x + c0.w / 2, c0_center - (c0_center - c1_center) * 0.3});
+  EXPECT_EQ(just_after_first, first + 1);
+  // 줄의 위쪽 끝(읽기 방향 끝) 너머 → 줄 끝, 아래쪽 너머 → 줄 시작
+  EXPECT_EQ(index->nearest_position({c0.x + c0.w / 2, rotated->box.y - 5}), rotated->chars.end);
+  EXPECT_EQ(index->nearest_position({c0.x + c0.w / 2, rotated->box.bottom() + 5}), rotated->chars.start);
+  // source_index 는 PDFium 인덱스 (줄바꿈 문자를 버리므로 단조 증가하되 건너뛸 수 있음)
+  for (std::size_t i = 1; i < index->chars.size(); ++i) {
+    EXPECT_GT(index->chars[i].source_index, index->chars[i - 1].source_index);
+  }
+}
+
 TEST(TextPage, BookmarksPdfHasNoLinkAnnotations) {
   auto doc = PdfiumDocument::open(testdata("bookmarks.pdf"));
   ASSERT_TRUE(doc);

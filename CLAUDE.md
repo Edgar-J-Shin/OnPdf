@@ -72,7 +72,7 @@ core/engine/  PdfiumLibrary(init RAII) · PdfiumDocument(열기·크기·렌더�
 core/image/   png_io (stb 기반 PNG 읽기/쓰기, BGRA↔RGBA)
 core/view/    PageLayout(세로 연속 레이아웃·좌표 변환) · tile.h(TileKey, 512px, 1/64 배율 양자화) · TileCache(바이트 상한 LRU)
               TileScheduler(뷰포트→필요 타일, High/Low 요청·취소·실패 집합) · TileSource(SyncTileSource=CLI·테스트)
-              PageTextIndex(쪽 텍스트 불변 스냅샷: 글자·줄·링크, hit-test, 선택 사각형) · TextSelection(다중 쪽 선택)   (메인 스레드 전용, Qt 금지)
+              PageTextIndex(쪽 텍스트 불변 스냅샷: 글자·줄·링크, hit-test, 선택 사각형 — 생성은 워커, 조회는 메인) · TextSelection(다중 쪽 선택)   (Qt 금지)
 core/platform/ path.h (UTF-8 ↔ std::filesystem::path)
 cli/          렌더·병합·검증용 명령줄 도구                            (core/edit 만 사용)
 tests/        단위 테스트, 렌더링 회귀, 왕복 테스트

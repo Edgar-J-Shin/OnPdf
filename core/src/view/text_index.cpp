@@ -25,6 +25,7 @@ bool is_word_separator(char32_t code) noexcept {
     case U',': case U'.': case U';': case U':': case U'!': case U'?':
     case U'(': case U')': case U'[': case U']': case U'{': case U'}':
     case U'"': case U'\'': case U'/': case U'\\': case U'<': case U'>':
+    case U'-': case 0x2014: case 0x2013: case 0x00B7: case 0x2022:
     case 0x201C: case 0x201D: case 0x2018: case 0x2019: case 0x3001: case 0x3002:
       return true;
     default:
@@ -92,19 +93,36 @@ int PageTextIndex::nearest_position(Point pt) const {
     }
   }
   if (best == nullptr) return 0;
-  // 2. 줄 안에서 가장 가까운 글자 경계
-  if (pt.x <= best->box.x) return best->chars.start;
-  if (pt.x >= best->box.right()) return best->chars.end;
+  // 2. 줄 안에서 가장 가까운 글자 경계. 세로로 긴 줄(회전 쪽·회전 Tm)은 y 축으로 판정하고,
+  //    읽기 방향(첫 글자 → 마지막 글자 중심이 증가/감소)에 따라 "앞/뒤" 를 뒤집는다
+  const bool vertical = best->box.h > best->box.w;
+  auto center_of = [&](const TextChar& c) { return vertical ? c.box.y + c.box.h / 2.0 : c.box.x + c.box.w / 2.0; };
+  const double along = vertical ? pt.y : pt.x;
+  const TextChar* first_boxed = nullptr;
+  const TextChar* last_boxed = nullptr;
+  for (int i = best->chars.start; i < best->chars.end; ++i) {
+    const auto& c = chars[static_cast<std::size_t>(i)];
+    if (c.box.empty()) continue;
+    if (first_boxed == nullptr) first_boxed = &c;
+    last_boxed = &c;
+  }
+  if (first_boxed == nullptr) return best->chars.start;
+  const bool forward = center_of(*last_boxed) >= center_of(*first_boxed);  // 좌표 증가 방향 = 읽기 방향
+  const double line_lo = vertical ? best->box.y : best->box.x;
+  const double line_hi = vertical ? best->box.bottom() : best->box.right();
+  if (along <= line_lo) return forward ? best->chars.start : best->chars.end;
+  if (along >= line_hi) return forward ? best->chars.end : best->chars.start;
   int pos = best->chars.end;
   double nearest = std::numeric_limits<double>::infinity();
   for (int i = best->chars.start; i < best->chars.end; ++i) {
     const auto& c = chars[static_cast<std::size_t>(i)];
     if (c.box.empty()) continue;
-    const double center = c.box.x + c.box.w / 2.0;
-    const double d = std::abs(pt.x - center);
+    const double center = center_of(c);
+    const double d = std::abs(along - center);
     if (d < nearest) {
       nearest = d;
-      pos = pt.x < center ? i : i + 1;
+      const bool before = forward ? along < center : along > center;
+      pos = before ? i : i + 1;
     }
   }
   return pos;

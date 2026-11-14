@@ -21,6 +21,7 @@ struct TextRange {
 
 struct TextChar {
   char32_t code = 0;    // 유니코드. 매핑 실패는 U+FFFD
+  int source_index = -1;  // PDFium 글자 인덱스 (줄바꿈 문자를 버리므로 어긋남 — 검색 결과 매핑용)
   Rect box;             // 생성 공백 등 상자가 없는 글자는 empty()
   double baseline_y = 0.0;
   float font_size = 0.0f;

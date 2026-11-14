@@ -189,9 +189,24 @@ int cmd_text(const Args& args) {
   if (!index) return fail(index.error());
   std::printf("page %d: chars=%d lines=%zu links=%zu\n", args.page, index->char_count(), index->lines.size(),
               index->links.size());
+  auto printable = [](const std::string& raw) {  // 터미널 이스케이프 주입 방지
+    std::string out;
+    for (char ch : raw) {
+      const auto c = static_cast<unsigned char>(ch);
+      if (c < 0x20 || c == 0x7F) {
+        char buf[8];
+        std::snprintf(buf, sizeof buf, "\\x%02X", c);
+        out += buf;
+      } else {
+        out += static_cast<char>(c);
+      }
+    }
+    return out;
+  };
   for (const auto& link : index->links) {
     if (link.kind == onpdf::view::LinkKind::kUri) {
-      std::printf("  link uri %s%s\n", link.uri.c_str(), onpdf::view::is_safe_uri(link.uri) ? "" : " (blocked)");
+      std::printf("  link uri %s%s\n", printable(link.uri).c_str(),
+                  onpdf::view::is_safe_uri(link.uri) ? "" : " (blocked)");
     } else {
       std::printf("  link page %d%s\n", link.page, link.location ? " (with location)" : "");
     }

@@ -470,6 +470,29 @@ def make_unicode_metadata() -> bytes:
     return w.write(root=root, info=info, file_id=g.file_id_for("unicode-metadata.pdf"))
 
 
+def make_text_layout() -> bytes:
+    """줄 묶음 휴리스틱 회귀용: 회전 텍스트 매트릭스, `1 Tf` + Tm 스케일, 위첨자, 2단 배치."""
+    w = PdfWriter()
+    pages = w.reserve()
+    helv = g.simple_font(w)
+    c = w.stream(b"", content(
+        "BT /F1 12 Tf 1 0 0 1 72 700 Tm (Normal line of text) Tj ET",
+        # 90도 회전 텍스트 매트릭스: 글이 위로 흐른다 (세로 축 라벨)
+        "BT /F1 12 Tf 0 1 -1 0 520 300 Tm (Rotated text matrix) Tj ET",
+        # Cairo/Skia 식: 1 Tf + Tm 스케일 12, 위첨자는 8 스케일로 4pt 올림
+        "BT /F1 1 Tf 12 0 0 12 72 600 Tm (E=mc) Tj ET",
+        "BT /F1 1 Tf 8 0 0 8 103 604 Tm (2) Tj ET",
+        # 같은 기준선의 두 단 (x 가 크게 뒤로 감 → 새 줄이 아니라 같은 줄로 취급되면 안 됨: 두 번째 Tj 가 앞 x 로 돌아감)
+        "BT /F1 12 Tf 1 0 0 1 300 500 Tm (Right column) Tj ET",
+        "BT /F1 12 Tf 1 0 0 1 72 500 Tm (Left column) Tj ET",
+    ))
+    p = g.page(w, pages, g.LETTER, c, _helv_resources(helv))
+    g.pages_tree(w, pages, [p])
+    root = g.catalog(w, pages)
+    info = g.info_dict(w, "Text layout heuristics")
+    return w.write(root=root, info=info, file_id=g.file_id_for("text-layout.pdf"))
+
+
 def make_transparency() -> bytes:
     w = PdfWriter()
     pages = w.reserve()

@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -62,6 +63,7 @@ void DocumentView::set_document(const engine::DocumentHandle& handle, UiDispatch
   handle_ = handle;
   dispatcher_ = &dispatcher;
   text_cache_.clear();
+  for (auto& [page, h] : text_requested_) h.cancel();
   text_requested_.clear();
   clear_selection();
   pressed_link_.reset();
@@ -89,6 +91,7 @@ void DocumentView::clear_document(const QString& placeholder) {
   ++doc_generation_;
   handle_ = engine::DocumentHandle{};
   text_cache_.clear();
+  for (auto& [page, h] : text_requested_) h.cancel();
   text_requested_.clear();
   clear_selection();
   pressed_link_.reset();
@@ -377,13 +380,22 @@ void DocumentView::request_text_indexes() {
   const int first = std::max(0, visible.front() - 1);
   const int last = std::min(layout_->page_count() - 1, visible.back() + 1);
   const int center = current_page();
+  // 유지 반경은 가시 범위보다 넓어야 저배율에서 해제·재요청이 반복되지 않는다
+  const int keep = std::max(kTextKeepPages, last - first + 1);
 
-  // 멀어진 쪽의 인덱스는 해제 (호버/누름 링크 포인터는 복사본이라 안전)
+  // 범위를 벗어난 대기 요청은 취소 (지나간 쪽을 전부 추출하지 않도록)
+  for (auto it = text_requested_.begin(); it != text_requested_.end();) {
+    if (it->first < first || it->first > last) {
+      it->second.cancel();
+      it = text_requested_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  // 멀어진 쪽의 인덱스는 해제. 선택에 포함된 쪽은 유지 (링크 포인터는 복사본이라 안전)
   for (auto it = text_cache_.begin(); it != text_cache_.end();) {
-    if (std::abs(it->first - center) > kTextKeepPages && !selection_.pages().empty() &&
-        selection_.range_on(it->first, it->second->char_count()).empty()) {
-      it = text_cache_.erase(it);
-    } else if (std::abs(it->first - center) > kTextKeepPages && selection_.empty()) {
+    const bool far = std::abs(it->first - center) > keep;
+    if (far && !selection_.contains_page(it->first)) {
       it = text_cache_.erase(it);
     } else {
       ++it;
@@ -392,26 +404,36 @@ void DocumentView::request_text_indexes() {
 
   for (int page = first; page <= last; ++page) {
     if (text_cache_.contains(page) || text_requested_.contains(page)) continue;
-    text_requested_.insert(page);
     UiDispatcher* dispatcher = dispatcher_;
     QPointer<DocumentView> self(this);
     const int generation = doc_generation_;
-    handle_.load_text(page, engine::Priority::kLow,
-                      // 워커 스레드: 메인으로 넘기기만
-                      [dispatcher, self, page, generation](onpdf::Result<view::PageTextIndex> result) {
-                        std::shared_ptr<const view::PageTextIndex> index;
-                        if (result) index = std::make_shared<const view::PageTextIndex>(std::move(*result));
-                        dispatcher->post_to(self, [page, generation, index](DocumentView* v) {
-                          v->on_text_index(page, generation, index);
-                        });
-                      });
+    engine::TaskHandle handle = handle_.load_text(
+        page, engine::Priority::kLow,
+        // 워커 스레드: 메인으로 넘기기만
+        [dispatcher, self, page, generation](onpdf::Result<view::PageTextIndex> result) {
+          std::shared_ptr<const view::PageTextIndex> index;
+          // 취소·문서 닫힘(kInvalidState) 은 일시적 — 캐시하지 않는다. 추출 실패만 빈 인덱스로 캐시
+          const bool cancelled = !result && (result.error().code == onpdf::ErrorCode::kCancelled ||
+                                             result.error().code == onpdf::ErrorCode::kInvalidState);
+          if (result) {
+            index = std::make_shared<const view::PageTextIndex>(std::move(*result));
+          } else if (!cancelled) {
+            std::fprintf(stderr, "[onpdf] text index failed for page %d: %s\n", page, result.error().message.c_str());
+          }
+          dispatcher->post_to(self, [page, generation, index, cancelled](DocumentView* v) {
+            v->on_text_index(page, generation, cancelled ? nullptr : index, cancelled);
+          });
+        });
+    text_requested_.emplace(page, std::move(handle));
   }
 }
 
-void DocumentView::on_text_index(int page, int generation, std::shared_ptr<const view::PageTextIndex> index) {
+void DocumentView::on_text_index(int page, int generation, std::shared_ptr<const view::PageTextIndex> index,
+                                 bool cancelled) {
   if (generation != doc_generation_) return;  // 이전 문서
   text_requested_.erase(page);
-  if (!index) index = std::make_shared<const view::PageTextIndex>();  // 실패: 빈 인덱스로 재요청 방지
+  if (cancelled) return;  // 취소된 요청은 다시 보이면 재요청된다
+  if (!index) index = std::make_shared<const view::PageTextIndex>();  // 추출 실패: 빈 인덱스로 재요청 방지
   text_cache_[page] = std::move(index);
   emit text_index_ready(page);
   if (layout_ && page < layout_->page_count()) {
@@ -491,13 +513,18 @@ void DocumentView::select_all_on_current_page() {
   set_selection({page, 0}, {page, index->char_count()});
 }
 
-QString DocumentView::selected_text() const {
+QString DocumentView::selected_text(bool* truncated) const {
+  if (truncated) *truncated = false;
   if (selection_.empty()) return {};
   // 미로드 쪽은 워커에 동기 요청 (복사 시점에만, 상한 있음)
   std::unordered_map<int, std::shared_ptr<const view::PageTextIndex>> loaded;
   int budget = kMaxCopyPages;
   for (int page : selection_.pages()) {
-    if (text_index(page) != nullptr || budget-- <= 0) continue;
+    if (text_index(page) != nullptr) continue;
+    if (budget-- <= 0) {
+      if (truncated) *truncated = true;
+      break;
+    }
     auto result = handle_.load_text(page, engine::Priority::kHigh).get();
     if (result) loaded[page] = std::make_shared<const view::PageTextIndex>(std::move(*result));
   }
@@ -624,14 +651,20 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
   if (auto hit = page_point_at(event->position())) {
     const auto [page, pt] = *hit;
     if (const view::PageTextIndex* index = text_index(page)) {
-      if (const view::Link* link = index->link_at(pt)) {
+      // 링크는 단일 클릭에서만 활성화 (더블클릭이 두 번 열지 않도록)
+      if (const view::Link* link = index->link_at(pt); link != nullptr && click_count_ == 1) {
         pressed_link_ = *link;
         drag_ = Drag::kMaybeLink;
         return;
       }
       if (click_count_ >= 3) {
-        const auto pos = index->nearest_position(pt);
-        const view::TextRange line = index->line_at(std::min(pos, index->char_count() - 1));
+        // 글자 위면 그 글자의 줄, 아니면 가장 가까운 위치의 줄 (줄 끝은 그 줄에 귀속)
+        int ch = index->hit_test(pt).value_or(-1);
+        if (ch < 0) {
+          const int pos = index->nearest_position(pt);
+          ch = std::clamp(pos > 0 ? pos - 1 : 0, 0, std::max(0, index->char_count() - 1));
+        }
+        const view::TextRange line = index->line_at(ch);
         if (!line.empty()) set_selection({page, line.start}, {page, line.end});
         drag_ = Drag::kNone;
         return;
@@ -710,6 +743,11 @@ void DocumentView::leaveEvent(QEvent* event) {
 }
 
 bool DocumentView::viewportEvent(QEvent* event) {
+  // 뷰포트를 떠나면(스크롤바 위로 가도) 호버 상태를 지운다 — Leave 는 viewport 에 오고 서브클래스 leaveEvent 로 오지 않는다
+  if (event->type() == QEvent::Leave && !hovered_target_.isEmpty()) {
+    hovered_target_.clear();
+    emit link_hovered({});
+  }
   // 네이티브 제스처(트랙패드 핀치)는 viewport 위젯에 오며, QAbstractScrollArea 는 이를
   // 서브클래스 event() 로 넘기지 않으므로 여기서 받는다
   if (event->type() == QEvent::NativeGesture) {

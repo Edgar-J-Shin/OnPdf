@@ -23,8 +23,12 @@ struct PageSpace {
   int h1000;
 
   static PageSpace of(FPDF_PAGE page) {
-    return {page, static_cast<int>(std::lround(FPDF_GetPageWidthF(page) * 1000.0)),
-            static_cast<int>(std::lround(FPDF_GetPageHeightF(page) * 1000.0))};
+    // PDF 최대 쪽 크기는 14,400pt 이지만 악성 MediaBox 에 대비해 int 범위로 clamp
+    auto scaled = [](double pt) {
+      const double v = std::clamp(pt * 1000.0, 1.0, 2.0e9);
+      return static_cast<int>(std::lround(v));
+    };
+    return {page, scaled(FPDF_GetPageWidthF(page)), scaled(FPDF_GetPageHeightF(page))};
   }
 
   Point to_pt(double x, double y) const {
@@ -92,12 +96,14 @@ Result<view::PageTextIndex> TextPage::extract(FPDF_DOCUMENT doc, FPDF_PAGE page,
   if (count < 0) return make_error(ErrorCode::kRenderFailed, "FPDFText_CountChars failed");
   index.chars.reserve(static_cast<std::size_t>(count));
 
-  // 줄 묶음 상태. 기준선·x 진행 비교는 **회전 전 사용자 좌표**로 한다 — /Rotate 90 쪽도 사용자 좌표에서는
-  // 글이 가로로 흐르므로, 변환된 좌표로 비교하면 글자마다 줄이 끊긴다
+  // 줄 묶음 상태. 비교는 **글자의 텍스트 방향 프레임**(FPDFText_GetMatrix 의 (a,b) 방향)에서 한다:
+  //  - /Rotate 90 쪽도, 회전 텍스트 매트릭스(0 1 -1 0 … Tm)도 그 프레임에서는 글이 가로로 흐른다
+  //  - 유효 글자 크기 = Tf 크기 × ‖(a,b)‖ (Cairo/Skia 식 "1 Tf + Tm 스케일" 문서 대응)
   int line_start = 0;
-  double line_baseline = 0.0;  // 사용자 좌표 origin y
-  float line_font = 0.0f;
-  double prev_right = 0.0;     // 사용자 좌표 right
+  double line_ox = 0.0, line_oy = 0.0;   // 줄 첫 글자 origin (사용자 좌표)
+  double line_dx = 1.0, line_dy = 0.0;   // 줄 방향 단위 벡터
+  double line_size = 0.0;                // 줄 유효 글자 크기
+  double prev_ox = 0.0, prev_oy = 0.0;   // 직전 글자 origin
   bool line_open = false;
   Rect line_box;
   bool line_has_box = false;
@@ -133,17 +139,38 @@ Result<view::PageTextIndex> TextPage::extract(FPDF_DOCUMENT doc, FPDF_PAGE page,
     double ox = 0, oy = 0;
     const bool has_origin = FPDFText_GetCharOrigin(tp, i, &ox, &oy) != 0;
     if (has_origin) ch.baseline_y = space.to_pt(ox, oy).y;
+    ch.source_index = i;
 
-    // 기하 규칙(사용자 좌표): 기준선이 크게 다르거나 x 가 뒤로 가면 새 줄 (PDFium 줄바꿈이 없는 문서 대비)
+    // 글자 방향과 유효 크기
+    double dx = 1.0, dy = 0.0, size = ch.font_size;
+    FS_MATRIX m{};
+    if (FPDFText_GetMatrix(tp, i, &m)) {
+      const double len = std::hypot(m.a, m.b);
+      if (len > 1e-6) {
+        dx = m.a / len;
+        dy = m.b / len;
+        size = ch.font_size * len;
+      }
+    }
+    if (size <= 0.0 && has_box) size = std::abs(t - b);
+
+    // 기하 규칙(방향 프레임): 수직 편차가 크거나 진행이 뒤로 가면 새 줄 (PDFium 줄바꿈이 없는 문서 대비)
     if (line_open && has_box && has_origin) {
-      const double fs = std::max(ch.font_size, line_font);
-      if (std::abs(oy - line_baseline) > 0.5 * fs || l < prev_right - fs) close_line();
+      const double fs = std::max(size, line_size);
+      const double rel_x = ox - line_ox, rel_y = oy - line_oy;
+      const double perp = -line_dy * rel_x + line_dx * rel_y;                 // 줄 수직 편차
+      const double advance = line_dx * (ox - prev_ox) + line_dy * (oy - prev_oy);  // 직전 글자 대비 진행
+      const bool direction_changed = std::abs(dx * line_dx + dy * line_dy) < 0.9;  // 방향 25° 이상 변화
+      if (std::abs(perp) > 0.5 * fs || advance < -fs || direction_changed) close_line();
     }
     if (!line_open) {
       line_open = true;
       line_start = index.char_count();
-      line_baseline = oy;
-      line_font = ch.font_size;
+      line_ox = ox;
+      line_oy = oy;
+      line_dx = dx;
+      line_dy = dy;
+      line_size = size;
     }
     if (!ch.box.empty()) {
       if (!line_has_box) {
@@ -154,7 +181,10 @@ Result<view::PageTextIndex> TextPage::extract(FPDF_DOCUMENT doc, FPDF_PAGE page,
         const double x1 = std::max(line_box.right(), ch.box.right()), y1 = std::max(line_box.bottom(), ch.box.bottom());
         line_box = {x0, y0, x1 - x0, y1 - y0};
       }
-      prev_right = r;
+    }
+    if (has_origin) {
+      prev_ox = ox;
+      prev_oy = oy;
     }
     index.chars.push_back(ch);
   }

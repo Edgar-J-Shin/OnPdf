@@ -52,6 +52,8 @@ TEST(TextIndex, WordAt) {
   EXPECT_EQ(idx.word_at(7), (TextRange{7, 8}));   // 공백은 그 글자 하나
   EXPECT_EQ(idx.word_at(9), (TextRange{8, 10}));  // cd (구두점 앞에서 끝)
   EXPECT_EQ(idx.word_at(10), (TextRange{10, 11})); // '.'
+  EXPECT_TRUE(is_word_separator(U'-'));
+  EXPECT_TRUE(is_word_separator(0x2014));
 }
 
 TEST(TextIndex, HitTestAndNearestPosition) {
@@ -85,6 +87,22 @@ TEST(TextIndex, SelectionRectsAndText) {
   EXPECT_EQ(idx.all_text(), "Hello\nab cd.\nx y");
   // 생성 공백만 있는 범위의 사각형은 없음
   EXPECT_TRUE(idx.selection_rects({12, 13}).empty());
+}
+
+TEST(TextIndex, NearestPositionOnVerticalLine) {
+  PageTextIndex idx;
+  for (int i = 0; i < 3; ++i) {
+    TextChar c;
+    c.code = U'a' + static_cast<char32_t>(i);
+    c.box = {100, i * 12.0, 10, 12};  // 세로로 쌓임
+    idx.chars.push_back(c);
+  }
+  idx.lines.push_back({{0, 3}, {100, 0, 10, 36}});
+  EXPECT_EQ(idx.nearest_position({105, -5}), 0);
+  EXPECT_EQ(idx.nearest_position({105, 4}), 0);    // 첫 글자 중심(6) 위
+  EXPECT_EQ(idx.nearest_position({105, 8}), 1);    // 첫 글자 중심 아래
+  EXPECT_EQ(idx.nearest_position({105, 20}), 2);   // 둘째(18) 아래
+  EXPECT_EQ(idx.nearest_position({105, 100}), 3);
 }
 
 TEST(TextIndex, LinksAndSafeUri) {

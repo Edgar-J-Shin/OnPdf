@@ -213,12 +213,19 @@ TEST_F(DocumentViewTest, HoverReportsLinkTarget) {
 TEST_F(DocumentViewTest, StaleTextIndexIgnoredAfterReplace) {
   ASSERT_TRUE(open("large-1000.pdf"));
   view_.verticalScrollBar()->setValue(view_.verticalScrollBar()->maximum() / 2);
+  // 새 문서가 설치된 뒤에는 이전 문서(1,000쪽)의 인덱스가 캐시에도, 시그널에도 나타나면 안 된다.
+  // (이전 문서의 대기 작업은 핸들 close 로 kInvalidState 가 되며, 그 결과는 캐시하지 않는다)
   ASSERT_TRUE(open("scanned.pdf"));
+  std::vector<int> ready_pages;
+  QObject::connect(&view_, &DocumentView::text_index_ready, &view_, [&](int p) { ready_pages.push_back(p); });
   ASSERT_TRUE(wait_text(0));
   spin_until([] { return false; }, 150);
   EXPECT_EQ(view_.text_index(0)->char_count(), 0);
-  for (int p = 2; p < 1000; p += 97) EXPECT_EQ(view_.text_index(p), nullptr);
+  // scanned.pdf 는 3쪽: 0~2 는 가시 ±1 프리페치로 정당하게 인덱싱될 수 있다. 그 밖(이전 문서 범위)은 절대 없어야 한다
+  for (int p : ready_pages) EXPECT_LT(p, 3) << "stale index from previous document: page " << p;
+  for (int p = 3; p < 1000; ++p) EXPECT_EQ(view_.text_index(p), nullptr) << p;
   EXPECT_FALSE(view_.has_selection());
+  EXPECT_EQ(view_.text_index(0)->page, 0);
 }
 
 TEST_F(DocumentViewTest, SelectAllOnCurrentPage) {

@@ -64,7 +64,8 @@ class DocumentView : public QAbstractScrollArea {
 
   // ---- 텍스트 선택·링크 ----
   [[nodiscard]] bool has_selection() const noexcept { return !selection_.empty(); }
-  [[nodiscard]] QString selected_text() const;        // 미로드 쪽은 동기 로드(상한 200쪽)
+  // 미로드 쪽은 동기 로드(상한 200쪽). 상한을 넘겨 잘렸으면 *truncated = true
+  [[nodiscard]] QString selected_text(bool* truncated = nullptr) const;
   void select_all_on_current_page();
   void clear_selection();
   [[nodiscard]] const view::PageTextIndex* text_index(int page) const;  // 캐시에 있을 때만
@@ -118,7 +119,7 @@ class DocumentView : public QAbstractScrollArea {
   void emit_page_if_changed();
   // 텍스트
   void request_text_indexes();
-  void on_text_index(int page, int generation, std::shared_ptr<const view::PageTextIndex> index);
+  void on_text_index(int page, int generation, std::shared_ptr<const view::PageTextIndex> index, bool cancelled);
   void paint_selection(QPainter& painter, int page, const QRectF& page_logical);
   [[nodiscard]] view::TextPos position_at(QPointF viewport_pos) const;  // 가장 가까운 선택 위치 (쪽 밖은 clamp)
   void update_hover(QPointF viewport_pos);
@@ -141,7 +142,7 @@ class DocumentView : public QAbstractScrollArea {
   UiDispatcher* dispatcher_ = nullptr;
   int doc_generation_ = 0;
   std::unordered_map<int, std::shared_ptr<const view::PageTextIndex>> text_cache_;
-  std::unordered_set<int> text_requested_;
+  std::unordered_map<int, engine::TaskHandle> text_requested_;  // 쪽 → 취소 핸들
   view::TextSelection selection_;
   enum class Drag { kNone, kText, kMaybeLink } drag_ = Drag::kNone;
   QPointF press_pos_;

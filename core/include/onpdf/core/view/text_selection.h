@@ -33,6 +33,9 @@ class TextSelection {
   // 그 쪽에서 선택된 글자 범위. 선택에 포함되지 않은 쪽은 빈 범위
   [[nodiscard]] TextRange range_on(int page, int page_char_count) const noexcept;
   [[nodiscard]] std::vector<int> pages() const;
+  [[nodiscard]] bool contains_page(int page) const noexcept {
+    return !empty() && page >= start().page && page <= end().page;
+  }
 
   // 쪽별 인덱스 제공자로 텍스트를 합친다 (쪽 사이 "\n\n"). provider 가 nullptr 를 주면 그 쪽은 건너뛴다
   [[nodiscard]] std::string text(const std::function<const PageTextIndex*(int)>& provider) const;
