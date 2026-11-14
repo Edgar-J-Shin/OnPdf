@@ -1,5 +1,7 @@
 #include "onpdf/core/image/png_io.h"
 
+#include "onpdf/core/platform/path.h"
+
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #define STBI_ONLY_PNG
@@ -52,12 +54,12 @@ Result<void> write_png(const Bitmap& bitmap, const std::filesystem::path& path) 
   }
   std::ofstream out(path, std::ios::binary);
   if (!out) {
-    return make_error(ErrorCode::kIoError, "cannot write: " + path.string());
+    return make_error(ErrorCode::kIoError, "cannot write: " + path_to_utf8(path));
   }
   out.write(reinterpret_cast<const char*>(encoded.data()),
             static_cast<std::streamsize>(encoded.size()));
   if (!out) {
-    return make_error(ErrorCode::kIoError, "write failed: " + path.string());
+    return make_error(ErrorCode::kIoError, "write failed: " + path_to_utf8(path));
   }
   return {};
 }
@@ -65,7 +67,7 @@ Result<void> write_png(const Bitmap& bitmap, const std::filesystem::path& path) 
 Result<Bitmap> read_png(const std::filesystem::path& path) {
   std::ifstream in(path, std::ios::binary);
   if (!in) {
-    return make_error(ErrorCode::kFileNotFound, "cannot open: " + path.string());
+    return make_error(ErrorCode::kFileNotFound, "cannot open: " + path_to_utf8(path));
   }
   std::vector<std::uint8_t> file((std::istreambuf_iterator<char>(in)),
                                  std::istreambuf_iterator<char>());
@@ -73,7 +75,7 @@ Result<Bitmap> read_png(const std::filesystem::path& path) {
   stbi_uc* rgba = stbi_load_from_memory(file.data(), static_cast<int>(file.size()), &w, &h,
                                         &channels, 4);
   if (rgba == nullptr) {
-    return make_error(ErrorCode::kInvalidFormat, "PNG decode failed: " + path.string());
+    return make_error(ErrorCode::kInvalidFormat, "PNG decode failed: " + path_to_utf8(path));
   }
   Bitmap out;
   out.width = w;

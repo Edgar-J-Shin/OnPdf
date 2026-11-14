@@ -28,7 +28,7 @@
 | `garbage-header.pdf` | ok |  | 2 | gen | Apache-2.0 | %PDF 앞 1KB 쓰레기 → 헤더 탐색 |
 | `한글 파일명.pdf` | ok |  | 1 | gen | Apache-2.0 | unicode-metadata 복사본, 경로 UTF-8 처리 |
 | `pdfium-hello_world.pdf` | ok |  | 1 | pdfium | BSD-3-Clause | 최소 텍스트 문서 |
-| `pdfium-encrypted.pdf` | password | user `1234` / owner `` | 1 | pdfium | BSD-3-Clause | PDFium 암호 샘플 |
+| `pdfium-encrypted.pdf` | password | user `1234` / owner `5678` | 1 | pdfium | BSD-3-Clause | PDFium 암호 샘플 |
 | `pdfium-bookmarks.pdf` | ok |  | 2 | pdfium | BSD-3-Clause | 북마크 샘플 |
 | `pdfium-text_form.pdf` | ok |  | 1 | pdfium | BSD-3-Clause | AcroForm 텍스트 필드 |
 | `pdfium-rectangles.pdf` | ok |  | 1 | pdfium | BSD-3-Clause | 도형 렌더 샘플 |
@@ -54,3 +54,4 @@ ONPDF_UPDATE_REFERENCES=1 ./build/dev/bin/onpdf_render_tests         # 렌더링
 - 새 생성 문서: `gen/docs.py` 에 `make_*` 추가 → `make_all.py` 의 `GENERATED` 에 등록 → `manifest.tsv` 에 행 추가 → 생성·커밋
 - 한글 임베딩 문서에 새 글자를 쓰려면 `fetch_font.py` 의 `TEXT` 에 넣고 서브셋을 다시 만든다
 - 손상 파일의 `expect` 는 PDFium 복구 결과를 실측해 적는다 (`onpdf_cli info`)
+- `--check` 의 바이트 비교는 Flate 출력이 zlib 구현에 의존한다 (CPython 기본 zlib 기준). zlib-ng 를 쓰는 Python 에서 실패하면 환경 문제이지 데이터 변경이 아니다

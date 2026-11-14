@@ -105,17 +105,29 @@ def make_korean_embedded() -> bytes:
     gid_width = {v["gid"]: v["width"] for v in meta["glyphs"].values()}
     widths = b" ".join(b"%d [%d]" % (gid, gid_width[gid]) for gid in sorted(used))
     bbox = b" ".join(b"%d" % v for v in meta["bbox"])
+    # 서브셋 폰트 이름은 6글자 태그 + '+' 접두 (PDF 32000 9.6.4)
+    font_name = b"ABCDEF+" + meta["family"].encode()
     descriptor = w.add(
         b"<< /Type /FontDescriptor /FontName /%s /Flags 4 /FontBBox [%s] /ItalicAngle 0 /Ascent %d "
         b"/Descent %d /CapHeight %d /StemV 80 /FontFile2 %d 0 R >>"
-        % (meta["family"].encode(), bbox, meta["ascent"], meta["descent"], meta["cap_height"], font_file))
+        % (font_name, bbox, meta["ascent"], meta["descent"], meta["cap_height"], font_file))
     cid_font = w.add(
         b"<< /Type /Font /Subtype /CIDFontType2 /BaseFont /%s "
         b"/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
         b"/FontDescriptor %d 0 R /DW 1000 /W [%s] /CIDToGIDMap /Identity >>"
-        % (meta["family"].encode(), descriptor, widths))
-    type0 = w.add(b"<< /Type /Font /Subtype /Type0 /BaseFont /%s /Encoding /Identity-H /DescendantFonts [%d 0 R] >>"
-                  % (meta["family"].encode(), cid_font))
+        % (font_name, descriptor, widths))
+    # ToUnicode: GID(=CID) → 유니코드. 없으면 텍스트 추출·검색·복사가 GID 를 문자로 돌려준다
+    gid_char = sorted((v["gid"], ch) for ch, v in meta["glyphs"].items() if v["gid"] in used)
+    bfchars = "\n".join("<%04X> <%s>" % (gid, ch.encode("utf-16-be").hex().upper()) for gid, ch in gid_char)
+    tounicode = w.stream(b"", (
+        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
+        "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
+        "/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n"
+        "1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n"
+        f"{len(gid_char)} beginbfchar\n{bfchars}\nendbfchar\n"
+        "endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n").encode("latin-1"))
+    type0 = w.add(b"<< /Type /Font /Subtype /Type0 /BaseFont /%s /Encoding /Identity-H /DescendantFonts [%d 0 R] "
+                  b"/ToUnicode %d 0 R >>" % (font_name, cid_font, tounicode))
     c = w.stream(b"", content(*ops))
     p = g.page(w, pages, g.A4, c, b"<< /Font << /F0 %d 0 R >> >>" % type0)
     g.pages_tree(w, pages, [p])
@@ -203,8 +215,10 @@ def make_form_acro() -> bytes:
     w = PdfWriter()
     pages = w.reserve()
     helv = g.simple_font(w)
+    zadb = w.add(b"<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>")
     page_num = w.reserve()
-    res_font = b"<< /Font << /Helv %d 0 R >> >>" % helv
+    # AP 스트림은 /DR 을 보지 않으므로 체크 표시용 ZaDb 도 AP 리소스에 넣는다
+    res_font = b"<< /Font << /Helv %d 0 R /ZaDb %d 0 R >> >>" % (helv, zadb)
 
     def ap(width: float, height: float, *ops: str) -> int:
         return w.stream(b"/Type /XObject /Subtype /Form /BBox [0 0 %s %s] /Resources %s"
@@ -251,7 +265,6 @@ def make_form_acro() -> bytes:
     annots = [fields[0], fields[1], r1, r2, fields[3]]
     g.page(w, pages, g.LETTER, c, b"<< /Font << /F1 %d 0 R >> >>" % helv, annots=annots, num=page_num)
     g.pages_tree(w, pages, [page_num])
-    zadb = w.add(b"<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>")
     acro = (b" /AcroForm << /Fields [" + b" ".join(b"%d 0 R" % f for f in fields)
             + b"] /DR << /Font << /Helv %d 0 R /ZaDb %d 0 R >> >> /DA (/Helv 0 Tf 0 g) /NeedAppearances false >>"
             % (helv, zadb))
@@ -304,13 +317,14 @@ def make_bookmarks(page_count: int = 10) -> bytes:
             w.set(a, w.objects[a - 1][:-2] + b" /Next %d 0 R >>" % b)
             w.set(b, w.objects[b - 1][:-2] + b" /Prev %d 0 R >>" % a)
         w.set(ch_num, b"<< /Title " + text_string(f"제 {ch + 1} 장 (page {ch_page + 1})")
-              + b" /Parent %d 0 R /First %d 0 R /Last %d 0 R /Count 2 /Dest %s >>"
+              + b" /Parent %d 0 R /First %d 0 R /Last %d 0 R /Count 4 /Dest %s >>"  # 절 2 + 항 2
               % (outlines, sec_nums[0], sec_nums[-1], dest(ch_page)))
         chapter_nums.append(ch_num)
     for a, b in zip(chapter_nums, chapter_nums[1:]):
         w.set(a, w.objects[a - 1][:-2] + b" /Next %d 0 R >>" % b)
         w.set(b, w.objects[b - 1][:-2] + b" /Prev %d 0 R >>" % a)
-    w.set(outlines, b"<< /Type /Outlines /First %d 0 R /Last %d 0 R /Count 3 >>" % (chapter_nums[0], chapter_nums[-1]))
+    # /Count = 열린 상태로 보이는 자손 총수: 장 3 + 절 6 + 항 6 = 15
+    w.set(outlines, b"<< /Type /Outlines /First %d 0 R /Last %d 0 R /Count 15 >>" % (chapter_nums[0], chapter_nums[-1]))
     root = g.catalog(w, pages, b" /Outlines %d 0 R /PageMode /UseOutlines" % outlines)
     info = g.info_dict(w, "북마크 테스트")
     return w.write(root=root, info=info, file_id=g.file_id_for("bookmarks.pdf"))

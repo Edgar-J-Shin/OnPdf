@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Noto Sans KR 서브셋 폰트와 글리프 매핑 JSON 을 만든다 (가끔만 실행).
 
-  pip install fonttools brotli
+  pip install "fonttools==4.60.*" brotli      # 버전이 다르면 글리프 순서가 바뀔 수 있다
   python3 testdata/gen/fetch_font.py
 
 출력:
@@ -48,7 +48,7 @@ def main() -> None:
     (ROOT / "licenses").mkdir(exist_ok=True)
     (ROOT / "licenses" / "OFL.txt").write_bytes(ofl)
 
-    font = TTFont(io.BytesIO(data))
+    font = TTFont(io.BytesIO(data), recalcTimestamp=False)  # head.modified 고정 → 재생성 결정적
     font = instancer.instantiateVariableFont(font, {"wght": 400})
 
     chars = sorted(set(TEXT) - {" "}) + [" "]
@@ -72,7 +72,7 @@ def main() -> None:
     out_ttf.parent.mkdir(exist_ok=True)
     font.save(out_ttf)
 
-    font = TTFont(out_ttf)
+    font = TTFont(out_ttf, recalcTimestamp=False)
     upem = font["head"].unitsPerEm
     cmap = font.getBestCmap()
     hmtx = font["hmtx"]

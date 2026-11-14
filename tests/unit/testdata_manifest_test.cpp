@@ -7,8 +7,12 @@
 
 #include <gtest/gtest.h>
 
+#include <cctype>
+#include <charconv>
+#include <cstdio>
 #include <chrono>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -44,36 +48,70 @@ std::vector<std::string> split_tabs(const std::string& line) {
   return cols;
 }
 
-std::vector<ManifestEntry> load_manifest() {
-  std::vector<ManifestEntry> entries;
-  std::ifstream in(testdata("manifest.tsv"));
-  std::string line;
-  while (std::getline(in, line)) {
-    if (line.empty() || line[0] == '#') continue;
-    auto cols = split_tabs(line);
-    if (cols.size() < 8 || cols[0] == "file") continue;
-    ManifestEntry e;
-    e.file = cols[0];
-    e.expect = cols[1];
-    e.password = cols[2];
-    e.owner_password = cols[3];
-    e.pages = std::stoi(cols[4]);
-    e.width = std::stod(cols[5]);
-    e.height = std::stod(cols[6]);
-    e.render = cols[7] == "1";
-    entries.push_back(std::move(e));
-  }
-  return entries;
+template <class T>
+bool parse_number(const std::string& text, T& out) {
+  const char* begin = text.data();
+  const char* end = begin + text.size();
+  auto [ptr, ec] = std::from_chars(begin, end, out);
+  return ec == std::errc{} && ptr == end;
 }
 
-// gtest 이름에는 영숫자·밑줄만 쓸 수 있다
+// 정적 초기화 시점에 호출되므로 절대 던지지 않는다. 잘못된 행은 bad_rows 에 기록만 한다.
+struct Manifest {
+  std::vector<ManifestEntry> entries;
+  std::vector<std::string> bad_rows;  // "line N: reason"
+};
+
+const Manifest& manifest() {
+  static const Manifest m = [] {
+    Manifest result;
+    std::ifstream in(testdata("manifest.tsv"));
+    std::string line;
+    int line_no = 0;
+    while (std::getline(in, line)) {
+      ++line_no;
+      if (line.empty() || line[0] == '#') continue;
+      auto cols = split_tabs(line);
+      if (cols[0] == "file") continue;
+      if (cols.size() < 8) {
+        result.bad_rows.push_back("line " + std::to_string(line_no) + ": fewer than 8 columns");
+        continue;
+      }
+      ManifestEntry e;
+      e.file = cols[0];
+      e.expect = cols[1];
+      e.password = cols[2];
+      e.owner_password = cols[3];
+      if (!parse_number(cols[4], e.pages) || !parse_number(cols[5], e.width) ||
+          !parse_number(cols[6], e.height)) {
+        result.bad_rows.push_back("line " + std::to_string(line_no) + ": pages/width/height not numeric");
+        continue;
+      }
+      e.render = cols[7] == "1";
+      result.entries.push_back(std::move(e));
+    }
+    return result;
+  }();
+  return m;
+}
+
+std::vector<ManifestEntry> load_manifest() { return manifest().entries; }
+
+// gtest 이름에는 영숫자·밑줄만 쓸 수 있다. 비ASCII 바이트는 hex 로 바꿔 파일마다 고유한 이름을 만든다.
 std::string test_name(const ::testing::TestParamInfo<ManifestEntry>& info) {
   std::string name;
   for (char c : info.param.file) {
     const auto ch = static_cast<unsigned char>(c);
-    name += std::isalnum(ch) ? static_cast<char>(ch) : '_';
+    if (std::isalnum(ch)) {
+      name += static_cast<char>(ch);
+    } else if (ch < 0x80) {
+      name += '_';
+    } else {
+      char hex[4];
+      std::snprintf(hex, sizeof hex, "x%02X", ch);
+      name += hex;
+    }
   }
-  if (name.find_first_not_of('_') == std::string::npos) return "non_ascii_name";  // 예: 한글 파일명.pdf
   return name;
 }
 
@@ -131,7 +169,10 @@ TEST_P(ManifestTest, OpensAsExpected) {
 
 INSTANTIATE_TEST_SUITE_P(Testdata, ManifestTest, ::testing::ValuesIn(load_manifest()), test_name);
 
-TEST(Testdata, ManifestIsNotEmpty) { EXPECT_GE(load_manifest().size(), 20u); }
+TEST(Testdata, ManifestIsWellFormed) {
+  for (const auto& row : manifest().bad_rows) ADD_FAILURE() << "manifest.tsv " << row;
+  EXPECT_GE(manifest().entries.size(), 20u);
+}
 
 TEST(Testdata, LargeDocumentOpensQuickly) {
   using clock = std::chrono::steady_clock;

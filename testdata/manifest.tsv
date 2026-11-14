@@ -22,7 +22,7 @@ bad-xref.pdf	ok			2	612	792	0	gen	Apache-2.0	xref 오프셋 전부 오류 → �
 garbage-header.pdf	ok			2	612	792	0	gen	Apache-2.0	%PDF 앞 1KB 쓰레기 → 헤더 탐색
 한글 파일명.pdf	ok			1	612	792	0	gen	Apache-2.0	unicode-metadata 복사본, 경로 UTF-8 처리
 pdfium-hello_world.pdf	ok			1	200	200	0	pdfium	BSD-3-Clause	최소 텍스트 문서
-pdfium-encrypted.pdf	password	1234		1	612	792	0	pdfium	BSD-3-Clause	PDFium 암호 샘플
+pdfium-encrypted.pdf	password	1234	5678	1	612	792	0	pdfium	BSD-3-Clause	PDFium 암호 샘플
 pdfium-bookmarks.pdf	ok			2	612	792	0	pdfium	BSD-3-Clause	북마크 샘플
 pdfium-text_form.pdf	ok			1	300	300	0	pdfium	BSD-3-Clause	AcroForm 텍스트 필드
 pdfium-rectangles.pdf	ok			1	200	300	0	pdfium	BSD-3-Clause	도형 렌더 샘플

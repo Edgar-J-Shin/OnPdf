@@ -217,7 +217,10 @@ class PdfWriter:
         self.encryptor = encrypt
         if encrypt is not None:
             encrypt.prepare(file_id)
-        out = bytearray(b"%%PDF-%s\n%%\xe2\xe3\xcf\xd3\n" % self.version.encode())
+        version = self.version
+        if xref_stream and tuple(int(v) for v in version.split(".")) < (1, 5):
+            version = "1.5"  # xref 스트림·객체 스트림은 PDF 1.5 기능
+        out = bytearray(b"%%PDF-%s\n%%\xe2\xe3\xcf\xd3\n" % version.encode())
         if xref_stream:
             return self._write_xref_stream(out, root, info, file_id)
         return self._write_classic(out, root, info, file_id, encrypt)
@@ -250,6 +253,8 @@ class PdfWriter:
         return bytes(out)
 
     def _write_xref_stream(self, out: bytearray, root: int, info: int | None, file_id: bytes) -> bytes:
+        for i, obj in enumerate(self.objects, start=1):
+            assert obj is not None, f"객체 {i} 가 비어 있음"
         # 비스트림 객체는 전부 객체 스트림 하나에 넣는다
         plain = [(i, o) for i, o in enumerate(self.objects, start=1) if isinstance(o, bytes)]
         streams = [(i, o) for i, o in enumerate(self.objects, start=1) if isinstance(o, _Stream)]
@@ -308,7 +313,9 @@ class PdfWriter:
         trailer = b"<< /Size %d /Root %d 0 R /Prev %d" % (size, root, prev)
         if info is not None:
             trailer += b" /Info %d 0 R" % info
-        trailer += b" /ID [%s %s] >>" % (hexstr(file_id), hexstr(file_id))
+        # /ID 첫 요소는 유지, 두 번째는 갱신마다 달라져야 한다 (결정적으로: 이전 두 번째 요소의 MD5)
+        updated_id = hashlib.md5(file_id + b"update").digest()
+        trailer += b" /ID [%s %s] >>" % (hexstr(file_id), hexstr(updated_id))
         out += b"trailer\n" + trailer + b"\nstartxref\n%d\n%%%%EOF\n" % startxref
         return bytes(out)
 
