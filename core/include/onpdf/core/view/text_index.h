@@ -40,6 +40,7 @@ struct Link {
   LinkKind kind = LinkKind::kPage;
   int page = -1;                   // kPage
   std::optional<Point> location;   // kPage: /XYZ 위치(대상 쪽 포인트). 없으면 쪽 상단
+  std::optional<Point> user_location;  // kPage: /XYZ 위치(대상 쪽 사용자 좌표, 미변환). 목차가 쓰고 클릭 시 변환
   std::string uri;                 // kUri, UTF-8
 };
 

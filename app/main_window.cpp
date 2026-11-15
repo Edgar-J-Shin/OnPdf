@@ -1,7 +1,9 @@
 #include "main_window.h"
 
 #include "document_view.h"
+#include "outline_panel.h"
 #include "search_bar.h"
+#include "thumbnail_panel.h"
 
 #include <QAction>
 #include <QApplication>
@@ -21,7 +23,9 @@
 #include <QPointer>
 #include <QScrollBar>
 #include <QSpinBox>
+#include <QSplitter>
 #include <QStatusBar>
+#include <QTabWidget>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -46,7 +50,29 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   view_->clear_document(tr("파일을 열거나 여기로 끌어다 놓으세요 (Ctrl+O)"));
   column->addWidget(search_bar_);
   column->addWidget(view_, 1);
-  setCentralWidget(central);
+
+  // 사이드바(썸네일·목차) | 문서
+  sidebar_ = new QTabWidget(this);
+  sidebar_->setDocumentMode(true);
+  thumbnail_panel_ = new ThumbnailPanel(sidebar_);
+  outline_panel_ = new OutlinePanel(sidebar_);
+  sidebar_->addTab(thumbnail_panel_, tr("썸네일"));
+  sidebar_->addTab(outline_panel_, tr("목차"));
+  sidebar_->setMinimumWidth(140);
+  sidebar_->setMaximumWidth(400);
+  splitter_ = new QSplitter(Qt::Horizontal, this);
+  splitter_->addWidget(sidebar_);
+  splitter_->addWidget(central);
+  splitter_->setChildrenCollapsible(false);
+  splitter_->setStretchFactor(0, 0);
+  splitter_->setStretchFactor(1, 1);
+  splitter_->setSizes({200, 700});
+  setCentralWidget(splitter_);
+
+  outline_highlight_timer_ = new QTimer(this);
+  outline_highlight_timer_->setSingleShot(true);
+  outline_highlight_timer_->setInterval(40);
+  connect(outline_highlight_timer_, &QTimer::timeout, this, &MainWindow::update_outline_highlight);
 
   page_spin_ = new QSpinBox(this);
   page_spin_->setRange(1, 1);
@@ -76,6 +102,14 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(search_bar_, &SearchBar::next_requested, this, &MainWindow::on_find_next);
   connect(search_bar_, &SearchBar::previous_requested, this, &MainWindow::on_find_previous);
   connect(search_bar_, &SearchBar::closed, this, &MainWindow::on_search_closed);
+  connect(thumbnail_panel_, &ThumbnailPanel::page_activated, this, [this](int page) {
+    if (view_->has_document()) view_->go_to_page(page);
+  });
+  connect(outline_panel_, &OutlinePanel::item_activated, this, &MainWindow::on_outline_item);
+  connect(view_->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] {
+    if (sidebar_->isVisible() && sidebar_->currentWidget() == outline_panel_) outline_highlight_timer_->start();
+  });
+  connect(sidebar_, &QTabWidget::currentChanged, this, [this] { update_outline_highlight(); });
   connect(page_spin_, &QSpinBox::valueChanged, this, [this](int value) {
     if (view_->has_document() && view_->current_page() != value - 1) view_->go_to_page(value - 1);
   });
@@ -115,6 +149,13 @@ void MainWindow::build_menus() {
   view->addSeparator();
   view->addAction(tr("확대(&I)"), QKeySequence::ZoomIn, this, [this] { view_->zoom_in(); });
   view->addAction(tr("축소(&O)"), QKeySequence::ZoomOut, this, [this] { view_->zoom_out(); });
+  view->addSeparator();
+  sidebar_action_ = view->addAction(tr("사이드바(&S)"), QKeySequence(Qt::Key_F4), this, [this](bool checked) {
+    sidebar_->setVisible(checked);
+    if (checked) update_outline_highlight();
+  });
+  sidebar_action_->setCheckable(true);
+  sidebar_action_->setChecked(true);
 
   QMenu* help = menuBar()->addMenu(tr("도움말(&H)"));
   help->addAction(tr("OnPdf 정보(&A)"), this, [this] {
@@ -158,6 +199,9 @@ void MainWindow::on_opened(const QString& path, int page_count) {
       return;
     }
     reset_search();
+    ++outline_generation_;
+    thumbnail_panel_->clear_document();
+    outline_panel_->set_outline(nullptr);
     view_->clear_document(tr("쪽이 없는 문서입니다"));
     page_spin_->setEnabled(false);
     page_total_label_->clear();
@@ -169,12 +213,82 @@ void MainWindow::on_opened(const QString& path, int page_count) {
   page_total_label_->setText(tr("/ %1 쪽").arg(page_count));
   view_->set_document(session_.handle(), dispatcher_);
   view_->setFocus();
+  thumbnail_panel_->set_document(session_.handle(), dispatcher_);
+  thumbnail_panel_->set_current_page(std::max(0, view_->current_page()));
+  load_outline();
   reset_search();
   // 검색 바가 열려 있으면 새 문서에서 같은 검색어로 다시 찾는다
   if (search_bar_->isVisible() && !search_bar_->query().trimmed().isEmpty()) {
     on_search_query(search_bar_->query(), search_bar_->options());
   }
   refresh_status();
+}
+
+// ---------------------------------------------------------------- 사이드바
+
+void MainWindow::load_outline() {
+  const int generation = ++outline_generation_;
+  outline_panel_->set_outline(nullptr);
+  sidebar_->setCurrentWidget(thumbnail_panel_);
+  UiDispatcher* dispatcher = &dispatcher_;
+  QPointer<MainWindow> self(this);
+  session_.handle().load_outline(
+      engine::Priority::kNormal,
+      // 워커 스레드: 메인으로 넘기기만
+      [dispatcher, self, generation](onpdf::Result<view::Outline> result) {
+        auto shared = std::make_shared<onpdf::Result<view::Outline>>(std::move(result));
+        dispatcher->post_to(self, [generation, shared](MainWindow* window) {
+          if (generation != window->outline_generation_) return;  // 그 사이 다른 문서를 열었다
+          std::shared_ptr<const view::Outline> outline;
+          if (*shared) {
+            outline = std::make_shared<const view::Outline>(std::move(**shared));
+          } else if (shared->error().code != ErrorCode::kCancelled) {
+            window->show_transient(window->tr("목차를 읽지 못했습니다"));
+          }
+          window->outline_panel_->set_outline(outline);
+          // 목차가 있으면 목차 탭, 없으면 썸네일 탭
+          window->sidebar_->setCurrentWidget(outline && !outline->empty()
+                                                 ? static_cast<QWidget*>(window->outline_panel_)
+                                                 : static_cast<QWidget*>(window->thumbnail_panel_));
+          window->update_outline_highlight();
+        });
+      });
+}
+
+void MainWindow::on_outline_item(const onpdf::view::Link& target) {
+  if (!view_->has_document()) return;
+  if (target.kind == view::LinkKind::kUri) {
+    on_link_activated(target);  // is_safe_uri + 사용자 확인
+    return;
+  }
+  if (target.page < 0 || target.page >= view_->page_count()) return;
+  if (!target.user_location) {
+    view_->go_to_page(target.page);
+    return;
+  }
+  // /XYZ 위치는 쪽을 열어야 쪽 포인트로 바꿀 수 있다 → 워커에서 변환 후 이동
+  const int generation = outline_generation_;
+  const int page = target.page;
+  UiDispatcher* dispatcher = &dispatcher_;
+  QPointer<MainWindow> self(this);
+  session_.handle().resolve_location(
+      page, *target.user_location, engine::Priority::kHigh,
+      [dispatcher, self, generation, page](onpdf::Result<onpdf::Point> result) {
+        auto shared = std::make_shared<onpdf::Result<onpdf::Point>>(std::move(result));
+        dispatcher->post_to(self, [generation, page, shared](MainWindow* window) {
+          if (generation != window->outline_generation_ || !window->view_->has_document()) return;
+          if (*shared) {
+            window->view_->scroll_to_page_point(page, **shared);
+          } else {
+            window->view_->go_to_page(page);
+          }
+        });
+      });
+}
+
+void MainWindow::update_outline_highlight() {
+  if (!view_->has_document() || !sidebar_->isVisible() || sidebar_->currentWidget() != outline_panel_) return;
+  if (auto pos = view_->reading_position()) outline_panel_->highlight_for(pos->first, pos->second.y);
 }
 
 // ---------------------------------------------------------------- 검색
@@ -372,6 +486,8 @@ void MainWindow::on_current_page_changed(int page) {
     const QSignalBlocker blocker(page_spin_);
     page_spin_->setValue(page + 1);
   }
+  thumbnail_panel_->set_current_page(page);
+  outline_highlight_timer_->start();
   refresh_status();
 }
 

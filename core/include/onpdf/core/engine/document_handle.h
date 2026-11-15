@@ -17,6 +17,7 @@
 #include "onpdf/core/engine/render_types.h"
 #include "onpdf/core/error.h"
 #include "onpdf/core/geometry.h"
+#include "onpdf/core/view/outline.h"
 #include "onpdf/core/view/search.h"
 #include "onpdf/core/view/text_index.h"
 
@@ -88,6 +89,14 @@ class DocumentHandle {
   [[nodiscard]] std::future<Result<view::PageSearchResult>> search_page(int page_index, std::string query,
                                                                         view::SearchOptions options,
                                                                         Priority priority = Priority::kNormal) const;
+
+  // 문서 목차 / 사용자 좌표 → 쪽 포인트. 계약은 render_page 와 같다.
+  TaskHandle load_outline(Priority priority, std::function<void(Result<view::Outline>)> on_done) const;
+  [[nodiscard]] std::future<Result<view::Outline>> load_outline(Priority priority = Priority::kNormal) const;
+  TaskHandle resolve_location(int page_index, Point user_pt, Priority priority,
+                              std::function<void(Result<Point>)> on_done) const;
+  [[nodiscard]] std::future<Result<Point>> resolve_location(int page_index, Point user_pt,
+                                                            Priority priority = Priority::kHigh) const;
 
   // 워커에 문서 해제를 맡긴다. 이후 render_page 는 kInvalidState.
   void close() noexcept;

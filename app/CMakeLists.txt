@@ -13,6 +13,8 @@ add_library(onpdf_app_lib STATIC
   document_tile_source.h document_tile_source.cpp
   document_view.h document_view.cpp
   search_bar.h search_bar.cpp
+  outline_panel.h outline_panel.cpp
+  thumbnail_panel.h thumbnail_panel.cpp
   main_window.h main_window.cpp
 )
 target_include_directories(onpdf_app_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

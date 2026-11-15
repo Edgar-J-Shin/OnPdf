@@ -80,6 +80,9 @@ class DocumentView : public QAbstractScrollArea {
   // 테스트·도구용: 쪽 포인트 → 뷰포트 논리 좌표 (쪽이 뷰포트 밖이어도 계산)
   [[nodiscard]] QPointF page_point_to_viewport(int page, onpdf::Point pt) const;
   [[nodiscard]] std::optional<std::pair<int, onpdf::Point>> page_point_at(QPointF viewport_pos) const;
+  // 읽는 위치: 뷰포트 상단 여백 바로 아래의 (쪽, 쪽 포인트). 쪽 사이 간격이면 다음 쪽 맨 위.
+  // go_to_page·scroll_to_page_point 직후에는 그 대상 지점이 된다 (목차 현재 항목 판정용)
+  [[nodiscard]] std::optional<std::pair<int, onpdf::Point>> reading_position() const;
 
   [[nodiscard]] view::TileCache::Stats cache_stats() const { return cache_.stats(); }
   [[nodiscard]] std::vector<view::TileKey> cache_keys() const { return cache_.keys(); }

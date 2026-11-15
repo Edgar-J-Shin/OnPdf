@@ -31,6 +31,7 @@ onpdf_add_test(onpdf_unit_tests
   unit/text_selection_test.cpp
   unit/text_page_test.cpp
   unit/search_test.cpp
+  unit/outline_test.cpp
 )
 target_compile_definitions(onpdf_unit_tests PRIVATE ONPDF_TEST_GLOBAL_PDFIUM=1)
 
@@ -54,6 +55,7 @@ if(ONPDF_BUILD_APP)
     app/document_session_test.cpp
     app/document_view_test.cpp
     app/search_test.cpp
+    app/sidebar_test.cpp
   )
   target_link_libraries(onpdf_app_tests PRIVATE onpdf_app_lib)
   set_tests_properties(onpdf_app_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

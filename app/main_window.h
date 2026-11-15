@@ -12,11 +12,16 @@
 
 class QLabel;
 class QSpinBox;
+class QSplitter;
+class QTabWidget;
+class QTimer;
 
 namespace onpdf::app {
 
 class DocumentView;
+class OutlinePanel;
 class SearchBar;
+class ThumbnailPanel;
 
 class MainWindow : public QMainWindow {
   Q_OBJECT
@@ -31,6 +36,10 @@ class MainWindow : public QMainWindow {
   [[nodiscard]] DocumentView* document_view() const noexcept { return view_; }
   [[nodiscard]] SearchBar* search_bar() const noexcept { return search_bar_; }
   [[nodiscard]] const view::SearchSession* search_session() const noexcept { return search_.get(); }
+  [[nodiscard]] QTabWidget* sidebar() const noexcept { return sidebar_; }
+  [[nodiscard]] OutlinePanel* outline_panel() const noexcept { return outline_panel_; }
+  [[nodiscard]] ThumbnailPanel* thumbnail_panel() const noexcept { return thumbnail_panel_; }
+  [[nodiscard]] QAction* sidebar_action() const noexcept { return sidebar_action_; }
   // 첫 쪽이 그려지면 창을 PNG 로 저장하고 앱을 종료한다 (QA·CI 스크린샷용, --screenshot 옵션).
   void screenshot_after_render(const QString& png_path);
 
@@ -56,6 +65,9 @@ class MainWindow : public QMainWindow {
   void on_search_closed();
   void update_search_status();
   void on_current_page_changed(int page);
+  void load_outline();
+  void on_outline_item(const onpdf::view::Link& target);
+  void update_outline_highlight();
   void on_zoom_changed(double zoom);
   void refresh_status();
   void set_document_status(const QString& text);   // 문서 정보 (지속)
@@ -74,6 +86,13 @@ class MainWindow : public QMainWindow {
   QAction* find_next_action_ = nullptr;
   QAction* find_previous_action_ = nullptr;
   SearchBar* search_bar_ = nullptr;
+  QSplitter* splitter_ = nullptr;
+  QTabWidget* sidebar_ = nullptr;
+  ThumbnailPanel* thumbnail_panel_ = nullptr;
+  OutlinePanel* outline_panel_ = nullptr;
+  QAction* sidebar_action_ = nullptr;
+  QTimer* outline_highlight_timer_ = nullptr;
+  int outline_generation_ = 0;  // 문서를 열 때마다 증가. 늦게 온 목차·위치 결과를 버린다
   std::unique_ptr<view::SearchSession> search_;
   int search_scroll_anchor_ = 0;  // 검색 시작 시 스크롤 위치. 사용자가 움직였으면 첫 결과로 끌고 가지 않는다
   QString screenshot_path_;

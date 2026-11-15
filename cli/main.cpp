@@ -31,7 +31,8 @@ int usage() {
       "  onpdf_cli tiles  <in.pdf> <out-dir> [--page N] [--scale S] [--password PW]\n"
       "  onpdf_cli text   <in.pdf> [--page N] [--password PW]   (chars/lines/links + extracted text)\n"
       "                   (writes 512px tile PNGs, stitched.png and full.png)\n"
-      "  onpdf_cli search <in.pdf> <query> [--case] [--word] [--password PW]\n",
+      "  onpdf_cli search <in.pdf> <query> [--case] [--word] [--password PW]\n"
+      "  onpdf_cli outline <in.pdf> [--password PW]\n",
       stderr);
   return 2;
 }
@@ -260,6 +261,26 @@ int cmd_search(const Args& args) {
   return 0;
 }
 
+int cmd_outline(const Args& args) {
+  if (args.positional.size() != 1) return usage();
+  auto doc = PdfiumDocument::open(onpdf::path_from_utf8(args.positional[0]), args.password);
+  if (!doc) return fail(doc.error());
+  auto outline = doc->load_outline();
+  if (!outline) return fail(outline.error());
+  for (const auto& item : outline->items) {
+    std::string target = "-";
+    if (item.target) {
+      target = item.target->kind == onpdf::view::LinkKind::kPage ? "p." + std::to_string(item.target->page + 1)
+                                                                 : "uri";
+    }
+    std::printf("%*s%s%s [%s]\n", item.depth * 2, "", item.open ? "" : "+ ",
+                item.title.empty() ? "(untitled)" : item.title.c_str(), target.c_str());
+  }
+  std::printf("%d item(s)%s%s\n", outline->size(), outline->truncated ? " (truncated)" : "",
+              outline->cycle_detected ? " (cycle detected)" : "");
+  return 0;
+}
+
 }  // namespace
 
 int run(int argc, char** argv) {
@@ -272,6 +293,7 @@ int run(int argc, char** argv) {
   if (args.command == "tiles") return cmd_tiles(args);
   if (args.command == "text") return cmd_text(args);
   if (args.command == "search") return cmd_search(args);
+  if (args.command == "outline") return cmd_outline(args);
   return usage();
 }
 

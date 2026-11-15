@@ -1,9 +1,11 @@
 #include "onpdf/core/engine/pdfium_document.h"
 
 #include "onpdf/core/engine/pdfium_library.h"
+#include "dest.h"
 #include "onpdf/core/engine/text_page.h"
 #include "onpdf/core/platform/path.h"
 
+#include <fpdf_doc.h>
 #include <fpdfview.h>
 
 #include <algorithm>
@@ -13,6 +15,7 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <unordered_set>
 
 namespace onpdf::engine {
 
@@ -216,6 +219,109 @@ Result<view::PageTextIndex> PdfiumDocument::load_text(int page_index) const {
   auto text_page = TextPage::load(page->get());
   if (!text_page) return std::unexpected(text_page.error());
   return text_page->extract(doc_.get(), page->get(), page_index);
+}
+
+Result<view::Outline> PdfiumDocument::load_outline() const {
+  PdfiumLibrary::assert_current_thread();
+  view::Outline outline;
+  FPDF_DOCUMENT doc = doc_.get();
+  const int page_count = FPDF_GetPageCount(doc);
+
+  // 명시적 스택 전위 순회: 프레임은 "아직 처리하지 않은 형제 체인의 다음 노드".
+  // 자식 체인 프레임을 위에 쌓아 자식을 형제보다 먼저 처리한다 (재귀 없음 → C++ 스택 깊이와 무관)
+  struct Frame {
+    FPDF_BOOKMARK next;
+    int parent;
+    int depth;
+  };
+  std::vector<Frame> stack;
+  std::unordered_set<FPDF_BOOKMARK> visited;
+  stack.push_back({FPDFBookmark_GetFirstChild(doc, nullptr), -1, 0});
+
+  while (!stack.empty()) {
+    const std::size_t top = stack.size() - 1;
+    FPDF_BOOKMARK node = stack[top].next;
+    if (node == nullptr) {
+      stack.pop_back();
+      continue;
+    }
+    if (!visited.insert(node).second) {
+      // 이미 본 북마크: 형제·자식 순환. 이 체인을 끊는다
+      outline.cycle_detected = true;
+      stack.pop_back();
+      continue;
+    }
+    if (outline.size() >= view::Outline::kMaxItems) {
+      outline.truncated = true;
+      break;
+    }
+    const int parent = stack[top].parent;
+    const int depth = stack[top].depth;
+    stack[top].next = FPDFBookmark_GetNextSibling(doc, node);
+
+    view::OutlineItem item;
+    item.depth = depth;
+    item.parent = parent;
+    item.open = FPDFBookmark_GetCount(node) > 0;
+    // 제목: UTF-16LE, 바이트 수(NUL 포함) 반환
+    const unsigned long title_bytes = FPDFBookmark_GetTitle(node, nullptr, 0);
+    if (title_bytes > 2) {
+      std::vector<unsigned char> buf(title_bytes);
+      FPDFBookmark_GetTitle(node, buf.data(), title_bytes);
+      item.title = detail::utf16le_to_utf8(buf.data(), buf.size());
+    }
+    // 대상: /Dest 우선, 없으면 액션(GoTo/URI). Launch·RemoteGoTo 는 무시 (보안)
+    view::Link link;
+    bool has_target = false;
+    if (FPDF_DEST dest = FPDFBookmark_GetDest(doc, node); dest != nullptr) {
+      has_target = detail::fill_target_lazy(doc, dest, link);
+    } else if (FPDF_ACTION action = FPDFBookmark_GetAction(node); action != nullptr) {
+      const unsigned long type = FPDFAction_GetType(action);
+      if (type == PDFACTION_GOTO) {
+        if (FPDF_DEST d = FPDFAction_GetDest(doc, action); d != nullptr) has_target = detail::fill_target_lazy(doc, d, link);
+      } else if (type == PDFACTION_URI) {
+        link.kind = view::LinkKind::kUri;
+        link.uri = detail::uri_of(doc, action);
+        has_target = !link.uri.empty();
+      }
+    }
+    if (has_target) {
+      if (link.kind == view::LinkKind::kPage && link.user_location && link.page < page_count) {
+        // 근사 쪽 포인트 y: 쪽을 열지 않고 높이로 뒤집기 (회전 없는 쪽에서 정확)
+        FS_SIZEF size{};
+        if (FPDF_GetPageSizeByIndexF(doc, link.page, &size)) {
+          item.approx_y = std::clamp(static_cast<double>(size.height) - link.user_location->y, 0.0,
+                                     static_cast<double>(size.height));
+        }
+      }
+      item.target = std::move(link);
+    }
+
+    const int index = outline.size();
+    outline.items.push_back(std::move(item));
+    if (parent < 0) {
+      outline.roots.push_back(index);
+    } else {
+      outline.items[static_cast<std::size_t>(parent)].children.push_back(index);
+    }
+
+    if (FPDF_BOOKMARK child = FPDFBookmark_GetFirstChild(doc, node); child != nullptr) {
+      if (depth + 1 >= view::Outline::kMaxDepth) {
+        outline.truncated = true;
+      } else {
+        stack.push_back({child, index, depth + 1});
+      }
+    }
+  }
+  outline.build_position_index();
+  return outline;
+}
+
+Result<Point> PdfiumDocument::resolve_location(int page_index, Point user_pt) const {
+  PdfiumLibrary::assert_current_thread();
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  return detail::PageSpace::of(page->get()).to_pt(user_pt.x, user_pt.y);
 }
 
 Result<view::PageSearchResult> PdfiumDocument::search_page(int page_index, const std::string& query_utf8,

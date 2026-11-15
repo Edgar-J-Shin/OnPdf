@@ -30,7 +30,7 @@ PageTextIndex sample() {
   put(U' ', 0, 0, true);
   put(U'y', 20, 40);
   idx.lines.push_back({{11, 14}, {0, 40, 30, 12}});
-  idx.links.push_back({{100, 100, 50, 20}, LinkKind::kUri, -1, std::nullopt, "https://example.com"});
+  idx.links.push_back({{100, 100, 50, 20}, LinkKind::kUri, -1, std::nullopt, std::nullopt, "https://example.com"});
   return idx;
 }
 

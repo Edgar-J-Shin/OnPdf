@@ -493,6 +493,36 @@ def make_text_layout() -> bytes:
     return w.write(root=root, info=info, file_id=g.file_id_for("text-layout.pdf"))
 
 
+def make_outline_cycle() -> bytes:
+    """악성 목차: 형제 순환(B /Next A), 자식 자기 참조(A /First A), 깊이 40 체인(B 아래).
+    뷰어는 무한 루프·스택 오버플로 없이 유한한 항목만 보여야 한다."""
+    w = PdfWriter()
+    pages = w.reserve()
+    helv = g.simple_font(w)
+    kids = []
+    for i in range(2):
+        c = w.stream(b"", content(_label(72, 720, 18, f"Outline cycle test - page {i + 1}")))
+        kids.append(g.page(w, pages, g.LETTER, c, _helv_resources(helv)))
+    g.pages_tree(w, pages, kids)
+    outlines = w.reserve()
+    a = w.reserve()
+    b = w.reserve()
+    chain = [w.reserve() for _ in range(40)]
+    w.set(a, b"<< /Title (A self child) /Parent %d 0 R /Next %d 0 R /First %d 0 R /Last %d 0 R /Count 1 "
+             b"/Dest [%d 0 R /XYZ 0 792 0] >>" % (outlines, b, a, a, kids[0]))
+    w.set(b, b"<< /Title (B sibling cycle) /Parent %d 0 R /Prev %d 0 R /Next %d 0 R /First %d 0 R /Last %d 0 R "
+             b"/Count 1 /Dest [%d 0 R /XYZ 0 792 0] >>" % (outlines, a, a, chain[0], chain[0], kids[1]))
+    for i, num in enumerate(chain):
+        parent = b if i == 0 else chain[i - 1]
+        child = b" /First %d 0 R /Last %d 0 R /Count 1" % (chain[i + 1], chain[i + 1]) if i + 1 < len(chain) else b""
+        w.set(num, b"<< /Title (Depth %d) /Parent %d 0 R%s /Dest [%d 0 R /XYZ 0 700 0] >>"
+              % (i + 1, parent, child, kids[1]))
+    w.set(outlines, b"<< /Type /Outlines /First %d 0 R /Last %d 0 R /Count 2 >>" % (a, b))
+    root = g.catalog(w, pages, b" /Outlines %d 0 R /PageMode /UseOutlines" % outlines)
+    info = g.info_dict(w, "Malicious outline (cycles, deep chain)")
+    return w.write(root=root, info=info, file_id=g.file_id_for("outline-cycle.pdf"))
+
+
 def make_transparency() -> bytes:
     w = PdfWriter()
     pages = w.reserve()
