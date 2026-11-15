@@ -691,7 +691,9 @@ void MainWindow::dropEvent(QDropEvent* event) {
     return;
   }
   event->acceptProposedAction();
-  open_file(path);
+  // 열기는 다음 이벤트 턴에: open_file 은 인쇄 중이면 모달 확인을 띄우는데, drop 처리 안에서 중첩 이벤트 루프를
+  // 돌리면 끌기 원본(macOS Finder·Windows OLE)이 drop 완료를 기다리며 멈춘다 (#27)
+  QTimer::singleShot(0, this, [this, path] { open_file(path); });
 }
 
 }  // namespace onpdf::app
