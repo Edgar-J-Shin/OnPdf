@@ -372,6 +372,21 @@ TEST_F(DocumentViewTest, GoToPageKeepsShortAndLastPage) {
   EXPECT_EQ(view_.current_page(), 4);
 }
 
+// 배율이 바뀌면 스크롤 값이 같아도 고정을 풀고 중앙 기준으로 다시 계산한다:
+// 맨 위(값 0)에서 0쪽으로 이동해 고정한 뒤 크게 축소하면 값은 0 그대로지만 중앙에는 뒤쪽 쪽이 온다
+TEST_F(DocumentViewTest, ZoomReleasesPageAnchor) {
+  ASSERT_TRUE(open("bookmarks.pdf"));
+  view_.go_to_page(0);
+  ASSERT_EQ(view_.verticalScrollBar()->value(), 0);
+  // 앵커를 0쪽 왼쪽 위 모서리에 두면 확대 후에도 그 모서리가 같은 자리에 남아 스크롤 값이 0 그대로다
+  view_.set_zoom(DocumentView::kMinZoom, view_.page_point_to_viewport(0, {0, 0}));
+  ASSERT_EQ(view_.verticalScrollBar()->value(), 0);  // 전제: 값이 그대로
+  const auto center = view_.page_point_at(QPointF(view_.viewport()->width() / 2.0, view_.viewport()->height() / 2.0));
+  ASSERT_TRUE(center);
+  ASSERT_GT(center->first, 0);  // 전제: 중앙이 0쪽이 아니다
+  EXPECT_EQ(view_.current_page(), center->first);
+}
+
 // 텍스트 인덱스가 아직 없는 쪽에서 드래그해도, 인덱스가 오면 실제로 누른 글자부터 선택된다
 TEST_F(DocumentViewTest, DragOnUnloadedPageResolvesWhenIndexArrives) {
   ASSERT_TRUE(open("bookmarks.pdf"));

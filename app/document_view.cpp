@@ -250,6 +250,8 @@ void DocumentView::apply_scale_q(int scale_q) {
   if (layout_->scale_q() != scale_q) {
     layout_->set_scale_q(scale_q);
     scheduler_->set_layout(layout_.get());  // 실패 집합 초기화
+    // 배율이 바뀌면 같은 스크롤 값이라도 보이는 내용이 달라진다 → 이동 고정 쪽 해제
+    nav_anchor_.reset();
   }
   update_scrollbars();
 }
