@@ -336,8 +336,8 @@ TEST_F(SidebarTest, OutlineHighlightTimerIsThrottledNotDebounced) {
   ASSERT_TRUE(open("bookmarks.pdf", 15));
   auto* timer = window_.findChild<QTimer*>(QStringLiteral("outline_highlight_timer"));
   ASSERT_NE(timer, nullptr);
-  settle(100);
-  ASSERT_FALSE(timer->isActive());
+  // 문서를 연 직후의 갱신이 끝날 때까지 (느린 CI 에서는 100ms 고정 대기로 부족했다)
+  ASSERT_TRUE(spin_until([&] { return !timer->isActive(); }, 3000));
   QScrollBar* bar = window_.document_view()->verticalScrollBar();
   bar->setValue(bar->value() + 30);  // 스크롤 → 타이머 시작
   ASSERT_TRUE(timer->isActive());
