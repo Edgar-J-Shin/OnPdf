@@ -16,6 +16,8 @@
 #include <QPageRanges>
 #include <QPageSize>
 #include <QPrinter>
+#include <QProgressDialog>
+#include <QMessageBox>
 #include <QTemporaryDir>
 #include <QTimer>
 
@@ -266,8 +268,10 @@ TEST_F(PrintTest, CancelLargeDocumentKeepsUiResponsive) {
   QObject::connect(job, &PrintJob::finished, [&](PrintJob::Outcome o) { cancelled = o == PrintJob::Outcome::kCancelled; });
   job->cancel();
   tick.stop();
-  EXPECT_TRUE(cancelled);
   EXPECT_FALSE(job->active());
+  // 완료 신호는 cancel() 호출 스택 밖, 다음 이벤트 턴에 온다 (#12)
+  EXPECT_FALSE(cancelled);
+  ASSERT_TRUE(spin_until([&] { return cancelled; }, 3000));
   EXPECT_LT(job->printed_sheets(), 1000);
   EXPECT_LE(job->max_in_flight(), PrintJob::kMaxInFlight);
   // 최적화 빌드 실측: 장당 메인 스레드 ≤ 30ms, 인쇄 시작·진행 창 표시 때 한 번 ≤ 200ms.
@@ -281,7 +285,7 @@ TEST_F(PrintTest, CancelLargeDocumentKeepsUiResponsive) {
   std::printf("[print] sheets before cancel=%d worst event-loop gap=%lldms max draw=%lldms max handler=%lldms\n",
               job->printed_sheets(), static_cast<long long>(worst_gap), static_cast<long long>(job->max_draw_ms()),
               static_cast<long long>(job->max_handler_ms()));
-  EXPECT_TRUE(window_.print_action()->isEnabled());
+  ASSERT_TRUE(spin_until([&] { return window_.print_action()->isEnabled(); }, 3000));
   // 워커가 계속 쓸 수 있다
   ASSERT_TRUE(open("simple.pdf"));
 }
@@ -294,6 +298,32 @@ TEST_F(PrintTest, OpeningAnotherDocumentCancelsPrinting) {
   ASSERT_TRUE(open("bookmarks.pdf"));
   EXPECT_EQ(window_.print_job(), nullptr);
   QApplication::processEvents();
+}
+
+// 인쇄 중 열기가 실패하면(손상 파일) 원래 문서의 인쇄는 계속된다. 새 문서가 열릴 때만 취소한다 (#12)
+TEST_F(PrintTest, FailedOpenKeepsPrinting) {
+  ASSERT_TRUE(open("large-1000.pdf"));
+  auto printer = pdf_printer("keep.pdf");
+  ASSERT_TRUE(window_.print_with(*printer));
+  PrintJob* job = window_.print_job();
+  ASSERT_TRUE(spin_until([&] { return job->printed_sheets() >= 2; }));
+  // 열기 실패 경고 대화상자는 자동으로 닫는다
+  QTimer closer;
+  QObject::connect(&closer, &QTimer::timeout, [] {
+    if (auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) box->reject();
+  });
+  closer.start(20);
+  window_.open_file(QString::fromStdString(onpdf::path_to_utf8(testdata("not_a_pdf.txt"))));
+  const int before = job->printed_sheets();
+  ASSERT_TRUE(spin_until([&] { return job->printed_sheets() >= before + 3; }));
+  EXPECT_EQ(window_.print_job(), job);
+  EXPECT_TRUE(job->active());
+  closer.stop();
+  // 새 문서가 열리면 그때 취소하고 진행 창도 닫는다
+  ASSERT_TRUE(open("simple.pdf"));
+  EXPECT_EQ(window_.print_job(), nullptr);
+  QApplication::processEvents();
+  for (auto* dialog : window_.findChildren<QProgressDialog*>()) EXPECT_FALSE(dialog->isVisible());
 }
 
 TEST(PrintRequest, MapsPrinterState) {

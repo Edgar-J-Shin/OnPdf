@@ -289,6 +289,7 @@ void DocumentView::on_tile_ready(const view::TileKey& key) {
   const QRectF logical(horizontal_offset_logical() + page.x / d - horizontalScrollBar()->value(),
                        page.y / d - verticalScrollBar()->value(), page.w / d, page.h / d);
   viewport()->update(logical.toAlignedRect().adjusted(-1, -1, kShadow + 1, kShadow + 1));
+  emit tiles_changed();
   if (first_view_pending_ && scheduler_ && scheduler_->pending_visible() == 0) {
     first_view_pending_ = false;
     emit first_view_rendered();

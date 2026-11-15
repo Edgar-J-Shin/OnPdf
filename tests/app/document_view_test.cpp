@@ -264,7 +264,9 @@ TEST_F(DocumentViewTest, ScrollingLargeDocumentRequestsBoundedTiles) {
   for (int i = 1; i <= 10; ++i) v->setValue(max * i / 10);
   EXPECT_EQ(view_.current_page(), 999);
   const int requested = view_.scheduler_stats().requested;
-  EXPECT_LT(requested, 10 * 40) << "requests should be bounded by viewport, not document size";
+  // 뷰포트당 타일 수는 화면 배율의 제곱에 비례한다 (Retina dpr 2 → 4배)
+  const double dpr = view_.devicePixelRatioF();
+  EXPECT_LT(requested, static_cast<int>(10 * 40 * dpr * dpr)) << "requests should be bounded by viewport, not document size";
   EXPECT_GT(requested, 10);
   // 지나간 뷰포트의 요청은 취소된다
   EXPECT_GT(view_.scheduler_stats().cancelled, 0);

@@ -58,11 +58,13 @@ class ThumbnailPanel : public QWidget {
  protected:
   void resizeEvent(QResizeEvent* event) override;
   void showEvent(QShowEvent* event) override;
+  bool event(QEvent* event) override;  // DevicePixelRatioChange (모니터 이동)
 
  private:
   struct Entry {
     QImage image;
     int generation = 0;
+    qreal dpr = 1.0;  // 렌더할 때의 화면 배율. 다르면 다시 렌더
   };
   struct Pending {
     engine::TaskHandle task;

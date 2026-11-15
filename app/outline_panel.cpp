@@ -30,6 +30,7 @@ OutlinePanel::OutlinePanel(QWidget* parent) : QWidget(parent) {
   model_ = new QStandardItemModel(this);
   tree_->setModel(model_);
   tree_->setHeaderHidden(true);
+  tree_->setIndentation(12);  // 기본 20px 는 폭 200px 사이드바에서 깊이 7 이후 제목이 잘린다
   tree_->setUniformRowHeights(true);
   tree_->setEditTriggers(QAbstractItemView::NoEditTriggers);
   tree_->setSelectionMode(QAbstractItemView::SingleSelection);
