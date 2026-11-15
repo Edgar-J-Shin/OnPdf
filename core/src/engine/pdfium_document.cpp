@@ -6,6 +6,7 @@
 
 #include <fpdfview.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstring>
@@ -215,6 +216,29 @@ Result<view::PageTextIndex> PdfiumDocument::load_text(int page_index) const {
   auto text_page = TextPage::load(page->get());
   if (!text_page) return std::unexpected(text_page.error());
   return text_page->extract(doc_.get(), page->get(), page_index);
+}
+
+Result<view::PageSearchResult> PdfiumDocument::search_page(int page_index, const std::string& query_utf8,
+                                                          view::SearchOptions options) const {
+  PdfiumLibrary::assert_current_thread();
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  auto text_page = TextPage::load(page->get());
+  if (!text_page) return std::unexpected(text_page.error());
+  auto index = text_page->extract(doc_.get(), page->get(), page_index);
+  if (!index) return std::unexpected(index.error());
+
+  view::PageSearchResult result;
+  result.page = page_index;
+  result.char_count = index->char_count();
+  for (const view::SourceRange& src : text_page->find(query_utf8, options)) {
+    const view::TextRange range = view::map_source_range(*index, src);
+    if (!range.empty()) result.ranges.push_back(range);
+  }
+  std::sort(result.ranges.begin(), result.ranges.end(),
+            [](const view::TextRange& a, const view::TextRange& b) { return a.start < b.start; });
+  if (!result.ranges.empty()) result.index = std::make_shared<const view::PageTextIndex>(std::move(*index));
+  return result;
 }
 
 }  // namespace onpdf::engine

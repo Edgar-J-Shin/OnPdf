@@ -5,6 +5,7 @@
 #include "onpdf/core/engine/render_types.h"
 #include "onpdf/core/error.h"
 #include "onpdf/core/geometry.h"
+#include "onpdf/core/view/search.h"
 #include "onpdf/core/view/text_index.h"
 
 #include <cstdint>
@@ -38,6 +39,9 @@ class PdfiumDocument {
                                              const Rect& region_px) const;
   // 쪽의 텍스트 인덱스(글자·줄·링크). 좌표는 쪽 포인트(좌상단 원점, 회전 반영)
   [[nodiscard]] Result<view::PageTextIndex> load_text(int page_index) const;
+  // 쪽 검색: 텍스트 페이지를 한 번 열어 인덱스 추출 + PDFium 검색 + 인덱스 범위 매핑
+  [[nodiscard]] Result<view::PageSearchResult> search_page(int page_index, const std::string& query_utf8,
+                                                           view::SearchOptions options) const;
 
  private:
   PdfiumDocument(std::vector<std::uint8_t> data, ScopedDocument doc);

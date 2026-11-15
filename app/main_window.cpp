@@ -1,6 +1,7 @@
 #include "main_window.h"
 
 #include "document_view.h"
+#include "search_bar.h"
 
 #include <QAction>
 #include <QApplication>
@@ -17,10 +18,16 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QPointer>
 #include <QSpinBox>
 #include <QStatusBar>
 #include <QTimer>
 #include <QUrl>
+#include <QVBoxLayout>
+
+#include <algorithm>
+#include <memory>
+#include <string>
 
 namespace onpdf::app {
 
@@ -29,9 +36,16 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   setWindowTitle(QStringLiteral("OnPdf"));
   setAcceptDrops(true);
 
-  view_ = new DocumentView(this);
+  auto* central = new QWidget(this);
+  auto* column = new QVBoxLayout(central);
+  column->setContentsMargins(0, 0, 0, 0);
+  column->setSpacing(0);
+  search_bar_ = new SearchBar(central);
+  view_ = new DocumentView(central);
   view_->clear_document(tr("파일을 열거나 여기로 끌어다 놓으세요 (Ctrl+O)"));
-  setCentralWidget(view_);
+  column->addWidget(search_bar_);
+  column->addWidget(view_, 1);
+  setCentralWidget(central);
 
   page_spin_ = new QSpinBox(this);
   page_spin_->setRange(1, 1);
@@ -57,6 +71,10 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(view_, &DocumentView::selection_changed, this, [this](bool has) { copy_action_->setEnabled(has); });
   connect(view_, &DocumentView::link_activated, this, &MainWindow::on_link_activated);
   connect(view_, &DocumentView::link_hovered, this, &MainWindow::on_link_hovered);
+  connect(search_bar_, &SearchBar::query_changed, this, &MainWindow::on_search_query);
+  connect(search_bar_, &SearchBar::next_requested, this, &MainWindow::on_find_next);
+  connect(search_bar_, &SearchBar::previous_requested, this, &MainWindow::on_find_previous);
+  connect(search_bar_, &SearchBar::closed, this, &MainWindow::on_search_closed);
   connect(page_spin_, &QSpinBox::valueChanged, this, [this](int value) {
     if (view_->has_document() && view_->current_page() != value - 1) view_->go_to_page(value - 1);
   });
@@ -77,6 +95,11 @@ void MainWindow::build_menus() {
   copy_action_->setEnabled(false);
   select_all_action_ = edit->addAction(tr("현재 쪽 전체 선택(&A)"), QKeySequence::SelectAll, this,
                                        &MainWindow::on_select_all);
+  edit->addSeparator();
+  edit->addAction(tr("찾기(&F)..."), QKeySequence::Find, this, &MainWindow::open_find);
+  find_next_action_ = edit->addAction(tr("다음 찾기(&N)"), QKeySequence::FindNext, this, &MainWindow::on_find_next);
+  find_previous_action_ =
+      edit->addAction(tr("이전 찾기(&P)"), QKeySequence::FindPrevious, this, &MainWindow::on_find_previous);
 
   QMenu* view = menuBar()->addMenu(tr("보기(&V)"));
   view->addAction(tr("너비 맞춤(&W)"), QKeySequence(Qt::CTRL | Qt::Key_1), this,
@@ -129,6 +152,7 @@ void MainWindow::on_opened(const QString& path, int page_count) {
       fail_screenshot(QStringLiteral("no pages"));
       return;
     }
+    reset_search();
     view_->clear_document(tr("쪽이 없는 문서입니다"));
     page_spin_->setEnabled(false);
     page_total_label_->clear();
@@ -140,7 +164,110 @@ void MainWindow::on_opened(const QString& path, int page_count) {
   page_total_label_->setText(tr("/ %1 쪽").arg(page_count));
   view_->set_document(session_.handle(), dispatcher_);
   view_->setFocus();
+  reset_search();
+  // 검색 바가 열려 있으면 새 문서에서 같은 검색어로 다시 찾는다
+  if (search_bar_->isVisible() && !search_bar_->query().trimmed().isEmpty()) {
+    on_search_query(search_bar_->query(), search_bar_->options());
+  }
   refresh_status();
+}
+
+// ---------------------------------------------------------------- 검색
+
+void MainWindow::reset_search() {
+  view_->set_search(nullptr);
+  search_.reset();  // 진행 중 작업 취소, 늦은 콜백은 세션 수명 확인으로 무시
+  if (!session_.has_document()) {
+    update_search_status();
+    return;
+  }
+  engine::DocumentHandle handle = session_.handle();
+  UiDispatcher* dispatcher = &dispatcher_;
+  QPointer<MainWindow> self(this);
+  search_ = std::make_unique<view::SearchSession>(
+      [handle, dispatcher, self](int page, const std::string& query, view::SearchOptions options,
+                                 view::SearchSession::PageCallback on_done) {
+        return handle.search_page(
+            page, query, options, engine::Priority::kNormal,
+            // 워커 스레드: 메인으로 넘기기만
+            [dispatcher, self, on_done = std::move(on_done)](onpdf::Result<view::PageSearchResult> result) {
+              auto shared = std::make_shared<onpdf::Result<view::PageSearchResult>>(std::move(result));
+              dispatcher->post_to(self, [on_done, shared](MainWindow*) { on_done(std::move(*shared)); });
+            });
+      });
+  search_->on_changed = [this] {
+    // 결과에 실려 온 인덱스를 뷰 캐시에 넣어 하이라이트·선택에 재사용
+    for (int page = 0; page < search_->page_count(); ++page) {
+      if (auto idx = search_->index_of(page)) view_->accept_index(page, idx);
+    }
+    update_search_status();
+    view_->viewport()->update();
+  };
+  search_->on_current_changed = [this] {
+    if (auto hit = search_->current()) view_->reveal(hit->page, hit->range);
+    update_search_status();
+    view_->viewport()->update();
+  };
+  view_->set_search(search_.get());
+  update_search_status();
+}
+
+void MainWindow::open_find() {
+  QString initial;
+  if (view_->has_selection()) {
+    const QString selected = view_->selected_text();
+    if (!selected.contains(QLatin1Char('\n')) && selected.size() <= 100) initial = selected.trimmed();
+  }
+  search_bar_->open_with(initial);
+}
+
+void MainWindow::on_search_query(const QString& query, view::SearchOptions options) {
+  if (!search_) return;
+  if (query.trimmed().isEmpty()) {
+    search_->clear();
+    return;
+  }
+  const QByteArray utf8 = query.toUtf8();
+  search_->start(std::string(utf8.constData(), static_cast<std::size_t>(utf8.size())), options,
+                 view_->page_count(), std::max(0, view_->current_page()));
+}
+
+void MainWindow::on_find_next() {
+  if (!search_ || !search_->active()) {
+    open_find();
+    return;
+  }
+  if (search_->next()) {
+    if (search_->wrapped()) show_transient(tr("처음부터 다시 찾습니다"));
+  } else if (search_->searching()) {
+    show_transient(tr("검색 중…"));
+  }
+}
+
+void MainWindow::on_find_previous() {
+  if (!search_ || !search_->active()) {
+    open_find();
+    return;
+  }
+  if (search_->previous()) {
+    if (search_->wrapped()) show_transient(tr("끝에서부터 다시 찾습니다"));
+  } else if (search_->searching()) {
+    show_transient(tr("검색 중…"));
+  }
+}
+
+void MainWindow::on_search_closed() {
+  if (search_) search_->clear();
+  view_->setFocus();
+}
+
+void MainWindow::update_search_status() {
+  if (!search_) {
+    search_bar_->set_status(0, 0, false, false, false);
+    return;
+  }
+  search_bar_->set_status(search_->current_ordinal(), search_->total(), search_->searching(), search_->truncated(),
+                          search_->no_text());
 }
 
 void MainWindow::on_password_required(const QString& path) {

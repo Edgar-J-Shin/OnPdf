@@ -9,6 +9,7 @@
 #include "onpdf/core/view/tile.h"
 #include "onpdf/core/view/tile_source.h"
 
+#include <algorithm>
 #include <charconv>
 #include <cstdio>
 #include <cstring>
@@ -29,6 +30,7 @@ int usage() {
       "  onpdf_cli render <in.pdf> <out.png> [--page N] [--scale S] [--rotate R] [--password PW]\n"
       "  onpdf_cli tiles  <in.pdf> <out-dir> [--page N] [--scale S] [--password PW]\n"
       "  onpdf_cli text   <in.pdf> [--page N] [--password PW]   (chars/lines/links + extracted text)\n"
+      "  onpdf_cli search <in.pdf> <query> [--case] [--word] [--password PW]\n"
       "                   (writes 512px tile PNGs, stitched.png and full.png)\n",
       stderr);
   return 2;
@@ -54,6 +56,8 @@ struct Args {
   float scale = 1.0f;
   int rotate = 0;
   std::string password;
+  bool match_case = false;
+  bool whole_word = false;
 };
 
 bool parse_args(int argc, char** argv, Args& args) {
@@ -78,6 +82,10 @@ bool parse_args(int argc, char** argv, Args& args) {
       }
     } else if (a == "--rotate") {
       if (!next(v) || !parse_number(v, args.rotate)) return false;
+    } else if (a == "--case") {
+      args.match_case = true;
+    } else if (a == "--word") {
+      args.whole_word = true;
     } else if (a == "--password") {
       if (!next(v)) return false;
       args.password = std::string(v);
@@ -217,6 +225,35 @@ int cmd_text(const Args& args) {
   return 0;
 }
 
+int cmd_search(const Args& args) {
+  if (args.positional.size() != 2) return usage();
+  auto doc = PdfiumDocument::open(onpdf::path_from_utf8(args.positional[0]), args.password);
+  if (!doc) return fail(doc.error());
+  onpdf::view::SearchOptions options;
+  options.match_case = args.match_case;
+  options.whole_word = args.whole_word;
+  const std::string query = onpdf::view::normalize_query(args.positional[1]);
+  std::size_t total = 0;
+  for (int page = 0; page < doc->page_count(); ++page) {
+    auto r = doc->search_page(page, query, options);
+    if (!r) return fail(r.error());
+    if (r->ranges.empty()) continue;
+    std::printf("page %d: %zu hit(s)\n", page + 1, r->ranges.size());
+    for (const auto& range : r->ranges) {
+      const int from = std::max(0, range.start - 20);
+      const int to = std::min(r->index->char_count(), range.end + 20);
+      std::string context = r->index->text({from, to});
+      for (char& c : context) {
+        if (c == '\n') c = ' ';
+      }
+      std::printf("  ...%s...\n", context.c_str());
+    }
+    total += r->ranges.size();
+  }
+  std::printf("%zu hit(s) for \"%s\"\n", total, query.c_str());
+  return 0;
+}
+
 }  // namespace
 
 int run(int argc, char** argv) {
@@ -228,6 +265,7 @@ int run(int argc, char** argv) {
   if (args.command == "render") return cmd_render(args);
   if (args.command == "tiles") return cmd_tiles(args);
   if (args.command == "text") return cmd_text(args);
+  if (args.command == "search") return cmd_search(args);
   return usage();
 }
 

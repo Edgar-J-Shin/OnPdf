@@ -177,6 +177,69 @@ TEST(TextPage, LineHeuristicsHandleRotatedMatrixAndScaledFont) {
   }
 }
 
+// ---- 검색 (search_page) ----
+view::PageSearchResult search(const char* file, int page, const char* query, view::SearchOptions o = {}) {
+  auto doc = PdfiumDocument::open(testdata(file));
+  EXPECT_TRUE(doc) << doc.error().message;
+  auto r = doc->search_page(page, query, o);
+  EXPECT_TRUE(r) << r.error().message;
+  return r ? *r : view::PageSearchResult{};
+}
+
+TEST(TextPageSearch, KoreanEmbedded) {
+  const auto r = search("korean-embedded.pdf", 0, "한글");
+  ASSERT_EQ(r.ranges.size(), 1u);
+  ASSERT_NE(r.index, nullptr);
+  EXPECT_EQ(r.index->text(r.ranges[0]), "한글");
+  EXPECT_EQ(r.char_count, 103);
+}
+
+TEST(TextPageSearch, CaseAndWholeWord) {
+  EXPECT_EQ(search("simple.pdf", 0, "page").ranges.size(), 1u);  // "test page"
+  EXPECT_EQ(search("simple.pdf", 1, "page").ranges.size(), 1u);  // "Page 2"
+  view::SearchOptions match_case;
+  match_case.match_case = true;
+  EXPECT_EQ(search("simple.pdf", 1, "page", match_case).ranges.size(), 0u);
+  EXPECT_EQ(search("simple.pdf", 1, "Page", match_case).ranges.size(), 1u);
+  view::SearchOptions word;
+  word.whole_word = true;
+  EXPECT_EQ(search("simple.pdf", 0, "tes", word).ranges.size(), 0u);
+  EXPECT_EQ(search("simple.pdf", 0, "test", word).ranges.size(), 1u);
+  EXPECT_EQ(search("simple.pdf", 0, "tes").ranges.size(), 1u);
+}
+
+TEST(TextPageSearch, NoTextAndNoHits) {
+  const auto scanned = search("scanned.pdf", 0, "a");
+  EXPECT_TRUE(scanned.ranges.empty());
+  EXPECT_EQ(scanned.char_count, 0);
+  EXPECT_EQ(scanned.index, nullptr);
+  const auto none = search("simple.pdf", 0, "zzzz");
+  EXPECT_TRUE(none.ranges.empty());
+  EXPECT_EQ(none.index, nullptr);  // 결과 없는 쪽은 인덱스를 담지 않는다
+  EXPECT_GT(none.char_count, 0);
+}
+
+TEST(TextPageSearch, SystemFontRotatedAndSuperscript) {
+  const auto sys = search("korean-system-font.pdf", 0, "시스템");
+  ASSERT_EQ(sys.ranges.size(), 1u);
+  EXPECT_EQ(sys.index->text(sys.ranges[0]), "시스템");
+  const auto rot = search("mixed-sizes.pdf", 5, "Rotate");
+  ASSERT_EQ(rot.ranges.size(), 1u);
+  const auto rects = rot.index->selection_rects(rot.ranges[0]);
+  ASSERT_EQ(rects.size(), 1u);
+  EXPECT_GT(rects[0].h, rects[0].w);  // 회전 쪽: 세로로 긴 하이라이트
+  const auto sup = search("text-layout.pdf", 0, "E=mc2");
+  ASSERT_EQ(sup.ranges.size(), 1u);
+  EXPECT_EQ(sup.index->text(sup.ranges[0]), "E=mc2");
+}
+
+TEST(TextPageSearch, MultipleHitsInLargeDocumentPage) {
+  // large-1000 의 500쪽(인덱스 499): "Page 500 / 1000"
+  const auto r = search("large-1000.pdf", 499, "Page 500");
+  ASSERT_EQ(r.ranges.size(), 1u);
+  EXPECT_EQ(r.index->text(r.ranges[0]), "Page 500");
+}
+
 TEST(TextPage, BookmarksPdfHasNoLinkAnnotations) {
   auto doc = PdfiumDocument::open(testdata("bookmarks.pdf"));
   ASSERT_TRUE(doc);
