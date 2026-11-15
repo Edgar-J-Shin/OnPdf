@@ -1,8 +1,8 @@
 # OnPdf
 
-PDFium 기반의 가볍고 빠른 Windows용 오픈소스 PDF 뷰어·편집기입니다.
+PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편집기입니다.
 
-> 현재 단계: **M0 기반** — 저장소·빌드·PDFium 연결 작업 중입니다. 아직 사용할 수 있는 빌드가 없습니다.
+> 현재 단계: **M1 뷰어** — M0(빌드·PDFium 연결·첫 쪽 표시·테스트 PDF)은 끝났고, 연속 스크롤·확대·축소를 만드는 중입니다. 공개 릴리스는 M1 완료 시 v0.1 로 나옵니다.
 
 ## 목표
 
@@ -15,12 +15,12 @@ PDFium 기반의 가볍고 빠른 Windows용 오픈소스 PDF 뷰어·편집기�
 
 | 단계 | 내용 | 버전 |
 |---|---|---|
-| M0 | 저장소, CMake, PDFium 연결, 첫 쪽 표시 | — |
+| M0 | 저장소, CMake, PDFium 연결, 첫 쪽 표시 | 완료 |
 | M1 | 뷰어: 연속 스크롤, 확대·축소, 검색, 썸네일, 목차, 인쇄 | v0.1 |
 | M2 | 주석, 페이지 조작(회전·삭제·재배열·병합·분할), 저장, 실행 취소 | v0.2 |
 | M3 | 텍스트·이미지 추가, 객체 편집, 폼 채우기, 폰트 임베딩 | v0.3 |
 | M4 | 기존 텍스트 줄 단위 수정 | v0.5 |
-| M5 | 성능, 설치 파일, 다국어, 문서화 | v1.0 |
+| M5 | 성능, Windows 설치 파일·macOS DMG, 코드 서명, 다국어, 문서화 | v1.0 |
 
 자세한 계획은 [pdf-editor-plan.md](pdf-editor-plan.md) 를 참고하세요.
 
@@ -34,11 +34,16 @@ PDFium 기반의 가볍고 빠른 Windows용 오픈소스 PDF 뷰어·편집기�
 ## 빌드
 
 ```bash
-# 사전 준비: cmake, ninja, vcpkg (VCPKG_ROOT 설정)
-python3 third_party/fetch_pdfium.py          # PDFium 바이너리 다운로드
+# 사전 준비: cmake ≥ 3.25, ninja, vcpkg (full clone) + export VCPKG_ROOT=<vcpkg 경로>
+python3 third_party/fetch_pdfium.py          # PDFium 바이너리 다운로드 (third_party/pdfium/<platform>/)
 cmake --preset dev
 cmake --build --preset dev
-ctest --preset dev --output-on-failure
+ctest --preset dev
+./build/dev/bin/onpdf_cli render some.pdf page0.png
+
+# Qt 앱 (Qt 6 필요. macOS: brew install qt && export QT_ROOT=$(brew --prefix qt))
+cmake --preset dev-app && cmake --build --preset dev-app
+./build/dev-app/bin/onpdf_app some.pdf
 ```
 
 ## 저장소 구조
@@ -53,6 +58,12 @@ testdata/     테스트 PDF (라이선스가 명확한 파일만)
 third_party/  PDFium 바이너리 다운로드 스크립트
 docs/         설계 문서, 기여 가이드
 ```
+
+## 기여
+
+git flow 로 운영합니다. `develop` 이 기본 브랜치이고 `main` 은 릴리스 전용입니다.
+작업은 이슈를 먼저 만든 뒤 `feature/<이슈번호>-<설명>` 브랜치에서 진행하고, `develop` 으로 PR 을 보냅니다.
+PR 은 CI(Windows·macOS·Linux) 통과 후 머지합니다.
 
 ## 라이선스
 

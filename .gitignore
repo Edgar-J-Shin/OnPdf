@@ -1,6 +1,8 @@
 # Build
 build/
 out/
+CMakeFiles/
+CMakeCache.txt
 vcpkg_installed/
 CMakeUserPresets.json
 compile_commands.json

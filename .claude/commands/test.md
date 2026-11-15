@@ -6,7 +6,7 @@ $ARGUMENTS 에 대한 코드 리뷰를 수행한다.
 
 1. `git branch --show-current`로 현재 브랜치명(`{branch}`)을 확인한다
 2. `.claude/workflow/{branch}/` 디렉토리의 모든 산출물을 Read한다
-3. `git diff main...HEAD`로 변경된 코드 전체를 확인한다
+3. `git diff develop...HEAD`로 변경된 코드 전체를 확인한다
 4. 체크리스트 기반 리뷰 수행
 
 ## 리뷰 체크리스트
@@ -87,5 +87,5 @@ $ARGUMENTS 에 대한 코드 리뷰를 수행한다.
 
 ### Step 3: 응답에 따른 분기
 - **"수정 후 재구현"** → `Skill` 도구로 `/develop` 명령을 **즉시** 실행한다
-- **"워크플로우 완료"** → 완료 안내 출력
+- **"워크플로우 완료"** → 커밋·푸시 후 PR 이 없으면 `gh pr create --base develop` (본문에 `Closes #이슈번호`, 테스트 요약). PR 링크와 CI 상태를 안내하고 종료. 머지는 사용자가 결정
 - **"여기서 중단"** / **"추가 수정 필요"** → 사용자 피드백 대기

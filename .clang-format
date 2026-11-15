@@ -1,0 +1,14 @@
+BasedOnStyle: Google
+ColumnLimit: 100
+IndentWidth: 2
+PointerAlignment: Left
+DerivePointerAlignment: false
+AllowShortFunctionsOnASingleLine: Inline
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^"onpdf/'
+    Priority: 1
+  - Regex: '^<fpdf'
+    Priority: 2
+  - Regex: '^<'
+    Priority: 3
