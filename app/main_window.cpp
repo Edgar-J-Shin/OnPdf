@@ -19,6 +19,7 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QPointer>
+#include <QScrollBar>
 #include <QSpinBox>
 #include <QStatusBar>
 #include <QTimer>
@@ -80,6 +81,10 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   });
 
   resize(900, 1000);
+}
+
+MainWindow::~MainWindow() {
+  view_->set_search(nullptr);  // 세션이 먼저 사라지므로 뷰가 댕글 포인터를 들지 않게
 }
 
 void MainWindow::build_menus() {
@@ -187,8 +192,9 @@ void MainWindow::reset_search() {
   search_ = std::make_unique<view::SearchSession>(
       [handle, dispatcher, self](int page, const std::string& query, view::SearchOptions options,
                                  view::SearchSession::PageCallback on_done) {
+        // kLow: 같은 우선순위 FIFO 라 텍스트 인덱스·프리페치 타일과 번갈아 처리된다 (굶기지 않음)
         return handle.search_page(
-            page, query, options, engine::Priority::kNormal,
+            page, query, options, engine::Priority::kLow,
             // 워커 스레드: 메인으로 넘기기만
             [dispatcher, self, on_done = std::move(on_done)](onpdf::Result<view::PageSearchResult> result) {
               auto shared = std::make_shared<onpdf::Result<view::PageSearchResult>>(std::move(result));
@@ -196,15 +202,18 @@ void MainWindow::reset_search() {
             });
       });
   search_->on_changed = [this] {
-    // 결과에 실려 온 인덱스를 뷰 캐시에 넣어 하이라이트·선택에 재사용
-    for (int page = 0; page < search_->page_count(); ++page) {
-      if (auto idx = search_->index_of(page)) view_->accept_index(page, idx);
-    }
     update_search_status();
     view_->viewport()->update();
   };
   search_->on_current_changed = [this] {
-    if (auto hit = search_->current()) view_->reveal(hit->page, hit->range);
+    if (auto hit = search_->current()) {
+      // 자동 선택된 첫 결과는 사용자가 검색 시작 후 스크롤하지 않았을 때만 따라간다
+      const bool user_moved = view_->verticalScrollBar()->value() != search_scroll_anchor_;
+      if (!search_->current_is_automatic() || !user_moved) {
+        view_->reveal(hit->page, search_->current_rects());
+        search_scroll_anchor_ = view_->verticalScrollBar()->value();
+      }
+    }
     update_search_status();
     view_->viewport()->update();
   };
@@ -214,11 +223,18 @@ void MainWindow::reset_search() {
 
 void MainWindow::open_find() {
   QString initial;
-  if (view_->has_selection()) {
+  // 선택이 한 쪽 안이고 그 쪽 인덱스가 이미 있을 때만 (미로드 쪽을 동기 로드하지 않도록)
+  const auto& sel = view_->selection();
+  if (view_->has_selection() && sel.start().page == sel.end().page &&
+      view_->text_index(sel.start().page) != nullptr) {
     const QString selected = view_->selected_text();
     if (!selected.contains(QLatin1Char('\n')) && selected.size() <= 100) initial = selected.trimmed();
   }
   search_bar_->open_with(initial);
+  // 다시 열었는데 입력이 그대로라 textChanged 가 오지 않는 경우: 비활성 세션이면 바로 검색
+  if (search_ && !search_->active() && !search_bar_->query().trimmed().isEmpty()) {
+    on_search_query(search_bar_->query(), search_bar_->options());
+  }
 }
 
 void MainWindow::on_search_query(const QString& query, view::SearchOptions options) {
@@ -228,13 +244,14 @@ void MainWindow::on_search_query(const QString& query, view::SearchOptions optio
     return;
   }
   const QByteArray utf8 = query.toUtf8();
+  search_scroll_anchor_ = view_->verticalScrollBar()->value();
   search_->start(std::string(utf8.constData(), static_cast<std::size_t>(utf8.size())), options,
                  view_->page_count(), std::max(0, view_->current_page()));
 }
 
 void MainWindow::on_find_next() {
   if (!search_ || !search_->active()) {
-    open_find();
+    open_find();  // 입력이 있으면 검색을 시작한다
     return;
   }
   if (search_->next()) {

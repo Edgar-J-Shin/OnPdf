@@ -225,19 +225,23 @@ Result<view::PageSearchResult> PdfiumDocument::search_page(int page_index, const
   if (!page) return std::unexpected(page.error());
   auto text_page = TextPage::load(page->get());
   if (!text_page) return std::unexpected(text_page.error());
-  auto index = text_page->extract(doc_.get(), page->get(), page_index);
-  if (!index) return std::unexpected(index.error());
 
   view::PageSearchResult result;
   result.page = page_index;
-  result.char_count = index->char_count();
-  for (const view::SourceRange& src : text_page->find(query_utf8, options)) {
+  result.char_count = text_page->raw_char_count();
+  // 먼저 찾고, 결과가 있을 때만 인덱스를 만든다 (검색 비용의 대부분이 인덱스 추출)
+  const std::vector<view::SourceRange> found = text_page->find(query_utf8, options);
+  if (found.empty()) return result;
+  auto index = text_page->extract(doc_.get(), page->get(), page_index);
+  if (!index) return std::unexpected(index.error());
+  for (const view::SourceRange& src : found) {
     const view::TextRange range = view::map_source_range(*index, src);
     if (!range.empty()) result.ranges.push_back(range);
   }
   std::sort(result.ranges.begin(), result.ranges.end(),
             [](const view::TextRange& a, const view::TextRange& b) { return a.start < b.start; });
-  if (!result.ranges.empty()) result.index = std::make_shared<const view::PageTextIndex>(std::move(*index));
+  result.rects.reserve(result.ranges.size());
+  for (const view::TextRange& range : result.ranges) result.rects.push_back(index->selection_rects(range));
   return result;
 }
 

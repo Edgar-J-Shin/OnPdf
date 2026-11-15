@@ -32,11 +32,13 @@ struct SourceRange {
   int count = 0;
 };
 
+// 쪽 하나의 검색 결과. 쪽 인덱스 전체를 싣지 않고 결과별 하이라이트 사각형만 싣는다
+// (흔한 검색어에 1,000쪽 문서여도 메모리가 결과 수에 비례하도록).
 struct PageSearchResult {
   int page = -1;
-  int char_count = 0;                           // 그 쪽 글자 수 (텍스트 없는 문서 판정용)
-  std::shared_ptr<const PageTextIndex> index;   // 결과가 있을 때만
-  std::vector<TextRange> ranges;                // 인덱스 기준, 오름차순, 비어 있지 않음
+  int char_count = 0;                        // 그 쪽 PDFium 글자 수 (텍스트 없는 문서 판정용)
+  std::vector<TextRange> ranges;             // 텍스트 인덱스 기준, 오름차순, 비어 있지 않음
+  std::vector<std::vector<Rect>> rects;      // ranges[i] 의 줄 단위 하이라이트 사각형 (쪽 포인트)
 };
 
 struct SearchHit {
@@ -90,13 +92,18 @@ class SearchSession {
   [[nodiscard]] bool wrapped() const noexcept { return wrapped_; }
 
   [[nodiscard]] const std::vector<TextRange>* hits_on(int page) const;
-  [[nodiscard]] std::shared_ptr<const PageTextIndex> index_of(int page) const;
+  [[nodiscard]] const std::vector<std::vector<Rect>>* rects_on(int page) const;
+  // 현재 결과의 하이라이트 사각형 (없으면 빈 벡터)
+  [[nodiscard]] std::vector<Rect> current_rects() const;
+  // 현재 결과가 사용자 이동(next/previous) 이 아니라 자동 선택(첫 결과 도착) 으로 정해졌는지
+  [[nodiscard]] bool current_is_automatic() const noexcept { return current_automatic_; }
 
   std::function<void()> on_changed;          // 결과 수·진행률 변화
   std::function<void()> on_current_changed;  // 현재 결과 변경 (스크롤 대상)
 
+  // 실행기 계약: on_done 은 동기·비동기 어느 쪽으로 불러도 된다. 동기 호출이어도 pump 는 재귀하지 않는다.
+
  private:
-  struct State;  // 콜백이 weak_ptr 로 잡는 내부 상태 (세션 소멸 후 늦은 콜백 무시)
   void pump();
   void on_page_done(int generation, int page, Result<PageSearchResult> result);
   void cancel_in_flight();
@@ -120,6 +127,11 @@ class SearchSession {
   std::size_t total_ = 0;
   long long chars_seen_ = 0;
   int pages_done_ = 0;
+  int pages_failed_ = 0;
+  bool cancelled_ = false;
+  bool in_pump_ = false;
+  bool repump_ = false;
+  bool current_automatic_ = false;
   bool truncated_ = false;
   bool wrapped_ = false;
   std::optional<SearchHit> current_;

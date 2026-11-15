@@ -561,45 +561,25 @@ void DocumentView::set_search(const view::SearchSession* search) {
   viewport()->update();
 }
 
-void DocumentView::accept_index(int page, std::shared_ptr<const view::PageTextIndex> index) {
-  if (!index || !layout_ || page < 0 || page >= layout_->page_count()) return;
-  if (!text_cache_.contains(page)) text_cache_.emplace(page, std::move(index));
-}
-
-const view::PageTextIndex* DocumentView::index_for_highlight(int page) const {
-  if (const auto* cached = text_index(page)) return cached;
-  if (search_ != nullptr) {
-    if (auto idx = search_->index_of(page)) return idx.get();
-  }
-  return nullptr;
-}
-
 void DocumentView::paint_search(QPainter& painter, int page, const QRectF& page_logical) {
   if (search_ == nullptr || !search_->active()) return;
   const std::vector<view::TextRange>* hits = search_->hits_on(page);
-  if (hits == nullptr || hits->empty()) return;
-  const view::PageTextIndex* index = index_for_highlight(page);
-  if (index == nullptr) return;
+  const std::vector<std::vector<onpdf::Rect>>* rects = search_->rects_on(page);
+  if (hits == nullptr || rects == nullptr) return;
   const auto current = search_->current();
   const double k = layout_->scale() / dpr();
   painter.setPen(Qt::NoPen);
-  for (const view::TextRange& range : *hits) {
-    const bool is_current = current && current->page == page && current->range == range;
+  for (std::size_t i = 0; i < hits->size() && i < rects->size(); ++i) {
+    const bool is_current = current && current->page == page && current->range == (*hits)[i];
     painter.setBrush(is_current ? kSearchCurrentColor : kSearchHitColor);
-    for (const onpdf::Rect& r : index->selection_rects(range)) {
+    for (const onpdf::Rect& r : (*rects)[i]) {
       painter.drawRect(QRectF(page_logical.x() + r.x * k, page_logical.y() + r.y * k, r.w * k, r.h * k));
     }
   }
 }
 
-void DocumentView::reveal(int page, view::TextRange range) {
+void DocumentView::reveal(int page, const std::vector<onpdf::Rect>& rects) {
   if (!layout_ || page < 0 || page >= layout_->page_count()) return;
-  const view::PageTextIndex* index = index_for_highlight(page);
-  if (index == nullptr) {
-    go_to_page(page);
-    return;
-  }
-  const auto rects = index->selection_rects(range);
   if (rects.empty()) {
     go_to_page(page);
     return;

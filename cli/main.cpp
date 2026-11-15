@@ -30,8 +30,8 @@ int usage() {
       "  onpdf_cli render <in.pdf> <out.png> [--page N] [--scale S] [--rotate R] [--password PW]\n"
       "  onpdf_cli tiles  <in.pdf> <out-dir> [--page N] [--scale S] [--password PW]\n"
       "  onpdf_cli text   <in.pdf> [--page N] [--password PW]   (chars/lines/links + extracted text)\n"
-      "  onpdf_cli search <in.pdf> <query> [--case] [--word] [--password PW]\n"
-      "                   (writes 512px tile PNGs, stitched.png and full.png)\n",
+      "                   (writes 512px tile PNGs, stitched.png and full.png)\n"
+      "  onpdf_cli search <in.pdf> <query> [--case] [--word] [--password PW]\n",
       stderr);
   return 2;
 }
@@ -233,16 +233,22 @@ int cmd_search(const Args& args) {
   options.match_case = args.match_case;
   options.whole_word = args.whole_word;
   const std::string query = onpdf::view::normalize_query(args.positional[1]);
+  if (query.empty()) {
+    std::fprintf(stderr, "error: empty query\n");
+    return 2;
+  }
   std::size_t total = 0;
   for (int page = 0; page < doc->page_count(); ++page) {
     auto r = doc->search_page(page, query, options);
     if (!r) return fail(r.error());
     if (r->ranges.empty()) continue;
     std::printf("page %d: %zu hit(s)\n", page + 1, r->ranges.size());
+    auto index = doc->load_text(page);  // 문맥 출력용
+    if (!index) return fail(index.error());
     for (const auto& range : r->ranges) {
       const int from = std::max(0, range.start - 20);
-      const int to = std::min(r->index->char_count(), range.end + 20);
-      std::string context = r->index->text({from, to});
+      const int to = std::min(index->char_count(), range.end + 20);
+      std::string context = index->text({from, to});
       for (char& c : context) {
         if (c == '\n') c = ' ';
       }

@@ -22,6 +22,7 @@ class MainWindow : public QMainWindow {
   Q_OBJECT
  public:
   MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, QWidget* parent = nullptr);
+  ~MainWindow() override;
 
   void open_file(const QString& path);
   // 검색 바를 연다 (편집 > 찾기). 선택이 한 줄·100자 이하면 검색어로
@@ -74,6 +75,7 @@ class MainWindow : public QMainWindow {
   QAction* find_previous_action_ = nullptr;
   SearchBar* search_bar_ = nullptr;
   std::unique_ptr<view::SearchSession> search_;
+  int search_scroll_anchor_ = 0;  // 검색 시작 시 스크롤 위치. 사용자가 움직였으면 첫 결과로 끌고 가지 않는다
   QString screenshot_path_;
 };
 

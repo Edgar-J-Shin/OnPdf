@@ -78,8 +78,11 @@ void SearchSession::start(std::string query, SearchOptions options, int page_cou
   total_ = 0;
   chars_seen_ = 0;
   pages_done_ = 0;
+  pages_failed_ = 0;
+  cancelled_ = false;
   truncated_ = false;
   wrapped_ = false;
+  current_automatic_ = false;
   current_.reset();
   notify_changed();
   if (on_current_changed) on_current_changed();
@@ -90,7 +93,21 @@ void SearchSession::cancel() {
   cancel_in_flight();
   ++generation_;
   next_order_ = order_.size();  // 남은 쪽 발행 안 함
+  cancelled_ = true;
+  // 남은 결과 중 검색 순서상 첫 결과를 현재로 (대기 중이던 앞 쪽은 이제 오지 않는다)
+  bool changed = false;
+  if (!current_) {
+    for (int p : order_) {
+      if (auto it = results_.find(p); it != results_.end()) {
+        current_ = SearchHit{p, it->second.ranges.front()};
+        current_automatic_ = true;
+        changed = true;
+        break;
+      }
+    }
+  }
   notify_changed();
+  if (changed && on_current_changed) on_current_changed();
 }
 
 void SearchSession::clear() {
@@ -103,9 +120,12 @@ void SearchSession::clear() {
   total_ = 0;
   chars_seen_ = 0;
   pages_done_ = 0;
+  pages_failed_ = 0;
   page_count_ = 0;
+  cancelled_ = false;
   truncated_ = false;
   wrapped_ = false;
+  current_automatic_ = false;
   current_.reset();
   notify_changed();
   if (on_current_changed) on_current_changed();
@@ -115,25 +135,46 @@ bool SearchSession::searching() const noexcept {
   return active() && !truncated_ && (next_order_ < order_.size() || !in_flight_.empty());
 }
 
-bool SearchSession::no_text() const noexcept { return active() && !searching() && chars_seen_ == 0; }
+bool SearchSession::no_text() const noexcept {
+  // 모든 쪽을 실제로 검색했고(취소·실패 없이) 글자가 하나도 없을 때만
+  return active() && !searching() && !cancelled_ && !truncated_ && pages_failed_ == 0 &&
+         pages_done_ == page_count_ && chars_seen_ == 0;
+}
 
 void SearchSession::notify_changed() {
   if (on_changed) on_changed();
 }
 
 void SearchSession::pump() {
-  while (next_order_ < order_.size() && static_cast<int>(in_flight_.size()) < max_in_flight_ && !truncated_) {
-    const int page = order_[next_order_++];
-    const int generation = generation_;
-    std::weak_ptr<int> alive = alive_;
-    // 동기 실행기는 executor_ 안에서 바로 콜백하므로, 핸들 자리를 먼저 만든다
-    in_flight_.emplace(page, engine::TaskHandle{});
-    engine::TaskHandle handle = executor_(page, query_, options_, [this, alive, generation, page](Result<PageSearchResult> r) {
-      if (alive.expired()) return;
-      on_page_done(generation, page, std::move(r));
-    });
-    if (auto it = in_flight_.find(page); it != in_flight_.end()) it->second = std::move(handle);
+  // 비재귀: 동기 실행기가 executor_ 안에서 on_page_done → pump 를 부르면 표시만 하고 바깥 루프가 이어 간다
+  if (in_pump_) {
+    repump_ = true;
+    return;
   }
+  in_pump_ = true;
+  std::weak_ptr<int> alive = alive_;
+  do {
+    repump_ = false;
+    while (next_order_ < order_.size() && static_cast<int>(in_flight_.size()) < max_in_flight_ && !truncated_) {
+      const int page = order_[next_order_++];
+      const int generation = generation_;
+      // 동기 실행기는 executor_ 안에서 바로 콜백하므로, 핸들 자리를 먼저 만든다
+      in_flight_.emplace(page, engine::TaskHandle{});
+      engine::TaskHandle handle =
+          executor_(page, query_, options_, [this, alive, generation, page](Result<PageSearchResult> r) {
+            if (alive.expired()) return;
+            on_page_done(generation, page, std::move(r));
+          });
+      if (alive.expired()) return;  // 콜백 안에서 세션이 사라졌다
+      // 그 사이 같은 쪽의 새 요청(재진입 start)이 생겼다면 덮어쓰지 않는다
+      if (generation == generation_) {
+        if (auto it = in_flight_.find(page); it != in_flight_.end()) it->second = std::move(handle);
+      } else {
+        handle.cancel();
+      }
+    }
+  } while (repump_);
+  in_pump_ = false;
 }
 
 void SearchSession::on_page_done(int generation, int page, Result<PageSearchResult> result) {
@@ -145,13 +186,17 @@ void SearchSession::on_page_done(int generation, int page, Result<PageSearchResu
   if (result) {
     r = std::move(*result);
     r.page = page;
-  } else if (result.error().code != ErrorCode::kCancelled && result.error().code != ErrorCode::kInvalidState) {
-    std::fprintf(stderr, "[onpdf] search failed for page %d: %s\n", page, result.error().message.c_str());
+  } else {
+    ++pages_failed_;
+    if (result.error().code != ErrorCode::kCancelled && result.error().code != ErrorCode::kInvalidState) {
+      std::fprintf(stderr, "[onpdf] search failed for page %d: %s\n", page, result.error().message.c_str());
+    }
   }
   chars_seen_ += r.char_count;
   if (!r.ranges.empty()) {
     if (total_ + r.ranges.size() > max_hits_) {
       r.ranges.resize(max_hits_ - total_);
+      if (r.rects.size() > r.ranges.size()) r.rects.resize(r.ranges.size());
       truncated_ = true;
     }
     total_ += r.ranges.size();
@@ -170,6 +215,7 @@ void SearchSession::on_page_done(int generation, int page, Result<PageSearchResu
       const int p = order_[static_cast<std::size_t>(i)];
       if (auto it = results_.find(p); it != results_.end()) {
         current_ = SearchHit{p, it->second.ranges.front()};
+        current_automatic_ = true;
         current_changed = true;
         break;
       }
@@ -178,8 +224,11 @@ void SearchSession::on_page_done(int generation, int page, Result<PageSearchResu
       if (!done) break;
     }
   }
+  std::weak_ptr<int> alive = alive_;
   notify_changed();
+  if (alive.expired()) return;  // 콜백이 세션을 없앴다
   if (current_changed && on_current_changed) on_current_changed();
+  if (alive.expired()) return;
   pump();
 }
 
@@ -216,7 +265,13 @@ bool SearchSession::next() {
   if (total_ == 0) return false;
   const auto hits = ordered_hits();
   if (!current_) {
-    current_ = hits.front();
+    // 아직 현재가 없으면(시작 쪽 대기 중) 검색 순서상 첫 결과
+    for (int p : order_) {
+      if (auto it = results_.find(p); it != results_.end()) {
+        current_ = SearchHit{p, it->second.ranges.front()};
+        break;
+      }
+    }
   } else {
     auto it = std::upper_bound(hits.begin(), hits.end(), *current_, [](const SearchHit& a, const SearchHit& b) {
       return a.page != b.page ? a.page < b.page : a.range.start < b.range.start;
@@ -229,6 +284,7 @@ bool SearchSession::next() {
       current_ = *it;
     }
   }
+  current_automatic_ = false;
   if (on_current_changed) on_current_changed();
   return true;
 }
@@ -251,6 +307,7 @@ bool SearchSession::previous() {
       current_ = *std::prev(it);
     }
   }
+  current_automatic_ = false;
   if (on_current_changed) on_current_changed();
   return true;
 }
@@ -260,9 +317,20 @@ const std::vector<TextRange>* SearchSession::hits_on(int page) const {
   return it == results_.end() ? nullptr : &it->second.ranges;
 }
 
-std::shared_ptr<const PageTextIndex> SearchSession::index_of(int page) const {
+const std::vector<std::vector<Rect>>* SearchSession::rects_on(int page) const {
   auto it = results_.find(page);
-  return it == results_.end() ? nullptr : it->second.index;
+  return it == results_.end() ? nullptr : &it->second.rects;
+}
+
+std::vector<Rect> SearchSession::current_rects() const {
+  if (!current_) return {};
+  auto it = results_.find(current_->page);
+  if (it == results_.end()) return {};
+  const auto& r = it->second;
+  for (std::size_t i = 0; i < r.ranges.size() && i < r.rects.size(); ++i) {
+    if (r.ranges[i] == current_->range) return r.rects[i];
+  }
+  return {};
 }
 
 }  // namespace onpdf::view

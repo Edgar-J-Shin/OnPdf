@@ -135,9 +135,8 @@ TEST_F(SearchFlowTest, FindsNavigatesAndWraps) {
     spin_until([&] { return window_.document_view()->pending_visible_tiles() == 0; }, 3000);
     window_.grab().save(QString::fromLocal8Bit(shot));
   }
-  // 하이라이트에 필요한 인덱스가 뷰 캐시에 들어갔다
-  EXPECT_NE(window_.document_view()->text_index(0), nullptr);
-  EXPECT_NE(window_.document_view()->text_index(1), nullptr);
+  // 하이라이트 사각형이 결과에 실려 있다 (쪽 인덱스 없이)
+  EXPECT_FALSE(s().current_rects().empty());
   // Esc → 검색 해제
   press(window_.search_bar()->line_edit(), Qt::Key_Escape);
   EXPECT_FALSE(s().active());
@@ -149,9 +148,9 @@ TEST_F(SearchFlowTest, KoreanAndNoResults) {
   ASSERT_TRUE(search(QStringLiteral("한글")));
   EXPECT_EQ(s().total(), 1u);
   ASSERT_TRUE(s().current().has_value());
-  const auto* idx = window_.document_view()->text_index(0);
-  ASSERT_NE(idx, nullptr);
-  EXPECT_EQ(idx->text(s().current()->range), "한글");
+  // 보이는 쪽 인덱스는 일반 경로로 로드된다 → 결과 범위의 텍스트가 검색어와 같다
+  ASSERT_TRUE(spin_until([&] { return window_.document_view()->text_index(0) != nullptr; }));
+  EXPECT_EQ(window_.document_view()->text_index(0)->text(s().current()->range), "한글");
   ASSERT_TRUE(search(QStringLiteral("없는단어")));
   EXPECT_EQ(s().total(), 0u);
   EXPECT_EQ(window_.search_bar()->status_text(), QStringLiteral("결과 없음"));
@@ -185,14 +184,57 @@ TEST_F(SearchFlowTest, LargeDocumentSearchStaysResponsive) {
 TEST_F(SearchFlowTest, ReplacingDocumentRestartsSearch) {
   ASSERT_TRUE(open("simple.pdf"));
   ASSERT_TRUE(search(QStringLiteral("page")));
-  EXPECT_EQ(s().total(), 2u);
-  // 검색 바가 열린 채 다른 문서를 열면 같은 검색어로 다시 찾는다
+  // 검색 바가 열린 채 다른 문서를 열면 같은 검색어로 다시 찾는다.
+  // 세션 포인터 비교는 쓸 수 없다(해제 후 같은 주소에 새 세션이 할당될 수 있음) → 새 문서에만 있는 결과 위치로 판정:
+  // simple.pdf 1쪽 "page" 는 쪽 위쪽(y≈50pt), annotations.pdf 1쪽 "go to page 2" 는 y≈410pt
   window_.open_file(QString::fromStdString(onpdf::path_to_utf8(testdata("annotations.pdf"))));
-  ASSERT_TRUE(spin_until([&] { return window_.document_view()->page_count() == 2 && window_.search_session() &&
-                                      window_.search_session()->active() && !window_.search_session()->searching(); }));
+  auto first_hit_y = [&]() -> double {
+    const auto* sess = window_.search_session();
+    if (sess == nullptr || !sess->active() || sess->searching()) return -1;
+    const auto* rects = sess->rects_on(0);
+    if (rects == nullptr || rects->empty() || rects->front().empty()) return -1;
+    return rects->front().front().y;
+  };
+  ASSERT_TRUE(spin_until([&] {
+    return window_.windowTitle().contains(QStringLiteral("annotations")) && first_hit_y() > 300;
+  })) << "first hit y=" << first_hit_y();
   EXPECT_EQ(s().query(), "page");
-  EXPECT_GE(s().total(), 1u);  // "go to page 2", "Link target: page 2" 등
+  ASSERT_GE(s().total(), 2u);
+  ASSERT_NE(s().hits_on(1), nullptr);
 }
 
+TEST_F(SearchFlowTest, ReopenAfterEscapeSearchesAgain) {
+  ASSERT_TRUE(open("simple.pdf"));
+  ASSERT_TRUE(search(QStringLiteral("page")));
+  press(window_.search_bar()->line_edit(), Qt::Key_Escape);
+  EXPECT_FALSE(s().active());
+  // 같은 입력이 남아 있는 채로 다시 열면 바로 검색이 다시 시작되어야 한다 (리뷰 W1)
+  window_.open_find();
+  ASSERT_TRUE(spin_until([&] { return s().active() && !s().searching(); }));
+  EXPECT_EQ(s().total(), 2u);
+  EXPECT_EQ(window_.search_bar()->status_text(), QStringLiteral("1 / 2"));
+}
+
+TEST_F(SearchFlowTest, EscapeDuringDebounceDoesNotSearch) {
+  ASSERT_TRUE(open("simple.pdf"));
+  window_.open_find();
+  window_.search_bar()->line_edit()->setText(QStringLiteral("page"));
+  press(window_.search_bar()->line_edit(), Qt::Key_Escape);  // 디바운스 중 닫기 (리뷰 W2)
+  spin_until([] { return false; }, SearchBar::kDebounceMs * 2);
+  EXPECT_FALSE(s().active());
+  EXPECT_FALSE(window_.search_bar()->isVisible());
+}
+
+TEST_F(SearchFlowTest, SearchDoesNotStarveTextIndexing) {
+  // 검색 중에도 새로 스크롤한 쪽의 텍스트 인덱스가 로드되어야 한다 (리뷰 W4: kLow 굶김)
+  ASSERT_TRUE(open("large-1000.pdf"));
+  window_.open_find();
+  window_.search_bar()->line_edit()->setText(QStringLiteral("Page"));
+  press(window_.search_bar()->line_edit(), Qt::Key_Return);
+  window_.document_view()->go_to_page(800);
+  ASSERT_TRUE(spin_until([&] { return window_.document_view()->text_index(800) != nullptr; }, 10000));
+  ASSERT_TRUE(spin_until([&] { return !s().searching(); }, 30000));
+  EXPECT_EQ(s().total(), 1000u);
+}
 }  // namespace
 }  // namespace onpdf::app

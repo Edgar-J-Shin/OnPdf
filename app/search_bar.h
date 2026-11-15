@@ -44,6 +44,7 @@ class SearchBar : public QWidget {
  private:
   void emit_query();
   void set_no_match(bool no_match);
+  void close_bar();
 
   QLineEdit* edit_ = nullptr;
   QLabel* status_ = nullptr;

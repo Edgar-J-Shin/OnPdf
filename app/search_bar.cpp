@@ -1,6 +1,8 @@
 #include "search_bar.h"
 
 #include <QHBoxLayout>
+#include <QPalette>
+#include <QStyle>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
@@ -52,10 +54,7 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
   connect(word_, &QToolButton::toggled, this, &SearchBar::emit_query);
   connect(prev_, &QToolButton::clicked, this, &SearchBar::previous_requested);
   connect(next_, &QToolButton::clicked, this, &SearchBar::next_requested);
-  connect(close_, &QToolButton::clicked, this, [this] {
-    hide();
-    emit closed();
-  });
+  connect(close_, &QToolButton::clicked, this, &SearchBar::close_bar);
   hide();
 }
 
@@ -84,8 +83,21 @@ void SearchBar::emit_query() {
   emit query_changed(edit_->text(), options());
 }
 
+void SearchBar::close_bar() {
+  debounce_.stop();  // 닫은 뒤에 대기 중이던 검색이 실행되지 않도록
+  hide();
+  emit closed();
+}
+
 void SearchBar::set_no_match(bool no_match) {
-  edit_->setStyleSheet(no_match ? QStringLiteral("QLineEdit { background: #ffe0e0; color: #000; }") : QString());
+  // stylesheet 는 네이티브 테두리를 없애므로 팔레트만 바꾼다
+  QPalette palette = edit_->style()->standardPalette();
+  palette = QPalette(edit_->palette().resolve(QPalette()));
+  if (no_match) {
+    palette.setColor(QPalette::Base, QColor(0xff, 0xe0, 0xe0));
+    palette.setColor(QPalette::Text, Qt::black);
+  }
+  edit_->setPalette(no_match ? palette : QPalette());
 }
 
 void SearchBar::set_status(std::size_t ordinal, std::size_t total, bool searching, bool truncated, bool no_text) {
@@ -107,7 +119,8 @@ void SearchBar::set_status(std::size_t ordinal, std::size_t total, bool searchin
     return;
   }
   set_no_match(false);
-  QString text = QStringLiteral("%1 / %2").arg(ordinal).arg(total);
+  // 시작 쪽이 아직 검색 중이면 현재 결과가 정해지지 않았다
+  QString text = ordinal == 0 ? QStringLiteral("– / %1").arg(total) : QStringLiteral("%1 / %2").arg(ordinal).arg(total);
   if (truncated) {
     text += tr("+ (너무 많음)");
   } else if (searching) {
@@ -129,8 +142,7 @@ bool SearchBar::eventFilter(QObject* watched, QEvent* event) {
       return true;
     }
     if (key->key() == Qt::Key_Escape) {
-      hide();
-      emit closed();
+      close_bar();
       return true;
     }
   }

@@ -178,66 +178,85 @@ TEST(TextPage, LineHeuristicsHandleRotatedMatrixAndScaledFont) {
 }
 
 // ---- 검색 (search_page) ----
-view::PageSearchResult search(const char* file, int page, const char* query, view::SearchOptions o = {}) {
+struct SearchOutcome {
+  view::PageSearchResult result;
+  std::shared_ptr<const view::PageTextIndex> index;  // 결과 텍스트 확인용 (별도 로드)
+  [[nodiscard]] std::string text(std::size_t i) const { return index ? index->text(result.ranges[i]) : std::string{}; }
+};
+
+void run_search(const char* file, int page, const char* query, view::SearchOptions o, SearchOutcome& out) {
   auto doc = PdfiumDocument::open(testdata(file));
-  EXPECT_TRUE(doc) << doc.error().message;
+  ASSERT_TRUE(doc) << doc.error().message;
   auto r = doc->search_page(page, query, o);
-  EXPECT_TRUE(r) << r.error().message;
-  return r ? *r : view::PageSearchResult{};
+  ASSERT_TRUE(r) << r.error().message;
+  out.result = std::move(*r);
+  auto idx = doc->load_text(page);
+  ASSERT_TRUE(idx) << idx.error().message;
+  out.index = std::make_shared<const view::PageTextIndex>(std::move(*idx));
+}
+
+SearchOutcome search(const char* file, int page, const char* query, view::SearchOptions o = {}) {
+  SearchOutcome out;
+  run_search(file, page, query, o, out);
+  return out;
 }
 
 TEST(TextPageSearch, KoreanEmbedded) {
   const auto r = search("korean-embedded.pdf", 0, "한글");
-  ASSERT_EQ(r.ranges.size(), 1u);
-  ASSERT_NE(r.index, nullptr);
-  EXPECT_EQ(r.index->text(r.ranges[0]), "한글");
-  EXPECT_EQ(r.char_count, 103);
+  ASSERT_EQ(r.result.ranges.size(), 1u);
+  EXPECT_EQ(r.text(0), "한글");
+  ASSERT_EQ(r.result.rects.size(), 1u);
+  EXPECT_EQ(r.result.rects[0].size(), 1u);
+  EXPECT_GT(r.result.char_count, 100);  // PDFium 원본 글자 수 (줄바꿈 포함)
 }
 
 TEST(TextPageSearch, CaseAndWholeWord) {
-  EXPECT_EQ(search("simple.pdf", 0, "page").ranges.size(), 1u);  // "test page"
-  EXPECT_EQ(search("simple.pdf", 1, "page").ranges.size(), 1u);  // "Page 2"
+  EXPECT_EQ(search("simple.pdf", 0, "page").result.ranges.size(), 1u);  // "test page"
+  EXPECT_EQ(search("simple.pdf", 1, "page").result.ranges.size(), 1u);  // "Page 2"
   view::SearchOptions match_case;
   match_case.match_case = true;
-  EXPECT_EQ(search("simple.pdf", 1, "page", match_case).ranges.size(), 0u);
-  EXPECT_EQ(search("simple.pdf", 1, "Page", match_case).ranges.size(), 1u);
+  EXPECT_EQ(search("simple.pdf", 1, "page", match_case).result.ranges.size(), 0u);
+  EXPECT_EQ(search("simple.pdf", 1, "Page", match_case).result.ranges.size(), 1u);
   view::SearchOptions word;
   word.whole_word = true;
-  EXPECT_EQ(search("simple.pdf", 0, "tes", word).ranges.size(), 0u);
-  EXPECT_EQ(search("simple.pdf", 0, "test", word).ranges.size(), 1u);
-  EXPECT_EQ(search("simple.pdf", 0, "tes").ranges.size(), 1u);
+  EXPECT_EQ(search("simple.pdf", 0, "tes", word).result.ranges.size(), 0u);
+  EXPECT_EQ(search("simple.pdf", 0, "test", word).result.ranges.size(), 1u);
+  EXPECT_EQ(search("simple.pdf", 0, "tes").result.ranges.size(), 1u);
 }
 
 TEST(TextPageSearch, NoTextAndNoHits) {
   const auto scanned = search("scanned.pdf", 0, "a");
-  EXPECT_TRUE(scanned.ranges.empty());
-  EXPECT_EQ(scanned.char_count, 0);
-  EXPECT_EQ(scanned.index, nullptr);
+  EXPECT_TRUE(scanned.result.ranges.empty());
+  EXPECT_EQ(scanned.result.char_count, 0);
   const auto none = search("simple.pdf", 0, "zzzz");
-  EXPECT_TRUE(none.ranges.empty());
-  EXPECT_EQ(none.index, nullptr);  // 결과 없는 쪽은 인덱스를 담지 않는다
-  EXPECT_GT(none.char_count, 0);
+  EXPECT_TRUE(none.result.ranges.empty());
+  EXPECT_TRUE(none.result.rects.empty());
+  EXPECT_GT(none.result.char_count, 0);
 }
 
 TEST(TextPageSearch, SystemFontRotatedAndSuperscript) {
   const auto sys = search("korean-system-font.pdf", 0, "시스템");
-  ASSERT_EQ(sys.ranges.size(), 1u);
-  EXPECT_EQ(sys.index->text(sys.ranges[0]), "시스템");
+  ASSERT_EQ(sys.result.ranges.size(), 1u);
+  EXPECT_EQ(sys.text(0), "시스템");
   const auto rot = search("mixed-sizes.pdf", 5, "Rotate");
-  ASSERT_EQ(rot.ranges.size(), 1u);
-  const auto rects = rot.index->selection_rects(rot.ranges[0]);
-  ASSERT_EQ(rects.size(), 1u);
-  EXPECT_GT(rects[0].h, rects[0].w);  // 회전 쪽: 세로로 긴 하이라이트
+  ASSERT_EQ(rot.result.ranges.size(), 1u);
+  ASSERT_EQ(rot.result.rects[0].size(), 1u);
+  EXPECT_GT(rot.result.rects[0][0].h, rot.result.rects[0][0].w);  // 회전 쪽: 세로로 긴 하이라이트
   const auto sup = search("text-layout.pdf", 0, "E=mc2");
-  ASSERT_EQ(sup.ranges.size(), 1u);
-  EXPECT_EQ(sup.index->text(sup.ranges[0]), "E=mc2");
+  ASSERT_EQ(sup.result.ranges.size(), 1u);
+  EXPECT_EQ(sup.text(0), "E=mc2");
 }
 
 TEST(TextPageSearch, MultipleHitsInLargeDocumentPage) {
-  // large-1000 의 500쪽(인덱스 499): "Page 500 / 1000"
   const auto r = search("large-1000.pdf", 499, "Page 500");
-  ASSERT_EQ(r.ranges.size(), 1u);
-  EXPECT_EQ(r.index->text(r.ranges[0]), "Page 500");
+  ASSERT_EQ(r.result.ranges.size(), 1u);
+  EXPECT_EQ(r.text(0), "Page 500");
+}
+
+TEST(TextPageSearch, InvalidUtf8QueryDoesNotTruncate) {
+  // overlong "C0 80"(U+0000) 은 U+FFFD 로 바뀌어야 한다. NUL 이면 쿼리가 비어 모든 위치에 맞을 수 있다
+  const auto r = search("simple.pdf", 0, "\xC0\x80page");
+  EXPECT_TRUE(r.result.ranges.empty());
 }
 
 TEST(TextPage, BookmarksPdfHasNoLinkAnnotations) {

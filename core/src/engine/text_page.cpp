@@ -98,7 +98,9 @@ std::vector<unsigned short> to_wide(const std::string& utf8) {
       }
       cp = (cp << 6) | (cc & 0x3F);
     }
-    if (!ok || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
+    // overlong(C0 80 → U+0000 등)은 거부: NUL 이 쿼리를 잘라 버린다
+    static constexpr char32_t kMin[5] = {0, 0, 0x80, 0x800, 0x10000};
+    if (!ok || cp < kMin[len] || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
       push(0xFFFD);
       ++i;
       continue;
@@ -265,6 +267,11 @@ Result<view::PageTextIndex> TextPage::extract(FPDF_DOCUMENT doc, FPDF_PAGE page,
     index.links.push_back(std::move(link));
   }
   return index;
+}
+
+int TextPage::raw_char_count() const {
+  PdfiumLibrary::assert_current_thread();
+  return std::max(0, FPDFText_CountChars(text_page_.get()));
 }
 
 std::vector<view::SourceRange> TextPage::find(const std::string& query_utf8, view::SearchOptions options) const {

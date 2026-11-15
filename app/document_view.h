@@ -75,10 +75,8 @@ class DocumentView : public QAbstractScrollArea {
   // ---- 검색 ----
   // 하이라이트할 검색 세션 (비소유). nullptr 이면 검색 하이라이트 없음
   void set_search(const view::SearchSession* search);
-  // 검색 결과에 실려 온 인덱스를 텍스트 캐시에 넣는다 (없을 때만)
-  void accept_index(int page, std::shared_ptr<const view::PageTextIndex> index);
-  // 범위가 뷰포트 밖이면 그 범위가 뷰포트 세로 1/3 지점에 오도록 스크롤
-  void reveal(int page, view::TextRange range);
+  // 사각형(쪽 포인트)이 뷰포트 밖이면 뷰포트 세로 1/3 지점에 오도록 스크롤
+  void reveal(int page, const std::vector<onpdf::Rect>& rects);
   // 테스트·도구용: 쪽 포인트 → 뷰포트 논리 좌표 (쪽이 뷰포트 밖이어도 계산)
   [[nodiscard]] QPointF page_point_to_viewport(int page, onpdf::Point pt) const;
   [[nodiscard]] std::optional<std::pair<int, onpdf::Point>> page_point_at(QPointF viewport_pos) const;
@@ -131,7 +129,6 @@ class DocumentView : public QAbstractScrollArea {
   void on_text_index(int page, int generation, std::shared_ptr<const view::PageTextIndex> index, bool cancelled);
   void paint_selection(QPainter& painter, int page, const QRectF& page_logical);
   void paint_search(QPainter& painter, int page, const QRectF& page_logical);
-  [[nodiscard]] const view::PageTextIndex* index_for_highlight(int page) const;
   [[nodiscard]] view::TextPos position_at(QPointF viewport_pos) const;  // 가장 가까운 선택 위치 (쪽 밖은 clamp)
   void update_hover(QPointF viewport_pos);
   void set_selection(view::TextPos anchor, view::TextPos focus);

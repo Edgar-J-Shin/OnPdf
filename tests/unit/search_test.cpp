@@ -67,8 +67,10 @@ class FakeExecutor {
     PageSearchResult r;
     r.page = page;
     r.char_count = chars;
-    for (int i = 0; i < hits; ++i) r.ranges.push_back({i * 10, i * 10 + 3});
-    if (hits > 0) r.index = std::make_shared<const PageTextIndex>();
+    for (int i = 0; i < hits; ++i) {
+      r.ranges.push_back({i * 10, i * 10 + 3});
+      r.rects.push_back({Rect{static_cast<double>(i) * 10, 0, 30, 12}});
+    }
     p.cb(std::move(r));
   }
   void fail(int page) {
@@ -147,7 +149,10 @@ TEST(SearchSession, NextPreviousAndWrapOnlyAfterSearchEnds) {
   ASSERT_NE(s.hits_on(1), nullptr);
   EXPECT_EQ(s.hits_on(1)->size(), 2u);
   EXPECT_EQ(s.hits_on(2), nullptr);
-  EXPECT_NE(s.index_of(1), nullptr);
+  ASSERT_NE(s.rects_on(1), nullptr);
+  EXPECT_EQ(s.rects_on(1)->size(), 2u);
+  EXPECT_EQ(s.current_rects().size(), 1u);
+  EXPECT_FALSE(s.current_is_automatic());
 }
 
 TEST(SearchSession, RestartCancelsAndIgnoresLateResults) {
@@ -193,17 +198,91 @@ TEST(SearchSession, TruncatesAtMaxHits) {
   EXPECT_TRUE(fake.pending.empty());
 }
 
-TEST(SearchSession, FailedPageCountsAsDoneAndNoTextDetection) {
+TEST(SearchSession, FailedPageCountsAsDoneButBlocksNoText) {
   FakeExecutor fake;
   SearchSession s(fake.executor(), 3);
   s.start("q", {}, 3, 0);
   fake.fail(0);
   fake.complete(1, 0, 0);
-  EXPECT_FALSE(s.no_text());  // 아직 검색 중
   fake.complete(2, 0, 0);
   EXPECT_EQ(s.pages_done(), 3);
-  EXPECT_TRUE(s.no_text());
+  EXPECT_FALSE(s.searching());
+  // 실패한 쪽이 있으면 "텍스트 없음" 이라고 단정하지 않는다 (리뷰 I1)
+  EXPECT_FALSE(s.no_text());
   EXPECT_FALSE(s.next());
+}
+
+TEST(SearchSession, NoTextWhenEveryPageSearchedWithZeroChars) {
+  FakeExecutor fake;
+  SearchSession s(fake.executor(), 3);
+  s.start("q", {}, 3, 0);
+  fake.complete(0, 0, 0);
+  fake.complete(1, 0, 0);
+  EXPECT_FALSE(s.no_text());  // 아직 검색 중
+  fake.complete(2, 0, 0);
+  EXPECT_TRUE(s.no_text());
+}
+
+TEST(SearchSession, CancelKeepsResultsAndIsNotNoText) {
+  FakeExecutor fake;
+  SearchSession s(fake.executor(), 2);
+  s.start("q", {}, 4, 0);
+  fake.complete(1, 2);  // 0 쪽 대기 중이라 현재 없음
+  EXPECT_FALSE(s.current().has_value());
+  s.cancel();
+  EXPECT_FALSE(s.searching());
+  EXPECT_FALSE(s.no_text());  // 다 검색하지 않았으므로 "텍스트 없음" 이 아니다
+  ASSERT_TRUE(s.current().has_value());  // 남은 결과에서 현재 선택
+  EXPECT_EQ(s.current()->page, 1);
+  EXPECT_TRUE(s.current_is_automatic());
+  EXPECT_EQ(s.current_ordinal(), 1u);
+}
+
+TEST(SearchSession, SynchronousExecutorDoesNotRecurse) {
+  // 실행기가 즉시 콜백해도 pump 가 재귀하지 않아야 한다 (20만 쪽에서 스택 오버플로 방지)
+  int depth = 0, max_depth = 0;
+  SearchSession* self = nullptr;
+  SearchSession s(
+      [&](int page, const std::string&, SearchOptions, SearchSession::PageCallback cb) {
+        ++depth;
+        max_depth = std::max(max_depth, depth);
+        PageSearchResult r;
+        r.page = page;
+        r.char_count = 5;
+        if (page % 1000 == 7) {
+          r.ranges.push_back({0, 1});
+          r.rects.push_back({Rect{0, 0, 1, 1}});
+        }
+        cb(std::move(r));
+        --depth;
+        return engine::TaskHandle{};
+      },
+      4);
+  self = &s;
+  s.start("q", {}, 200'000, 0);
+  EXPECT_EQ(s.pages_done(), 200'000);
+  EXPECT_EQ(s.total(), 200u);
+  EXPECT_LE(max_depth, 1);
+  EXPECT_FALSE(self->searching());
+}
+
+TEST(SearchSession, ReentrantRestartFromCallbackKeepsNewHandle) {
+  FakeExecutor fake;
+  SearchSession s(fake.executor(), 1);
+  bool restarted = false;
+  s.on_changed = [&] {
+    if (!restarted && s.pages_done() == 1) {
+      restarted = true;
+      s.start("again", {}, 3, 0);  // 콜백 안에서 재시작
+    }
+  };
+  s.start("q", {}, 3, 0);
+  fake.complete(0, 0);
+  ASSERT_TRUE(restarted);
+  ASSERT_TRUE(fake.pending.contains(0));
+  EXPECT_EQ(fake.pending.at(0).query, "again");
+  s.cancel();
+  EXPECT_TRUE(fake.cancelled(0)) << "new request handle must be the one held (and cancelled) by the session";
 }
 
 TEST(SearchSession, LateCallbackAfterDestructionIsIgnored) {
