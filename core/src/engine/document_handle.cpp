@@ -253,6 +253,26 @@ std::future<Result<view::PageTextIndex>> DocumentHandle::load_text(int page_inde
       [=, this](std::function<void(Result<view::PageTextIndex>)> cb) { return load_text(page_index, priority, std::move(cb)); });
 }
 
+TaskHandle DocumentHandle::search_page(int page_index, std::string query, view::SearchOptions options,
+                                       Priority priority,
+                                       std::function<void(Result<view::PageSearchResult>)> on_done) const {
+  return DocumentHandleAccess::post_document_task<view::PageSearchResult>(
+      *this, priority,
+      [page_index, query = std::move(query), options](PdfiumDocument& doc) {
+        return doc.search_page(page_index, query, options);
+      },
+      std::move(on_done));
+}
+
+std::future<Result<view::PageSearchResult>> DocumentHandle::search_page(int page_index, std::string query,
+                                                                        view::SearchOptions options,
+                                                                        Priority priority) const {
+  return DocumentHandleAccess::to_future<view::PageSearchResult>(
+      [=, this](std::function<void(Result<view::PageSearchResult>)> cb) {
+        return search_page(page_index, query, options, priority, std::move(cb));
+      });
+}
+
 void DocumentHandle::close() noexcept {
   if (state_) state_->request_close();
 }

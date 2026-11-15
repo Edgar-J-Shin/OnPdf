@@ -29,6 +29,8 @@ constexpr int kShadow = 2;
 const QColor kBackground(0x80, 0x80, 0x80);
 const QColor kShadowColor(0, 0, 0, 60);
 const QColor kSelectionColor(0, 120, 215, 90);
+const QColor kSearchHitColor(255, 220, 0, 110);
+const QColor kSearchCurrentColor(255, 140, 0, 150);
 constexpr double kLinkClickSlop = 4.0;      // 이 거리(논리 px) 미만 이동이면 클릭
 constexpr int kMultiClickMs = 500;
 constexpr int kAutoscrollMs = 30;
@@ -367,7 +369,9 @@ void DocumentView::paint_page(QPainter& painter, int page, const QRectF& page_lo
                       to_qimage_shared(bitmap, d));  // 복사 없음
   }
 
-  // 4. 선택 하이라이트
+  // 4. 검색 결과 (선택 아래)
+  paint_search(painter, page, page_logical);
+  // 5. 선택 하이라이트
   paint_selection(painter, page, page_logical);
 }
 
@@ -548,6 +552,54 @@ void DocumentView::paint_selection(QPainter& painter, int page, const QRectF& pa
   for (const onpdf::Rect& r : index->selection_rects(range)) {
     painter.drawRect(QRectF(page_logical.x() + r.x * k, page_logical.y() + r.y * k, r.w * k, r.h * k));
   }
+}
+
+// ---------------------------------------------------------------- 검색
+
+void DocumentView::set_search(const view::SearchSession* search) {
+  search_ = search;
+  viewport()->update();
+}
+
+void DocumentView::paint_search(QPainter& painter, int page, const QRectF& page_logical) {
+  if (search_ == nullptr || !search_->active()) return;
+  const std::vector<view::TextRange>* hits = search_->hits_on(page);
+  const std::vector<std::vector<onpdf::Rect>>* rects = search_->rects_on(page);
+  if (hits == nullptr || rects == nullptr) return;
+  const auto current = search_->current();
+  const double k = layout_->scale() / dpr();
+  painter.setPen(Qt::NoPen);
+  for (std::size_t i = 0; i < hits->size() && i < rects->size(); ++i) {
+    const bool is_current = current && current->page == page && current->range == (*hits)[i];
+    painter.setBrush(is_current ? kSearchCurrentColor : kSearchHitColor);
+    for (const onpdf::Rect& r : (*rects)[i]) {
+      painter.drawRect(QRectF(page_logical.x() + r.x * k, page_logical.y() + r.y * k, r.w * k, r.h * k));
+    }
+  }
+}
+
+void DocumentView::reveal(int page, const std::vector<onpdf::Rect>& rects) {
+  if (!layout_ || page < 0 || page >= layout_->page_count()) return;
+  if (rects.empty()) {
+    go_to_page(page);
+    return;
+  }
+  const onpdf::Rect& r = rects.front();
+  const QPointF top_left = page_point_to_viewport(page, {r.x, r.y});
+  const QPointF bottom_right = page_point_to_viewport(page, {r.right(), r.bottom()});
+  const QRectF target(top_left, bottom_right);
+  const QRectF vp(viewport()->rect());
+  if (!vp.contains(target)) {
+    if (target.top() < vp.top() || target.bottom() > vp.bottom()) {
+      verticalScrollBar()->setValue(verticalScrollBar()->value() +
+                                    static_cast<int>(std::lround(target.top() - vp.height() / 3.0)));
+    }
+    if (target.left() < vp.left() || target.right() > vp.right()) {
+      horizontalScrollBar()->setValue(horizontalScrollBar()->value() +
+                                      static_cast<int>(std::lround(target.left() - vp.width() / 4.0)));
+    }
+  }
+  viewport()->update();
 }
 
 void DocumentView::update_hover(QPointF viewport_pos) {

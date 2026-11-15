@@ -17,6 +17,7 @@
 #include "onpdf/core/engine/render_types.h"
 #include "onpdf/core/error.h"
 #include "onpdf/core/geometry.h"
+#include "onpdf/core/view/search.h"
 #include "onpdf/core/view/text_index.h"
 
 #include <cstdint>
@@ -80,6 +81,13 @@ class DocumentHandle {
                        std::function<void(Result<view::PageTextIndex>)> on_done) const;
   [[nodiscard]] std::future<Result<view::PageTextIndex>> load_text(int page_index,
                                                                    Priority priority = Priority::kNormal) const;
+
+  // 쪽 검색. 계약은 render_page 와 같다.
+  TaskHandle search_page(int page_index, std::string query, view::SearchOptions options, Priority priority,
+                         std::function<void(Result<view::PageSearchResult>)> on_done) const;
+  [[nodiscard]] std::future<Result<view::PageSearchResult>> search_page(int page_index, std::string query,
+                                                                        view::SearchOptions options,
+                                                                        Priority priority = Priority::kNormal) const;
 
   // 워커에 문서 해제를 맡긴다. 이후 render_page 는 kInvalidState.
   void close() noexcept;

@@ -11,6 +11,7 @@ add_library(onpdf_core STATIC
   src/view/tile_scheduler.cpp
   src/view/text_index.cpp
   src/view/text_selection.cpp
+  src/view/search.cpp
 )
 add_library(onpdf::core ALIAS onpdf_core)
 

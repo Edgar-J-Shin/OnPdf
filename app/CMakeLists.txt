@@ -12,6 +12,8 @@ add_library(onpdf_app_lib STATIC
   document_session.h document_session.cpp
   document_tile_source.h document_tile_source.cpp
   document_view.h document_view.cpp
+  search_bar.h search_bar.cpp
+  main_window.h main_window.cpp
 )
 target_include_directories(onpdf_app_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(onpdf_app_lib PUBLIC onpdf::core Qt6::Core Qt6::Gui Qt6::Widgets)
@@ -19,7 +21,6 @@ onpdf_set_warnings(onpdf_app_lib)
 
 qt_add_executable(onpdf_app
   main.cpp
-  main_window.h main_window.cpp
 )
 set_target_properties(onpdf_app PROPERTIES MACOSX_BUNDLE OFF WIN32_EXECUTABLE ON)
 target_link_libraries(onpdf_app PRIVATE onpdf_app_lib Qt6::Widgets)

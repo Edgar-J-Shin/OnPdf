@@ -9,7 +9,11 @@
 #include "onpdf/core/engine/pdfium_handles.h"
 #include "onpdf/core/error.h"
 #include "onpdf/core/geometry.h"
+#include "onpdf/core/view/search.h"
 #include "onpdf/core/view/text_index.h"
+
+#include <string>
+#include <vector>
 
 namespace onpdf::engine {
 
@@ -17,6 +21,10 @@ class TextPage {
  public:
   static Result<TextPage> load(FPDF_PAGE page);
   [[nodiscard]] Result<view::PageTextIndex> extract(FPDF_DOCUMENT doc, FPDF_PAGE page, int page_index) const;
+  // PDFium 검색 엔진으로 쿼리(UTF-8)의 모든 위치를 찾는다. 결과는 PDFium 글자 인덱스 범위
+  [[nodiscard]] std::vector<view::SourceRange> find(const std::string& query_utf8, view::SearchOptions options) const;
+  // PDFium 원본 글자 수 (줄바꿈 문자 포함). 인덱스를 만들지 않고 텍스트 유무만 볼 때
+  [[nodiscard]] int raw_char_count() const;
 
  private:
   explicit TextPage(ScopedTextPage text_page) : text_page_(std::move(text_page)) {}

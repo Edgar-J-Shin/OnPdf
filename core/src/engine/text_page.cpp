@@ -67,6 +67,51 @@ bool fill_location(FPDF_DOCUMENT doc, FPDF_DEST dest, view::Link& link) {
   return true;
 }
 
+// UTF-8 → UTF-16LE (FPDF_WIDESTRING, NUL 종료). 잘못된 바이트는 U+FFFD
+std::vector<unsigned short> to_wide(const std::string& utf8) {
+  std::vector<unsigned short> out;
+  out.reserve(utf8.size() + 1);
+  auto push = [&](char32_t cp) {
+    if (cp >= 0x10000) {
+      cp -= 0x10000;
+      out.push_back(static_cast<unsigned short>(0xD800 + (cp >> 10)));
+      out.push_back(static_cast<unsigned short>(0xDC00 + (cp & 0x3FF)));
+    } else {
+      out.push_back(static_cast<unsigned short>(cp));
+    }
+  };
+  for (std::size_t i = 0; i < utf8.size();) {
+    const auto c = static_cast<unsigned char>(utf8[i]);
+    int len = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 0;
+    if (len == 0 || i + static_cast<std::size_t>(len) > utf8.size()) {
+      push(0xFFFD);
+      ++i;
+      continue;
+    }
+    char32_t cp = len == 1 ? c : len == 2 ? (c & 0x1F) : len == 3 ? (c & 0x0F) : (c & 0x07);
+    bool ok = true;
+    for (int k = 1; k < len; ++k) {
+      const auto cc = static_cast<unsigned char>(utf8[i + static_cast<std::size_t>(k)]);
+      if ((cc & 0xC0) != 0x80) {
+        ok = false;
+        break;
+      }
+      cp = (cp << 6) | (cc & 0x3F);
+    }
+    // overlong(C0 80 → U+0000 등)은 거부: NUL 이 쿼리를 잘라 버린다
+    static constexpr char32_t kMin[5] = {0, 0, 0x80, 0x800, 0x10000};
+    if (!ok || cp < kMin[len] || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
+      push(0xFFFD);
+      ++i;
+      continue;
+    }
+    push(cp);
+    i += static_cast<std::size_t>(len);
+  }
+  out.push_back(0);
+  return out;
+}
+
 std::string uri_of(FPDF_DOCUMENT doc, FPDF_ACTION action) {
   const unsigned long len = FPDFAction_GetURIPath(doc, action, nullptr, 0);  // NUL 포함 길이
   if (len <= 1) return {};
@@ -222,6 +267,30 @@ Result<view::PageTextIndex> TextPage::extract(FPDF_DOCUMENT doc, FPDF_PAGE page,
     index.links.push_back(std::move(link));
   }
   return index;
+}
+
+int TextPage::raw_char_count() const {
+  PdfiumLibrary::assert_current_thread();
+  return std::max(0, FPDFText_CountChars(text_page_.get()));
+}
+
+std::vector<view::SourceRange> TextPage::find(const std::string& query_utf8, view::SearchOptions options) const {
+  PdfiumLibrary::assert_current_thread();
+  std::vector<view::SourceRange> out;
+  if (query_utf8.empty()) return out;
+  const std::vector<unsigned short> wide = to_wide(query_utf8);
+  unsigned long flags = 0;
+  if (options.match_case) flags |= FPDF_MATCHCASE;
+  if (options.whole_word) flags |= FPDF_MATCHWHOLEWORD;
+  ScopedFPDFTextFind handle(FPDFText_FindStart(text_page_.get(), wide.data(), flags, 0));
+  if (!handle) return out;
+  while (FPDFText_FindNext(handle.get())) {
+    const int start = FPDFText_GetSchResultIndex(handle.get());
+    const int count = FPDFText_GetSchCount(handle.get());
+    if (start < 0 || count <= 0) continue;
+    out.push_back({start, count});
+  }
+  return out;
 }
 
 }  // namespace onpdf::engine
