@@ -6,6 +6,9 @@
 #include "onpdf/core/platform/path.h"
 
 #include <fpdf_doc.h>
+#include <fpdf_signature.h>
+#include <fpdf_save.h>
+#include <fpdf_edit.h>
 #include <fpdfview.h>
 
 #include <algorithm>
@@ -78,12 +81,80 @@ Result<PdfiumDocument> PdfiumDocument::open_from_memory(std::vector<std::uint8_t
   if (!doc) {
     return std::unexpected(last_pdfium_error("FPDF_LoadMemDocument64 failed"));
   }
-  return PdfiumDocument(std::move(data), std::move(doc));
+  PdfiumDocument result(std::move(data), std::move(doc));
+  result.password_ = pw;
+  return result;
 }
 
 int PdfiumDocument::page_count() const noexcept {
   PdfiumLibrary::assert_current_thread();
   return FPDF_GetPageCount(doc_.get());
+}
+
+Result<int> PdfiumDocument::page_rotation(int page_index) const {
+  PdfiumLibrary::assert_current_thread();
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  const int rotation = FPDFPage_GetRotation(page->get());
+  if (rotation < 0 || rotation > 3) return make_error(ErrorCode::kInvalidFormat, "invalid page rotation");
+  return rotation;
+}
+
+Result<void> PdfiumDocument::set_page_rotation(int page_index, int quarter_turns) {
+  PdfiumLibrary::assert_current_thread();
+  if (quarter_turns < 0 || quarter_turns > 3) {
+    return make_error(ErrorCode::kInvalidArgument, "rotation must be 0..3 quarter turns");
+  }
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  FPDFPage_SetRotation(page->get(), quarter_turns);  // 쪽 사전의 /Rotate 에 기록되어 쪽을 닫아도 유지된다
+  if (FPDFPage_GetRotation(page->get()) != quarter_turns) {
+    return make_error(ErrorCode::kInvalidState, "FPDFPage_SetRotation did not apply");
+  }
+  return {};
+}
+
+namespace {
+
+// FPDF_FILEWRITE → std::ofstream. PDFium 이 WriteBlock 을 여러 번 부른다
+struct FileWriter : FPDF_FILEWRITE {
+  std::ofstream* out = nullptr;
+  static int write_block(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
+    auto* writer = static_cast<FileWriter*>(self);
+    writer->out->write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
+    return writer->out->good() ? 1 : 0;
+  }
+};
+
+}  // namespace
+
+Result<void> PdfiumDocument::save_to(const std::filesystem::path& path, bool incremental) const {
+  PdfiumLibrary::assert_current_thread();
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  if (!out) return make_error(ErrorCode::kIoError, "cannot create: " + path_to_utf8(path));
+  FileWriter writer{};
+  writer.version = 1;
+  writer.WriteBlock = &FileWriter::write_block;
+  writer.out = &out;
+  const FPDF_DWORD flags = incremental ? FPDF_INCREMENTAL : FPDF_NO_INCREMENTAL;
+  const bool ok = FPDF_SaveAsCopy(doc_.get(), &writer, flags) != 0;
+  out.flush();
+  if (!ok || !out.good()) {
+    return make_error(ErrorCode::kIoError, "write failed: " + path_to_utf8(path));
+  }
+  out.close();
+  if (out.fail()) return make_error(ErrorCode::kIoError, "close failed: " + path_to_utf8(path));
+  return {};
+}
+
+int PdfiumDocument::signature_count() const {
+  PdfiumLibrary::assert_current_thread();
+  return std::max(0, FPDF_GetSignatureCount(doc_.get()));
+}
+
+bool PdfiumDocument::can_modify() const {
+  PdfiumLibrary::assert_current_thread();
+  return (FPDF_GetDocPermissions(doc_.get()) & (1UL << 3)) != 0;
 }
 
 Result<ScopedPage> PdfiumDocument::load_page(int page_index) const {

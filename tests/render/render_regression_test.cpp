@@ -4,6 +4,7 @@
 // 비교 허용치는 tests/test_support.h 의 expect_bitmap_matches_png 참고.
 
 #include "onpdf/core/engine/pdfium_document.h"
+#include "onpdf/core/engine/save.h"
 #include "onpdf/core/image/png_io.h"
 
 #include "../test_support.h"
@@ -97,6 +98,29 @@ TEST(RenderRegression, PrintFlagsPrint) {
 // 인쇄 자동 회전: 가로 쪽을 반시계 90° 로 렌더
 TEST(RenderRegression, PrintRotatedLandscape) {
   expect_matches_reference({"simple.pdf", 1, 0.5f, "simple-p1-rot270.png", true, 270});
+}
+
+// 편집 → 저장 → 다시 열기: 회전해 저장한 쪽이 다른 뷰어와 같은 모양으로 그려진다 (#31)
+TEST(RenderRegression, RotatedAndSavedPage) {
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc) << doc.error().message;
+  ASSERT_TRUE(doc->set_page_rotation(0, 1));
+  onpdf::test::ScopedTempDir dir;
+  const auto saved_path = dir / "rotated.pdf";
+  auto saved = engine::save_document_safely(*doc, saved_path, {});
+  ASSERT_TRUE(saved) << saved.error().message;
+  auto reopened = PdfiumDocument::open(saved_path);
+  ASSERT_TRUE(reopened) << reopened.error().message;
+  RenderOptions options;
+  options.scale = 0.5f;
+  auto actual = reopened->render_page(0, options);
+  ASSERT_TRUE(actual) << actual.error().message;
+  const auto expected_path = testdata("expected") / "simple-p0-rotated-saved.png";
+  if (update_references()) {
+    ASSERT_TRUE(image::write_png(*actual, expected_path));
+    GTEST_SKIP() << "reference updated: " << expected_path;
+  }
+  onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "simple-p0-rotated-saved.png");
 }
 
 }  // namespace

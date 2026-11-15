@@ -42,6 +42,7 @@ GENERATED = {
     "print-flags.pdf": docs.make_print_flags,
     "print-low-res.pdf": docs.make_print_low_res,
     "unicode-map-error.pdf": docs.make_unicode_map_error,
+    "signed-dummy.pdf": docs.make_signed_dummy,
 }
 
 

@@ -47,6 +47,9 @@ class DocumentView : public QAbstractScrollArea {
 
   void set_document(const engine::DocumentHandle& handle, UiDispatcher& dispatcher);
   void clear_document(const QString& placeholder);
+  // 편집으로 쪽 내용·크기가 바뀌었다: 그 쪽의 타일·텍스트를 버리고, 크기가 바뀌었으면 레이아웃을 새 쪽 크기로
+  // 다시 만든다(보던 위치 유지). 진행 중인 이전 모양의 타일 요청은 스케줄러를 새로 만들어 버린다
+  void invalidate_pages(const std::vector<int>& pages, bool sizes_changed);
   [[nodiscard]] bool has_document() const noexcept { return layout_ != nullptr; }
 
   void set_zoom_mode(ZoomMode mode);

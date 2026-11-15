@@ -98,7 +98,7 @@ class PrintTest : public ::testing::Test {
   bool open(const char* name) {
     window_.open_file(QString::fromStdString(onpdf::path_to_utf8(testdata(name))));
     return spin_until([&] {
-      return window_.windowTitle().endsWith(QString::fromUtf8(name)) && window_.document_view()->has_document();
+      return window_.windowTitle().contains(QString::fromUtf8(name)) && window_.document_view()->has_document();
     });
   }
   std::unique_ptr<QPrinter> pdf_printer(const QString& file) {
@@ -340,7 +340,7 @@ TEST_F(PrintTest, OpeningWhilePrintingAsksFirst) {
   ASSERT_TRUE(spin_until([&] { return job->printed_sheets() >= before + 3; }));
   EXPECT_EQ(window_.print_job(), job);
   EXPECT_TRUE(job->active());
-  EXPECT_TRUE(window_.windowTitle().endsWith(QStringLiteral("large-1000.pdf")));
+  EXPECT_TRUE(window_.windowTitle().contains(QStringLiteral("large-1000.pdf")));
 
   // 2) 인쇄 취소하고 열기 → 취소 후 새 문서, 진행 창 닫힘
   asked = false;
@@ -376,7 +376,7 @@ TEST_F(PrintTest, DropWhilePrintingDoesNotBlockDropEvent) {
   EXPECT_TRUE(drop.isAccepted());
   ASSERT_TRUE(spin_until([&] { return asked; }, 3000));
   EXPECT_TRUE(window_.print_job()->active());  // 계속하기 → 인쇄 유지, 문서 그대로
-  EXPECT_TRUE(window_.windowTitle().endsWith(QStringLiteral("large-1000.pdf")));
+  EXPECT_TRUE(window_.windowTitle().contains(QStringLiteral("large-1000.pdf")));
   // 지역 프린터가 창보다 먼저 사라지므로 끝내기 전에 인쇄를 멈춘다 (앱에서는 창이 프린터를 소유)
   window_.print_job()->cancel();
   ASSERT_TRUE(spin_until([&] { return !window_.print_job()->active(); }));
@@ -392,7 +392,7 @@ TEST_F(PrintTest, DropWhenIdleOpensFile) {
   QDropEvent drop(at, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
   QApplication::sendEvent(&window_, &drop);
   EXPECT_TRUE(drop.isAccepted());
-  ASSERT_TRUE(spin_until([&] { return window_.windowTitle().endsWith(QStringLiteral("bookmarks.pdf")); }));
+  ASSERT_TRUE(spin_until([&] { return window_.windowTitle().contains(QStringLiteral("bookmarks.pdf")); }));
 }
 
 // 인쇄 중이 아니면 묻지 않고 바로 연다

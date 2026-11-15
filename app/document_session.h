@@ -27,6 +27,8 @@ class DocumentSession : public QObject {
   // page_index 를 scale(포인트당 픽셀) 로 렌더한다. 대기 중인 이전 렌더는 취소된다.
   void render_page(int page_index, float scale, qreal device_pixel_ratio);
   void close();
+  // 다른 이름으로 저장한 뒤: 열린 문서는 그대로, 경로만 바꾼다
+  void set_path(const QString& path) { path_ = path; }
 
   [[nodiscard]] bool has_document() const noexcept { return handle_.valid(); }
   [[nodiscard]] const engine::DocumentHandle& handle() const noexcept { return handle_; }

@@ -17,6 +17,7 @@ enum class ErrorCode {
   kInvalidArgument,
   kCancelled,
   kInvalidState,
+  kSaveVerifyFailed,  // 저장한 파일을 다시 열어 검증하지 못했다 (원본은 그대로)
 };
 
 struct Error {
@@ -44,6 +45,7 @@ inline const char* to_string(ErrorCode code) noexcept {
     case ErrorCode::kInvalidArgument: return "invalid argument";
     case ErrorCode::kCancelled: return "cancelled";
     case ErrorCode::kInvalidState: return "invalid state";
+    case ErrorCode::kSaveVerifyFailed: return "saved file failed verification";
   }
   return "unknown";
 }

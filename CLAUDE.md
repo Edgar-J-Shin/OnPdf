@@ -11,7 +11,7 @@ Your goal is to write Safe, Testable, and Maintainable modern C++ (C++23, std::e
 Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜치 `develop`, 릴리스 `main`)
 1인 개발(주 10~15시간). 전체 계획서: [pdf-editor-plan.md](pdf-editor-plan.md) — 범위·로드맵·위험 대응은 이 문서가 기준이다.
 
-**현재 단계**: M1 뷰어 (M0 완료 2026-11-14: CI·첫 쪽 표시·테스트 PDF 29개). 연속 스크롤(#10)·텍스트 선택(#15)·검색(#17)·사이드바(#19) 완료, 인쇄(#21) 진행. 남은 것: 후속 정리(#12)·Windows 실기기 QA·v0.1
+**현재 단계**: M2 주석·페이지 (v0.1.0 공개 2026-11-15: M0·M1 뷰어). 편집 기반(Command·실행 취소·안전 저장, #31) 위에 주석·페이지 조작을 쌓는다. M1 에서 남은 것: Windows 실기기 QA
 
 | 마일스톤 | 핵심 | 완료 기준 |
 |---|---|---|
@@ -44,7 +44,7 @@ export QT_ROOT=$(brew --prefix qt)      # dev-app preset 이 CMAKE_PREFIX_PATH �
 python3 third_party/fetch_pdfium.py     # PDFium 사전 빌드 받기 (버전: third_party/pdfium-version.txt)
 cmake --preset dev                      # configure (vcpkg manifest 설치 포함)
 cmake --build --preset dev              # build all → build/dev/bin/
-ctest --preset dev                      # unit + rendering regression
+ctest --preset dev                      # unit + rendering regression + roundtrip(열기→저장→다시 열기, qpdf 있으면 --check)
 ./build/dev/bin/onpdf_cli info in.pdf                                # 쪽 크기 + 인쇄 권한·문서 인쇄 기본값
 ./build/dev/bin/onpdf_cli render in.pdf out.png --page 0 --scale 2 [--print]   # --print: 인쇄용 렌더(FPDF_PRINTING)
 ./build/dev/bin/onpdf_cli tiles in.pdf out-dir --page 0 --scale 2   # 타일 PNG + stitched.png + full.png
@@ -66,11 +66,12 @@ ctest --preset dev-app                                         # app 테스트(o
 # Architecture
 
 ```text
-app/          Qt UI (Qt 의존). onpdf_app_lib(UiDispatcher·DocumentSession·qt_image·DocumentTileSource·DocumentView·SearchBar·ThumbnailPanel·OutlinePanel·PrintJob·MainWindow) + onpdf_app(main 만)
-edit/         Command, 실행 취소 스택, 선택 모델, 텍스트 블록 모델, 폰트 매니저
+app/          Qt UI (Qt 의존). onpdf_app_lib(UiDispatcher·DocumentSession·qt_image·DocumentTileSource·DocumentView·SearchBar·ThumbnailPanel·OutlinePanel·PrintJob·EditController·MainWindow) + onpdf_app(main 만)
+edit/         Command(execute/undo, EditableDocument 로만 문서 변경)·UndoStack(저장 지점)·RotatePageCommand. 선택·텍스트 블록·폰트(M3)
 core/         Document, Page, 렌더 캐시(타일 LRU), 텍스트 인덱스       (Qt 의존 금지)
-core/engine/  PdfiumLibrary(init RAII) · PdfiumDocument(열기·크기·렌더·load_text·load_outline·resolve_location·print_preferences) · TextPage(FPDFText/FPDFLink 추출, 좌표 변환) · dest(목적지·URI·UTF-16 변환 공용, 내부) · pdfium_handles
+core/engine/  PdfiumLibrary(init RAII) · PdfiumDocument(열기·크기·렌더·load_text·load_outline·resolve_location·print_preferences·회전·save_to — EditableDocument 구현) · TextPage(FPDFText/FPDFLink 추출, 좌표 변환) · dest(목적지·URI·UTF-16 변환 공용, 내부) · pdfium_handles
               PdfiumWorker(전용 스레드 + High/Normal/Low 큐 + 취소) · DocumentHandle(워커 쪽 문서의 스레드 안전 핸들), QpdfTools(M2)
+core/engine/  EditableDocument(PDFium 없는 편집 인터페이스 — edit/ 가 씀)·ChangeSet · save(save_document_safely: 임시→검증→rename)
 core/image/   png_io (stb 기반 PNG 읽기/쓰기, BGRA↔RGBA)
 core/view/    PageLayout(세로 연속 레이아웃·좌표 변환) · tile.h(TileKey, 512px, 1/64 배율 양자화) · TileCache(바이트 상한 LRU)
               TileScheduler(뷰포트→필요 타일, High/Low 요청·취소·실패 집합) · TileSource(SyncTileSource=CLI·테스트)
@@ -105,6 +106,13 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 4. **핸들은 RAII.** `FPDF_DOCUMENT`, `FPDF_PAGE`, `FPDF_TEXTPAGE`, `FPDF_BITMAP` 등은 `std::unique_ptr` + 커스텀 삭제자로만 보유한다. raw 핸들을 반환하는 public API 금지.
 5. **원본 파일은 건드리지 않는다.** 저장은 임시 파일 → 다시 열어 검증(페이지 수·렌더링·qpdf check) → 교체. 서명된 문서는 증분 저장.
 6. **JavaScript 실행은 기본 비활성화.** 악성 PDF 대응. 외부 링크는 `view::is_safe_uri`(http/https/mailto) 를 통과한 것만 사용자 확인 후 연다. `file:`·`javascript:`·`data:` 와 Launch/RemoteGoTo 액션은 무시한다.
+
+### 편집·저장 (구현: edit + core/engine/save + app/EditController)
+- `edit/` 는 PDFium 헤더를 끌어오는 `pdfium_document.h` 를 쓰지 않고 `engine::EditableDocument`(PDFium 없음)로만 문서를 바꾼다
+- 실행: `EditController::run(cmd)` → `DocumentHandle::modify`(워커, kHigh) → 결과 `ChangeSet` 을 메인에서 `apply_change`(문서 정보의 쪽 크기 — 메인 스레드만 고친다) → `UndoStack` → `document_changed` → `DocumentView::invalidate_pages`(타일·텍스트 버림, 스케줄러 재생성으로 이전 모양의 늦은 타일 폐기, 크기가 바뀌면 레이아웃 재구성)·`ThumbnailPanel::invalidate_pages`·검색 재실행. 한 번에 하나(busy)
+- 저장: `DocumentHandle::save` → 워커 `save_document_safely`: 같은 폴더 임시 파일 → 같은 암호로 다시 열어 쪽 수·크기·모든 쪽 로드(증분이면 원본 바이트 앞부분 일치) 검증 → `std::filesystem::rename`. 실패하면 원본 불변·임시 삭제. 서명 문서(`signature_count > 0`)는 증분 저장 강제, 암호화는 유지
+- 앱: 수정 표시(`setWindowModified`, 제목 `"<파일>[*] — OnPdf"`), 닫기·종료(→`close()`)·다른 문서 열기 전 `maybe_save`(저장/저장 안 함/취소, 그다음 인쇄 확인). 수정 권한(비트 4)이 없거나 인쇄·저장 중이면 편집 비활성
+- 모든 Command 는 실행 → 취소 → 재실행 후 문서 상태 비교 테스트(가짜 `EditableDocument` + 실제 PDFium) 필수. 원래 경로로 저장하는 테스트는 testdata 사본(`ScopedTempDir`)을 연다
 
 ### 렌더링 (구현: core/view + app/DocumentView)
 - 쪽을 512×512 타일로 나눠 `PdfiumDocument::render_region`(`FPDF_RenderPageBitmapWithMatrix`, 회전 0 기준 — `page_size` 가 /Rotate 반영) 으로 그리고 `TileCache`(기본 256MB LRU) 에 보관

@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 class QListView;
 class QModelIndex;
@@ -30,6 +31,8 @@ class ThumbnailPanel : public QWidget {
 
   void set_document(const engine::DocumentHandle& handle, UiDispatcher& dispatcher);
   void clear_document();
+  // 편집으로 쪽 모양이 바뀌었다: 그 쪽 썸네일을 버리고 다시 렌더한다 (행 높이도 새 쪽 크기로)
+  void invalidate_pages(const std::vector<int>& pages);
   // 현재 쪽 강조 + 목록에서 보이게 스크롤 (page_activated 를 내보내지 않는다)
   void set_current_page(int page);
   [[nodiscard]] int current_page() const noexcept { return current_page_; }

@@ -1,6 +1,8 @@
 #include "main_window.h"
 
 #include "document_view.h"
+#include "onpdf/core/platform/path.h"
+#include "onpdf/edit/rotate_page.h"
 #include "outline_panel.h"
 #include "search_bar.h"
 #include "thumbnail_panel.h"
@@ -8,6 +10,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QClipboard>
+#include <QCloseEvent>
 #include <QDesktopServices>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -93,7 +96,15 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   statusBar()->addPermanentWidget(link_label_);
   set_document_status(tr("문서 없음"));
 
+  edit_ = new EditController(dispatcher_, this);
   build_menus();
+  connect(edit_, &EditController::document_changed, this, &MainWindow::on_document_changed);
+  connect(edit_, &EditController::state_changed, this, [this] {
+    update_edit_actions();
+    update_title();
+  });
+  connect(edit_, &EditController::failed, this,
+          [this](const QString& message) { show_transient(tr("편집하지 못했습니다: %1").arg(message)); });
 
   connect(&session_, &DocumentSession::opened, this, &MainWindow::on_opened);
   connect(&session_, &DocumentSession::password_required, this, &MainWindow::on_password_required);
@@ -144,14 +155,21 @@ void MainWindow::build_menus() {
   QMenu* file = menuBar()->addMenu(tr("파일(&F)"));
   QAction* open = file->addAction(tr("열기(&O)..."), QKeySequence::Open, this, &MainWindow::on_open_action);
   open->setStatusTip(tr("PDF 파일을 연다"));
+  save_action_ = file->addAction(tr("저장(&S)"), QKeySequence::Save, this, &MainWindow::on_save);
+  save_as_action_ = file->addAction(tr("다른 이름으로 저장(&A)..."), QKeySequence::SaveAs, this, &MainWindow::on_save_as);
   file->addSeparator();
   print_action_ = file->addAction(tr("인쇄(&P)..."), QKeySequence::Print, this, &MainWindow::on_print);
   print_action_->setEnabled(false);
   file->addSeparator();
   // QKeySequence::Quit 은 Windows 에서 비어 있으므로 Ctrl+Q 를 명시한다
-  file->addAction(tr("종료(&Q)"), QKeySequence(Qt::CTRL | Qt::Key_Q), qApp, &QApplication::quit);
+  // 종료는 창 닫기로: closeEvent 에서 저장 확인을 거친다 (마지막 창이 닫히면 앱이 끝난다)
+  QAction* quit = file->addAction(tr("종료(&Q)"), QKeySequence(Qt::CTRL | Qt::Key_Q), this, &QWidget::close);
+  quit->setMenuRole(QAction::QuitRole);
 
   QMenu* edit = menuBar()->addMenu(tr("편집(&E)"));
+  undo_action_ = edit->addAction(tr("실행 취소(&U)"), QKeySequence::Undo, this, [this] { edit_->undo(); });
+  redo_action_ = edit->addAction(tr("다시 실행(&R)"), QKeySequence::Redo, this, [this] { edit_->redo(); });
+  edit->addSeparator();
   copy_action_ = edit->addAction(tr("복사(&C)"), QKeySequence::Copy, this, &MainWindow::on_copy);
   copy_action_->setEnabled(false);
   select_all_action_ = edit->addAction(tr("현재 쪽 전체 선택(&A)"), QKeySequence::SelectAll, this,
@@ -161,6 +179,12 @@ void MainWindow::build_menus() {
   find_next_action_ = edit->addAction(tr("다음 찾기(&N)"), QKeySequence::FindNext, this, &MainWindow::on_find_next);
   find_previous_action_ =
       edit->addAction(tr("이전 찾기(&P)"), QKeySequence::FindPrevious, this, &MainWindow::on_find_previous);
+
+  QMenu* page = menuBar()->addMenu(tr("쪽(&P)"));
+  rotate_cw_action_ = page->addAction(tr("오른쪽으로 회전(&R)"), QKeySequence(Qt::CTRL | Qt::Key_R), this,
+                                      [this] { rotate_current_page(1); });
+  rotate_ccw_action_ = page->addAction(tr("왼쪽으로 회전(&L)"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R), this,
+                                       [this] { rotate_current_page(3); });
 
   QMenu* view = menuBar()->addMenu(tr("보기(&V)"));
   view->addAction(tr("너비 맞춤(&W)"), QKeySequence(Qt::CTRL | Qt::Key_1), this,
@@ -202,6 +226,11 @@ void MainWindow::fail_screenshot(const QString& reason) {
 }
 
 void MainWindow::open_file(const QString& path) {
+  // 수정된 문서면 먼저 저장 여부를 묻고, 그다음 인쇄 확인 (순서: 수정 → 인쇄)
+  maybe_save([this, path] { continue_open(path); });
+}
+
+void MainWindow::continue_open(const QString& path) {
   // 인쇄 중이면 먼저 묻는다: 그대로 두면 열지 않고, 취소하고 열기를 고르면 인쇄를 취소한 뒤 연다
   if (print_job_ && print_job_->active() && !confirm_cancel_print_for(path)) {
     show_transient(tr("인쇄 중이라 열지 않았습니다"));
@@ -218,7 +247,8 @@ void MainWindow::on_open_action() {
 }
 
 void MainWindow::on_opened(const QString& path, int page_count) {
-  setWindowTitle(QStringLiteral("OnPdf — %1").arg(QFileInfo(path).fileName()));
+  edit_->set_document(page_count > 0 ? session_.handle() : engine::DocumentHandle{});
+  update_title();
   statusBar()->clearMessage();  // "여는 중" 임시 메시지가 문서 정보를 가리지 않게
   if (page_count <= 0) {
     if (!screenshot_path_.isEmpty()) {
@@ -258,6 +288,153 @@ void MainWindow::on_opened(const QString& path, int page_count) {
   refresh_status();
 }
 
+// ---------------------------------------------------------------- 편집·저장
+
+QString MainWindow::command_label(std::string_view id) const {
+  if (id == "rotate_page") return tr("쪽 회전");
+  return QString::fromUtf8(id.data(), static_cast<qsizetype>(id.size()));
+}
+
+void MainWindow::update_title() {
+  if (!session_.has_document()) {
+    setWindowTitle(QStringLiteral("OnPdf"));
+    setWindowModified(false);
+    return;
+  }
+  // [*] 자리에 수정 표시가 붙는다 (macOS 는 닫기 버튼의 점)
+  setWindowTitle(QStringLiteral("%1[*] — OnPdf").arg(QFileInfo(session_.path()).fileName()));
+  setWindowModified(edit_->is_modified());
+}
+
+void MainWindow::update_edit_actions() {
+  const bool has_pages = session_.has_document() && session_.handle().valid() && session_.handle().info().page_count > 0;
+  const bool printing = print_job_ && print_job_->active();
+  const bool can_edit = has_pages && session_.handle().info().can_modify && !edit_->busy() && !saving_ && !printing;
+  rotate_cw_action_->setEnabled(can_edit);
+  rotate_ccw_action_->setEnabled(can_edit);
+  const QString edit_tip = has_pages && !session_.handle().info().can_modify ? tr("이 문서는 수정이 허용되지 않습니다")
+                                                                             : QString();
+  rotate_cw_action_->setStatusTip(edit_tip);
+  rotate_ccw_action_->setStatusTip(edit_tip);
+  undo_action_->setEnabled(can_edit && edit_->can_undo());
+  redo_action_->setEnabled(can_edit && edit_->can_redo());
+  undo_action_->setText(edit_->can_undo() ? tr("실행 취소: %1(&U)").arg(command_label(edit_->undo_id()))
+                                          : tr("실행 취소(&U)"));
+  redo_action_->setText(edit_->can_redo() ? tr("다시 실행: %1(&R)").arg(command_label(edit_->redo_id()))
+                                          : tr("다시 실행(&R)"));
+  save_action_->setEnabled(session_.has_document() && edit_->is_modified() && !saving_ && !edit_->busy());
+  save_as_action_->setEnabled(has_pages && !saving_ && !edit_->busy());
+}
+
+void MainWindow::rotate_current_page(int quarter_turns) {
+  if (!rotate_cw_action_->isEnabled() || !view_->has_document()) return;
+  const int page = std::max(0, view_->current_page());
+  edit_->run(std::make_shared<edit::RotatePageCommand>(page, quarter_turns));
+}
+
+void MainWindow::on_document_changed(const onpdf::engine::ChangeSet& change) {
+  view_->invalidate_pages(change.pages, !change.new_sizes.empty());
+  thumbnail_panel_->invalidate_pages(change.pages);
+  // 검색 결과 사각형은 이전 모양 기준 → 같은 검색어로 다시 찾는다
+  if (search_ && search_->active() && !search_bar_->query().trimmed().isEmpty()) {
+    reset_search();
+    on_search_query(search_bar_->query(), search_bar_->options());
+  }
+  refresh_status();
+}
+
+void MainWindow::on_save() {
+  if (!save_action_->isEnabled()) return;
+  start_save(session_.path(), [] {});
+}
+
+void MainWindow::on_save_as() {
+  if (!save_as_action_->isEnabled()) return;
+  const QString path = QFileDialog::getSaveFileName(this, tr("다른 이름으로 저장"), session_.path(),
+                                                    tr("PDF 문서 (*.pdf)"));
+  if (!path.isEmpty()) start_save(path, [] {});
+}
+
+bool MainWindow::save_to(const QString& path) { return start_save(path, [] {}); }
+
+bool MainWindow::start_save(const QString& path, std::function<void()> then) {
+  if (saving_ || edit_->busy() || !session_.has_document() || path.isEmpty()) return false;
+  saving_ = true;
+  update_edit_actions();
+  show_transient(tr("저장 중…"));
+  const QByteArray utf8 = path.toUtf8();
+  UiDispatcher* dispatcher = &dispatcher_;
+  QPointer<MainWindow> self(this);
+  const int generation = outline_generation_;  // 문서를 열 때마다 증가
+  session_.handle().save(
+      onpdf::path_from_utf8(std::string(utf8.constData(), static_cast<std::size_t>(utf8.size()))), {},
+      // 워커 스레드: 메인으로 넘기기만
+      [dispatcher, self, path, generation, then = std::move(then)](onpdf::Result<engine::SaveResult> result) {
+        auto shared = std::make_shared<onpdf::Result<engine::SaveResult>>(std::move(result));
+        dispatcher->post_to(self, [path, generation, then, shared](MainWindow* window) {
+          window->saving_ = false;
+          if (generation != window->outline_generation_) return;  // 다른 문서로 바뀌었다
+          if (!*shared) {
+            window->update_edit_actions();
+            QMessageBox box(QMessageBox::Warning, window->tr("저장하지 못했습니다"),
+                            window->tr("%1\n\n원본 파일은 바뀌지 않았습니다.")
+                                .arg(QString::fromStdString(shared->error().message)),
+                            QMessageBox::Ok, window);
+            box.setObjectName(QStringLiteral("save_failed"));
+            box.exec();
+            return;
+          }
+          window->session_.set_path(path);
+          window->edit_->mark_saved();  // state_changed → 제목·동작 갱신
+          window->show_transient((*shared)->incremental ? window->tr("저장했습니다 (서명 보존을 위해 증분 저장)")
+                                                       : window->tr("저장했습니다"));
+          then();
+        });
+      });
+  return true;
+}
+
+void MainWindow::maybe_save(std::function<void()> then) {
+  if (!session_.has_document() || !edit_->is_modified()) {
+    then();
+    return;
+  }
+  QMessageBox box(QMessageBox::Warning, tr("저장하지 않은 변경"),
+                  tr("%1 의 변경 내용을 저장할까요?").arg(QFileInfo(session_.path()).fileName()), QMessageBox::NoButton,
+                  this);
+  box.setObjectName(QStringLiteral("save_changes_question"));
+  box.setInformativeText(tr("저장하지 않으면 변경 내용이 사라집니다."));
+  QPushButton* save = box.addButton(tr("저장"), QMessageBox::AcceptRole);
+  box.addButton(tr("저장 안 함"), QMessageBox::DestructiveRole);
+  QPushButton* cancel = box.addButton(tr("취소"), QMessageBox::RejectRole);
+  box.setDefaultButton(save);
+  box.setEscapeButton(cancel);
+  box.exec();
+  if (box.clickedButton() == cancel || box.clickedButton() == nullptr) return;
+  if (box.clickedButton() == save) {
+    start_save(session_.path(), std::move(then));
+    return;
+  }
+  then();  // 저장 안 함
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+  if (allow_close_ || !session_.has_document() || !edit_->is_modified()) {
+    if (saving_) {  // 저장이 끝날 때까지 닫지 않는다 (원본 교체 중)
+      event->ignore();
+      return;
+    }
+    event->accept();
+    return;
+  }
+  event->ignore();  // 묻고, 저장이 끝난 뒤 다시 닫는다
+  if (saving_) return;
+  maybe_save([this] {
+    allow_close_ = true;
+    QTimer::singleShot(0, this, &QWidget::close);
+  });
+}
+
 // ---------------------------------------------------------------- 인쇄
 
 void MainWindow::update_print_action() {
@@ -268,6 +445,7 @@ void MainWindow::update_print_action() {
   const QString tip = has_pages && !allowed ? tr("이 문서는 인쇄가 허용되지 않습니다") : tr("문서를 인쇄한다");
   print_action_->setStatusTip(tip);
   print_action_->setToolTip(tip);
+  update_edit_actions();  // 인쇄 중에는 편집을 막는다
 }
 
 void MainWindow::on_print() {
