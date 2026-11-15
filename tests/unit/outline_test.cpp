@@ -80,6 +80,7 @@ TEST(OutlineLoad, KoreanThreeLevelBookmarks) {
   EXPECT_EQ(ch1.target->kind, LinkKind::kPage);
   EXPECT_EQ(ch1.target->page, 0);
   ASSERT_TRUE(ch1.target->user_location);
+  EXPECT_FALSE(ch1.target->location.has_value());  // 목차는 로드 때 쪽을 열지 않는다 (이동 시 변환)
   EXPECT_DOUBLE_EQ(ch1.target->user_location->y, 792.0);
   EXPECT_NEAR(ch1.approx_y, 0.0, 1e-6);
 

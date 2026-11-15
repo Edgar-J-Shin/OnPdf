@@ -108,8 +108,9 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 
 ### 렌더링 (구현: core/view + app/DocumentView)
 - 쪽을 512×512 타일로 나눠 `PdfiumDocument::render_region`(`FPDF_RenderPageBitmapWithMatrix`, 회전 0 기준 — `page_size` 가 /Rotate 반영) 으로 그리고 `TileCache`(기본 256MB LRU) 에 보관
-- `TileScheduler::update(viewport)` 가 보이는 타일·쪽 미리보기(배율 1/8)를 kHigh, 앞뒤 1쪽(타일 ≤32개일 때)을 kLow 로 요청하고 밀려난 요청은 `TaskHandle::cancel`
+- `TileScheduler::update(viewport)` 가 보이는 타일·쪽 미리보기(배율 1/8, 4,096pt 초과 쪽은 `preview_scale_q_for` 로 낮춤)를 kHigh, 앞뒤 1쪽(타일 ≤32개일 때)을 kLow 로 요청하고 밀려난 요청은 `TaskHandle::cancel`
 - 뷰는 쪽 배경 → 미리보기 → 이전 배율 타일(늘려 그림) → 현재 배율 타일 순으로 그려 확대·스크롤 중 빈 화면이 없다
+- 링크·목차 대상: 링크는 텍스트 추출 때 대상 위치를 쪽 포인트(`Link::location`)로 바로 변환한다. 목차는 항목이 많아 로드 때 쪽을 열지 않고 `user_location`(사용자 좌표)만 두며, 이동할 때 `MainWindow::navigate_to` 가 `resolve_location`(kHigh) 으로 변환
 - 현재 쪽: `go_to_page`·`scroll_to_page_point` 직후 스크롤 값이 그대로인 동안은 이동한 쪽(이동 고정 쪽), 그 밖에는 뷰포트 중앙 쪽. 짧은 쪽·문서 끝에서도 쪽 번호가 유지된다
 - 텍스트 인덱스가 없는 쪽의 드래그 지점은 보류했다가 인덱스 도착 시 다시 계산한다. 선택 변경은 선택 사각형 영역만 다시 그린다
 - 배율은 `quantize_scale(zoom × dpr)` 로 1/64 단위. 맞춤 배율은 내림(`fit_*_scale_q`) 이라 문서가 뷰포트를 넘지 않는다
@@ -121,7 +122,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 1. **Safety First**: 모든 PDFium 반환값(nullptr, FALSE, 음수)을 검사한다. 파일 I/O 와 외부 라이브러리 호출은 `std::expected` 또는 명시적 에러 타입으로 전파하고, 예외는 경계(UI·CLI)에서만 잡는다.
 2. **Ownership 명확히**: raw `new`/`delete` 금지. 소유권은 `unique_ptr`, 공유는 꼭 필요할 때만 `shared_ptr`, 비소유 참조는 참조 또는 raw pointer(nullable 명시).
 3. **스레드**: PDFium 워커 외 스레드에서 PDFium 객체 접근 금지. 공유 상태는 `std::mutex` 또는 메시지 전달로 보호. 데이터 레이스는 Critical 이슈로 취급.
-4. **텍스트는 UTF-8**: 내부 문자열은 UTF-8 `std::string`. PDFium 의 UTF-16LE 와는 core/engine 경계에서만 변환. 한글(CID 폰트) 경로는 항상 테스트를 함께 만든다. 글자 좌표는 PDFium 사용자 좌표(좌하단, 회전 전)가 아니라 `TextPage` 가 `FPDF_PageToDevice`(×1000 트릭)로 바꾼 "쪽 포인트"(좌상단, 회전 반영)를 쓴다.
+4. **텍스트는 UTF-8**: 유니코드 매핑 오류 글자와 유니코드 스칼라가 아닌 값은 U+FFFD(`view::sanitize_text_code`). 내부 문자열은 UTF-8 `std::string`. PDFium 의 UTF-16LE 와는 core/engine 경계에서만 변환. 한글(CID 폰트) 경로는 항상 테스트를 함께 만든다. 글자 좌표는 PDFium 사용자 좌표(좌하단, 회전 전)가 아니라 `TextPage` 가 `FPDF_PageToDevice`(×1000 트릭)로 바꾼 "쪽 포인트"(좌상단, 회전 반영)를 쓴다.
 5. **플랫폼 분기 최소화**: `#ifdef _WIN32` 는 `core/platform/`, `app/`, `cli/main.cpp`(wmain) 에만. 경로는 `std::filesystem::path` 이되 **UTF-8 문자열에서 만들 때는 반드시 `onpdf::path_from_utf8`**(`core/platform/path.h`) 를 쓴다 — Windows 는 `path(std::string)` 을 코드 페이지로 해석해 한글 경로가 깨진다. 오류 메시지 등 역변환은 `path_to_utf8`.
 6. **스타일**: `.clang-format` 준수(생기면). 클래스 `PascalCase`, 함수·변수 `snake_case`, 멤버 `name_`, 상수 `kName`. 헤더는 `#pragma once`. 주석·문서는 한국어, 식별자·커밋 메시지 제목은 영어.
 7. **i18n**: 사용자 노출 문자열은 `tr()` 로 감싸고 `app/i18n/` 에 ko/en 둘 다 추가. 하드코딩 금지.

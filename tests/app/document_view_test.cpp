@@ -195,7 +195,8 @@ TEST_F(DocumentViewTest, ClickOnLinksActivatesWithoutOpening) {
   // 링크 위에서 끌면 텍스트 선택으로 바뀌고 활성화되지 않는다
   drag(internal, internal + QPointF(60, 0));
   EXPECT_EQ(activated.size(), 2u);
-  // 내부 링크 이동
+  // 내부 링크 이동 (링크 위치는 추출 때 쪽 포인트로 변환되어 있다)
+  ASSERT_TRUE(activated[0].location.has_value());
   view_.scroll_to_page_point(activated[0].page, *activated[0].location);
   EXPECT_EQ(view_.current_page(), 1);
 }

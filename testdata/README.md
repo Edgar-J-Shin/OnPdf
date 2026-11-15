@@ -27,6 +27,7 @@
 | `outline-cycle.pdf` | ok |  | 2 | gen | Apache-2.0 | 악성 목차: 형제 순환·자식 자기 참조·깊이 40 체인 → 유한 항목, 크래시 없음 |
 | `print-flags.pdf` | ok |  | 2 | gen | Apache-2.0 | 인쇄 플래그 주석(화면 전용 /F 0·인쇄 전용 /F 36) + ViewerPreferences(PrintScaling None·NumCopies 2·PrintPageRange 2쪽·양면) |
 | `print-low-res.pdf` | ok |  | 2 | gen | Apache-2.0 | 소유자 암호만(P=-2052): 인쇄 허용, 고품질 인쇄 금지 → 저해상도만 |
+| `unicode-map-error.pdf` | ok |  | 1 | gen | Apache-2.0 | ToUnicode 없는 Type3 글꼴(AGL 밖 글리프 이름) → PDFium 매핑 오류, U+FFFD 로 추출 |
 | `truncated.pdf` | invalid |  | 0 | gen | Apache-2.0 | bookmarks.pdf 뒤 40% 절단(쪽 트리 소실) → 복구 불가, 크래시 없이 invalid |
 | `bad-xref.pdf` | ok |  | 2 | gen | Apache-2.0 | xref 오프셋 전부 오류 → 복구 파서 |
 | `garbage-header.pdf` | ok |  | 2 | gen | Apache-2.0 | %PDF 앞 1KB 쓰레기 → 헤더 탐색 |

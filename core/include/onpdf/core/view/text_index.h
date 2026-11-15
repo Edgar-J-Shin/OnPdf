@@ -39,10 +39,23 @@ struct Link {
   Rect box;
   LinkKind kind = LinkKind::kPage;
   int page = -1;                   // kPage
-  std::optional<Point> location;   // kPage: /XYZ 위치(대상 쪽 포인트). 없으면 쪽 상단
-  std::optional<Point> user_location;  // kPage: /XYZ 위치(대상 쪽 사용자 좌표, 미변환). 목차가 쓰고 클릭 시 변환
+  // kPage 의 /XYZ 위치는 둘 중 하나만 채운다 (둘 다 없으면 쪽 맨 위):
+  //  - location: 쪽 포인트(좌상단 원점, 회전 반영). 링크(PageTextIndex::links) — 텍스트 추출 때 대상 쪽을 열어 바로 변환
+  //  - user_location: 대상 쪽 사용자 좌표(미변환). 목차(Outline) — 항목이 많아 로드 때 쪽을 열지 않고, 이동 시
+  //    resolve_location 으로 변환
+  std::optional<Point> location;
+  std::optional<Point> user_location;
   std::string uri;                 // kUri, UTF-8
 };
+
+// 텍스트 추출 글자 코드 정리: 유니코드 스칼라(0 제외, 서로게이트·비문자 U+FFFE/FFFF 제외, U+10FFFF 이하)면 그대로,
+// 아니면 U+FFFD
+[[nodiscard]] constexpr char32_t sanitize_text_code(unsigned int code) noexcept {
+  if (code == 0 || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF) || code == 0xFFFE || code == 0xFFFF) {
+    return 0xFFFD;
+  }
+  return static_cast<char32_t>(code);
+}
 
 // 외부에서 열어도 되는 URI 인지 (http, https, mailto 만)
 [[nodiscard]] bool is_safe_uri(std::string_view uri) noexcept;

@@ -15,6 +15,7 @@
 #include <QEventLoop>
 #include <QKeyEvent>
 #include <QListView>
+#include <QMouseEvent>
 #include <QScrollBar>
 #include <QSpinBox>
 #include <QTabWidget>
@@ -260,6 +261,31 @@ TEST_F(SidebarTest, PageSpinKeepsTypedPage) {
   QApplication::processEvents();
   EXPECT_EQ(spin->value(), spin->maximum());
   EXPECT_EQ(window_.document_view()->current_page(), spin->maximum() - 1);
+}
+
+// 내부 링크 클릭: 위치가 추출 때 변환되어 있으므로 워커를 거치지 않고 클릭 즉시 그 지점으로 이동한다 (#12)
+TEST_F(SidebarTest, InternalLinkNavigatesImmediately) {
+  ASSERT_TRUE(open("annotations.pdf", 0));
+  auto* view = window_.document_view();
+  ASSERT_TRUE(spin_until([&] { return view->text_index(0) != nullptr; }));
+  const view::Link* link = nullptr;
+  for (const auto& l : view->text_index(0)->links) {
+    if (l.kind == view::LinkKind::kPage) link = &l;
+  }
+  ASSERT_NE(link, nullptr);
+  ASSERT_TRUE(link->location.has_value());  // 링크는 즉시 변환
+  const QPointF at = view->page_point_to_viewport(0, {link->box.x + link->box.w / 2, link->box.y + link->box.h / 2});
+  for (QEvent::Type type : {QEvent::MouseButtonPress, QEvent::MouseButtonRelease}) {
+    QMouseEvent ev(type, at, view->viewport()->mapToGlobal(at.toPoint()), Qt::LeftButton,
+                   type == QEvent::MouseButtonPress ? Qt::LeftButton : Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(view->viewport(), &ev);
+  }
+  // 이벤트 루프를 돌리지 않아도 이미 이동했다 (워커 왕복 없음)
+  EXPECT_EQ(view->current_page(), 1);
+  // /XYZ 72 700 → 2쪽 포인트 (72, 92) 가 보인다 (마지막 쪽이라 맨 위까지는 못 올라갈 수 있다)
+  const QPointF target = view->page_point_to_viewport(1, {72, 92});
+  EXPECT_GE(target.y(), 0.0);
+  EXPECT_LE(target.y(), view->viewport()->height());
 }
 
 }  // namespace

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -23,7 +24,7 @@ std::vector<NeededTile> compute_needed(const PageLayout& layout, const Rect& vie
   // 1. 보이는 쪽: 미리보기 + 뷰포트와 교차하는 타일
   for (int page : visible_pages) {
     const engine::PageSize pt = layout.page_size_pt(page);
-    add({page, options.preview_scale_q, 0, 0}, engine::Priority::kHigh, true);
+    add({page, preview_scale_q_for(pt, options.preview_scale_q), 0, 0}, engine::Priority::kHigh, true);
     const Rect r = layout.page_rect(page);
     const Rect vis = viewport_doc.intersected(r).translated(-r.x, -r.y);  // 쪽 픽셀 좌표
     if (vis.empty()) continue;
@@ -51,7 +52,7 @@ std::vector<NeededTile> compute_needed(const PageLayout& layout, const Rect& vie
   }
   for (int page : prefetch) {
     const engine::PageSize pt = layout.page_size_pt(page);
-    add({page, options.preview_scale_q, 0, 0}, engine::Priority::kLow, false);
+    add({page, preview_scale_q_for(pt, options.preview_scale_q), 0, 0}, engine::Priority::kLow, false);
     const Size px = page_pixel_size(pt, scale_q);
     const int nx = tiles_across(px.w);
     const int ny = tiles_across(px.h);
@@ -70,6 +71,7 @@ struct TileScheduler::State {
     engine::TaskHandle handle;
     engine::Priority priority;
     std::chrono::steady_clock::time_point started;
+    std::uint64_t id = 0;  // 같은 키의 재요청(우선순위 승격)과 구분
   };
 
   TileSource& source;
@@ -82,6 +84,8 @@ struct TileScheduler::State {
   std::function<void(const TileKey&)> on_tile;
   Stats stats;
   double render_ms_total = 0.0;
+  int timed_samples = 0;     // avg_render_ms 표본 수 (현재 요청의 결과만)
+  std::uint64_t next_id = 0;
 
   State(TileSource& s, TileCache& c, SchedulerOptions o) : source(s), cache(c), options(o) {}
 
@@ -93,13 +97,25 @@ struct TileScheduler::State {
     in_flight.clear();
   }
 
-  void on_done(const TileKey& key, Result<Bitmap> result) {
+  void on_done(const TileKey& key, std::uint64_t id, Result<Bitmap> result) {
     auto it = in_flight.find(key);
-    if (it != in_flight.end()) {
-      const auto elapsed = std::chrono::steady_clock::now() - it->second.started;
-      render_ms_total += std::chrono::duration<double, std::milli>(elapsed).count();
-      in_flight.erase(it);
+    const bool current = it != in_flight.end() && it->second.id == id;
+    if (!current) {
+      // 지난 요청: 승격 때 취소했지만 이미 워커에서 실행 중이던 렌더. 성공이면 결과를 버리지 않고 쓰고,
+      // 같은 키로 다시 낸 요청은 중복이므로 취소한다 (같은 타일이 두 번 렌더되지 않게)
+      if (!result || cache.contains(key)) return;
+      if (it != in_flight.end()) {
+        it->second.handle.cancel();
+        ++stats.cancelled;
+        in_flight.erase(it);
+      }
+      ++stats.completed;
+      cache.put(key, std::make_shared<const Bitmap>(std::move(*result)));
+      if (on_tile) on_tile(key);
+      return;
     }
+    const auto elapsed = std::chrono::steady_clock::now() - it->second.started;
+    in_flight.erase(it);
     if (!result) {
       if (result.error().code == ErrorCode::kCancelled) return;
       ++stats.failed;
@@ -107,8 +123,10 @@ struct TileScheduler::State {
       if (on_tile) on_tile(key);
       return;
     }
+    render_ms_total += std::chrono::duration<double, std::milli>(elapsed).count();
+    ++timed_samples;
     ++stats.completed;
-    stats.avg_render_ms = render_ms_total / stats.completed;
+    stats.avg_render_ms = render_ms_total / timed_samples;
     cache.put(key, std::make_shared<const Bitmap>(std::move(*result)));
     if (on_tile) on_tile(key);
   }
@@ -156,15 +174,16 @@ void TileScheduler::update(const Rect& viewport_doc) {
   for (const auto& n : s.needed) {
     if (s.cache.contains(n.key) || s.in_flight.contains(n.key) || s.failed.contains(n.key)) continue;
     TileRequest req{n.key, s.layout->page_size_pt(n.key.page)};
-    State::InFlight f{{}, n.priority, std::chrono::steady_clock::now()};
+    const std::uint64_t id = ++s.next_id;
+    State::InFlight f{{}, n.priority, std::chrono::steady_clock::now(), id};
     // 동기 소스는 request() 안에서 바로 콜백을 부르므로, 먼저 in_flight 에 넣는다
     s.in_flight.emplace(n.key, std::move(f));
     ++s.stats.requested;
-    engine::TaskHandle handle = s.source.request(req, n.priority, [weak](const TileKey& key, Result<Bitmap> r) {
-      if (auto st = weak.lock()) st->on_done(key, std::move(r));
+    engine::TaskHandle handle = s.source.request(req, n.priority, [weak, id](const TileKey& key, Result<Bitmap> r) {
+      if (auto st = weak.lock()) st->on_done(key, id, std::move(r));
     });
     auto again = s.in_flight.find(n.key);
-    if (again != s.in_flight.end()) again->second.handle = std::move(handle);
+    if (again != s.in_flight.end() && again->second.id == id) again->second.handle = std::move(handle);
   }
 }
 
