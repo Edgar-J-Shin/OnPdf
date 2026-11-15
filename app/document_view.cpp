@@ -80,6 +80,7 @@ void DocumentView::set_document(const engine::DocumentHandle& handle, UiDispatch
   scheduler_->set_on_tile([this](const view::TileKey& key) { on_tile_ready(key); });
   placeholder_.clear();
   last_page_ = -1;
+  nav_anchor_.reset();
   first_view_pending_ = true;
   relayout();
   emit_page_if_changed();
@@ -101,6 +102,7 @@ void DocumentView::clear_document(const QString& placeholder) {
   autoscroll_timer_.stop();
   placeholder_ = placeholder;
   last_page_ = -1;
+  nav_anchor_.reset();
   first_view_pending_ = false;
   update_scrollbars();
   viewport()->update();
@@ -158,11 +160,22 @@ void DocumentView::go_to_page(int page) {
   if (!layout_ || layout_->page_count() == 0) return;
   page = std::clamp(page, 0, layout_->page_count() - 1);
   const onpdf::Rect r = layout_->page_rect(page);
-  verticalScrollBar()->setValue(static_cast<int>(std::lround((r.y - layout_->options().margin) / dpr())));
+  scroll_to_anchored(page, (r.y - layout_->options().margin) / dpr());
+}
+
+void DocumentView::scroll_to_anchored(int page, double value_logical) {
+  QScrollBar* bar = verticalScrollBar();
+  const int value = std::clamp(static_cast<int>(std::lround(value_logical)), bar->minimum(), bar->maximum());
+  nav_anchor_ = NavAnchor{page, value};  // 스크롤 전에 둬야 이번 이동의 쪽 변경 신호가 이 쪽을 알린다
+  if (bar->value() != value) bar->setValue(value);  // → scrollContentsBy → emit_page_if_changed
+  emit_page_if_changed();
 }
 
 int DocumentView::current_page() const {
   if (!layout_ || layout_->page_count() == 0) return -1;
+  if (nav_anchor_ && nav_anchor_->scroll == verticalScrollBar()->value() && nav_anchor_->page < layout_->page_count()) {
+    return nav_anchor_->page;
+  }
   const onpdf::Rect vp = viewport_doc();
   return layout_->page_at(vp.y + vp.h / 2.0);
 }
@@ -439,6 +452,7 @@ void DocumentView::on_text_index(int page, int generation, std::shared_ptr<const
   if (cancelled) return;  // 취소된 요청은 다시 보이면 재요청된다
   if (!index) index = std::make_shared<const view::PageTextIndex>();  // 추출 실패: 빈 인덱스로 재요청 방지
   text_cache_[page] = std::move(index);
+  resolve_pending_drag(page, *text_cache_[page]);
   emit text_index_ready(page);
   if (layout_ && page < layout_->page_count()) {
     const double d = dpr();
@@ -505,26 +519,89 @@ void DocumentView::scroll_to_page_point(int page, onpdf::Point pt) {
   const double d = dpr();
   const double s = layout_->scale();
   const onpdf::Point doc = layout_->page_px_to_doc(page, {pt.x * s, pt.y * s});
-  verticalScrollBar()->setValue(static_cast<int>(std::lround(doc.y / d - layout_->options().margin / d)));
+  scroll_to_anchored(page, doc.y / d - layout_->options().margin / d);
 }
 
 // ---------------------------------------------------------------- 선택
 
 void DocumentView::set_selection(view::TextPos anchor, view::TextPos focus) {
   const bool before = has_selection();
+  const QRegion old_region = selection_region();
   selection_.set(anchor, focus);
-  viewport()->update();
+  // 바뀐 선택 사각형만 다시 그린다 (긴 문서에서 드래그 중 전체 다시 그리기 방지)
+  const QRegion dirty = old_region.united(selection_region());
+  if (!dirty.isEmpty()) viewport()->update(dirty);
   if (before != has_selection()) emit selection_changed(has_selection());
 }
 
 void DocumentView::clear_selection() {
+  pending_anchor_.reset();
+  pending_focus_.reset();
   if (selection_.empty()) return;
+  const QRegion old_region = selection_region();
   selection_.clear();
-  viewport()->update();
+  if (!old_region.isEmpty()) viewport()->update(old_region);
   emit selection_changed(false);
 }
 
+QRegion DocumentView::selection_region() const {
+  QRegion region;
+  if (!layout_ || selection_.empty()) return region;
+  const double d = dpr();
+  const double k = layout_->scale() / d;  // 포인트 → 논리 px
+  const double ox = horizontal_offset_logical() - horizontalScrollBar()->value();
+  const double oy = -verticalScrollBar()->value();
+  for (int page : layout_->pages_in(viewport_doc())) {
+    const view::PageTextIndex* index = text_index(page);
+    if (index == nullptr) continue;
+    const view::TextRange range = selection_.range_on(page, index->char_count());
+    if (range.empty()) continue;
+    const onpdf::Rect pr = layout_->page_rect(page);
+    const double px = ox + pr.x / d;
+    const double py = oy + pr.y / d;
+    for (const onpdf::Rect& r : index->selection_rects(range)) {
+      region += QRectF(px + r.x * k, py + r.y * k, r.w * k, r.h * k).toAlignedRect().adjusted(-1, -1, 1, 1);
+    }
+  }
+  return region;
+}
+
+view::TextPos DocumentView::drag_position(QPointF viewport_pos,
+                                          std::optional<std::pair<int, onpdf::Point>>& pending) {
+  auto hit = page_point_at(viewport_pos);
+  if (!hit) {
+    pending.reset();
+    return {};
+  }
+  const auto [page, pt] = *hit;
+  if (const view::PageTextIndex* index = text_index(page)) {
+    pending.reset();
+    return {page, index->nearest_position(pt)};
+  }
+  pending = *hit;  // 인덱스가 오면 resolve_pending_drag 가 실제 위치로 바꾼다
+  return {page, 0};
+}
+
+void DocumentView::resolve_pending_drag(int page, const view::PageTextIndex& index) {
+  view::TextPos anchor = selection_.anchor();
+  view::TextPos focus = selection_.focus();
+  bool changed = false;
+  if (pending_anchor_ && pending_anchor_->first == page) {
+    anchor = {page, index.nearest_position(pending_anchor_->second)};
+    pending_anchor_.reset();
+    changed = true;
+  }
+  if (pending_focus_ && pending_focus_->first == page) {
+    focus = {page, index.nearest_position(pending_focus_->second)};
+    pending_focus_.reset();
+    changed = true;
+  }
+  if (changed && anchor.page >= 0) set_selection(anchor, focus);
+}
+
 void DocumentView::select_all_on_current_page() {
+  pending_anchor_.reset();
+  pending_focus_.reset();
   const int page = current_page();
   const view::PageTextIndex* index = text_index(page);
   if (page < 0 || index == nullptr || index->empty()) return;
@@ -652,7 +729,7 @@ void DocumentView::autoscroll_step() {
     return;
   }
   verticalScrollBar()->setValue(verticalScrollBar()->value() + std::clamp(dy, -40, 40));
-  set_selection(selection_.anchor(), position_at(last_drag_pos_));
+  set_selection(selection_.anchor(), drag_position(last_drag_pos_, pending_focus_));
 }
 
 // ---------------------------------------------------------------- 이벤트
@@ -669,6 +746,8 @@ void DocumentView::resizeEvent(QResizeEvent* event) {
 
 void DocumentView::scrollContentsBy(int dx, int dy) {
   QAbstractScrollArea::scrollContentsBy(dx, dy);  // viewport()->update() 포함
+  // 사용자 스크롤·배율 변경 등으로 고정한 값에서 벗어나면 이동 고정 쪽을 버리고 중앙 기준으로 돌아간다
+  if (nav_anchor_ && nav_anchor_->scroll != verticalScrollBar()->value()) nav_anchor_.reset();
   schedule_update();
   emit_page_if_changed();
 }
@@ -706,6 +785,9 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
     return;
   }
   setFocus();
+  // 새 클릭은 이전 드래그의 보류 지점을 버린다 (늦게 온 인덱스가 새 선택을 덮어쓰지 않게)
+  pending_anchor_.reset();
+  pending_focus_.reset();
   press_pos_ = event->position();
   // 연속 클릭 수 (더블/트리플)
   const bool near_last = (event->position() - last_click_pos_).manhattanLength() < 6;
@@ -745,7 +827,8 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
       }
     }
   }
-  const view::TextPos anchor = position_at(event->position());
+  pending_focus_.reset();
+  const view::TextPos anchor = drag_position(event->position(), pending_anchor_);
   if (anchor.page < 0) {
     clear_selection();
     return;
@@ -757,7 +840,7 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
 void DocumentView::mouseMoveEvent(QMouseEvent* event) {
   if (drag_ == Drag::kText) {
     last_drag_pos_ = event->position();
-    set_selection(selection_.anchor(), position_at(event->position()));
+    set_selection(selection_.anchor(), drag_position(event->position(), pending_focus_));
     const QRect vp = viewport()->rect();
     if (!vp.contains(event->position().toPoint())) {
       if (!autoscroll_timer_.isActive()) autoscroll_timer_.start();
@@ -771,7 +854,8 @@ void DocumentView::mouseMoveEvent(QMouseEvent* event) {
       // 링크 위에서 끌면 텍스트 선택으로 전환
       drag_ = Drag::kText;
       pressed_link_.reset();
-      set_selection(position_at(press_pos_), position_at(event->position()));
+      const view::TextPos anchor = drag_position(press_pos_, pending_anchor_);
+      set_selection(anchor, drag_position(event->position(), pending_focus_));
     }
     return;
   }
