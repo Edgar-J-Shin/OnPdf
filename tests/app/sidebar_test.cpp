@@ -20,6 +20,7 @@
 #include <QStatusBar>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QScreen>
 #include <QScrollBar>
 #include <QSpinBox>
 #include <QTabWidget>
@@ -27,6 +28,7 @@
 #include <QTreeView>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <string>
 #include <set>
@@ -348,6 +350,7 @@ TEST_F(SidebarTest, OutlineHighlightTimerIsThrottledNotDebounced) {
   bar->setValue(bar->value() + 30);
   ASSERT_TRUE(timer->isActive());
   EXPECT_LE(timer->remainingTime(), first - 10) << "timer was restarted (debounce) instead of kept (throttle)";
+  EXPECT_GT(first, 80);  // 100ms 간격
 }
 
 // 다른 문서를 열면 이전 문서의 목차 로드 작업을 취소한다 (#12)
@@ -363,10 +366,10 @@ TEST_F(SidebarTest, ReopenCancelsPreviousOutlineLoad) {
 
 TEST_F(SidebarTest, OutlineIndentationFitsNarrowSidebar) {
   ASSERT_TRUE(open("outline-cycle.pdf", 33));
-  EXPECT_EQ(outline().tree()->indentation(), 12);
+  EXPECT_EQ(outline().tree()->indentation(), 16);
 }
 
-// 쪽이 바뀌지 않아도 타일이 도착하면 상태 표시줄 통계를 갱신한다 — 500ms 에 한 번으로 묶는다 (#12)
+// 쪽이 바뀌지 않아도 타일이 도착하면 상태 표시줄 통계를 갱신한다 — 1초에 한 번으로 묶는다 (#12)
 TEST_F(SidebarTest, StatusBarRefreshesWhenTilesArrive) {
   ASSERT_TRUE(open("simple.pdf", 0));
   auto* view = window_.document_view();
@@ -390,7 +393,35 @@ TEST_F(SidebarTest, StatusBarRefreshesWhenTilesArrive) {
   emit view->tiles_changed();  // 연속 도착: 다시 시작하지 않는다
   EXPECT_LE(timer->remainingTime(), first - 15);
   EXPECT_EQ(status->text(), QStringLiteral("stale"));  // 아직 갱신 전
-  ASSERT_TRUE(spin_until([&] { return status->text().contains(QStringLiteral("MB")); }, 2000));
+  EXPECT_GT(first, 900);  // 1초 간격
+  ASSERT_TRUE(spin_until([&] { return status->text().contains(QStringLiteral("MB")); }, 3000));
+}
+
+// 실제 화면 이동: 창을 배율이 다른 화면으로 옮기면 썸네일이 그 배율로 다시 렌더된다 (#12).
+// 배율이 다른 화면이 둘 이상 있을 때만 (예: macOS 내장 Retina + 외장 모니터). offscreen·단일 화면이면 건너뛴다
+TEST_F(SidebarTest, MovingToScreenWithDifferentDprRerendersThumbnails) {
+  ASSERT_TRUE(open("simple.pdf", 0));
+  QScreen* home = window_.screen();
+  QScreen* other = nullptr;
+  for (QScreen* screen : QGuiApplication::screens()) {
+    if (screen->devicePixelRatio() != home->devicePixelRatio()) other = screen;
+  }
+  if (other == nullptr) GTEST_SKIP() << "needs two screens with different device pixel ratios";
+  ASSERT_TRUE(spin_until([&] { return thumbs().cached_count() == 2 && thumbs().pending_requests() == 0; }));
+
+  auto rendered_at = [&](qreal dpr) {
+    const QImage image = thumbs().thumbnail(0);
+    return !image.isNull() && image.devicePixelRatio() == dpr && thumbs().pending_requests() == 0 &&
+           std::abs(image.width() - static_cast<int>(thumbs().thumb_width() * dpr)) <= 2;
+  };
+  ASSERT_TRUE(rendered_at(home->devicePixelRatio()));
+  for (QScreen* target : {other, home}) {
+    window_.move(target->availableGeometry().topLeft() + QPoint(40, 40));
+    ASSERT_TRUE(spin_until([&] { return thumbs().devicePixelRatioF() == target->devicePixelRatio(); }, 5000))
+        << "window did not move to screen " << target->name().toStdString();
+    EXPECT_TRUE(spin_until([&] { return rendered_at(target->devicePixelRatio()); }, 5000))
+        << "thumbnails not re-rendered at dpr " << target->devicePixelRatio();
+  }
 }
 
 }  // namespace

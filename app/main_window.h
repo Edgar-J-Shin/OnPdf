@@ -77,6 +77,8 @@ class MainWindow : public QMainWindow {
   void on_print();
   void on_print_finished(PrintJob::Outcome outcome);
   void cancel_print();
+  // 인쇄 중 새 문서를 열려 할 때 확인. "인쇄 취소하고 열기" 면 인쇄를 취소하고 true
+  bool confirm_cancel_print_for(const QString& path);
   void discard_print_job();  // 진행 중이던 인쇄를 조용히 버리고 진행 창을 닫는다 (새 문서가 열렸을 때)
   void update_print_action();
   void on_outline_item(const onpdf::view::Link& target);

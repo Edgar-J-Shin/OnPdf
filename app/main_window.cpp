@@ -22,6 +22,7 @@
 #include <QMimeData>
 #include <QPointer>
 #include <QPrintDialog>
+#include <QPushButton>
 #include <QPrinter>
 #include <QProgressBar>
 #include <QProgressDialog>
@@ -76,7 +77,7 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   outline_highlight_timer_ = new QTimer(this);
   outline_highlight_timer_->setObjectName(QStringLiteral("outline_highlight_timer"));
   outline_highlight_timer_->setSingleShot(true);
-  outline_highlight_timer_->setInterval(40);
+  outline_highlight_timer_->setInterval(100);
   connect(outline_highlight_timer_, &QTimer::timeout, this, &MainWindow::update_outline_highlight);
 
   page_spin_ = new QSpinBox(this);
@@ -100,11 +101,11 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(view_, &DocumentView::current_page_changed, this, &MainWindow::on_current_page_changed);
   connect(view_, &DocumentView::zoom_changed, this, &MainWindow::on_zoom_changed);
   connect(view_, &DocumentView::first_view_rendered, this, &MainWindow::on_first_view_rendered);
-  // 타일이 도착할 때마다 캐시·렌더 통계를 갱신하되 500ms 에 한 번으로 묶는다
+  // 타일이 도착할 때마다 캐시·렌더 통계를 갱신하되 1초에 한 번으로 묶는다
   status_timer_ = new QTimer(this);
   status_timer_->setObjectName(QStringLiteral("status_timer"));
   status_timer_->setSingleShot(true);
-  status_timer_->setInterval(500);
+  status_timer_->setInterval(1000);
   connect(status_timer_, &QTimer::timeout, this, &MainWindow::refresh_status);
   connect(view_, &DocumentView::tiles_changed, this, [this] {
     if (!status_timer_->isActive()) status_timer_->start();
@@ -121,7 +122,7 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   });
   connect(outline_panel_, &OutlinePanel::item_activated, this, &MainWindow::on_outline_item);
   connect(view_->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] {
-    // 스로틀: 진행 중이면 다시 시작하지 않는다 → 연속(관성) 스크롤 중에도 40ms 마다 갱신
+    // 스로틀: 진행 중이면 다시 시작하지 않는다 → 연속(관성) 스크롤 중에도 100ms 마다 갱신
     if (sidebar_->isVisible() && sidebar_->currentWidget() == outline_panel_ && !outline_highlight_timer_->isActive()) {
       outline_highlight_timer_->start();
     }
@@ -201,7 +202,11 @@ void MainWindow::fail_screenshot(const QString& reason) {
 }
 
 void MainWindow::open_file(const QString& path) {
-  // 인쇄는 여기서 취소하지 않는다: 열기가 실패하거나 암호 입력을 취소하면 인쇄를 계속한다 (on_opened 에서 정리)
+  // 인쇄 중이면 먼저 묻는다: 그대로 두면 열지 않고, 취소하고 열기를 고르면 인쇄를 취소한 뒤 연다
+  if (print_job_ && print_job_->active() && !confirm_cancel_print_for(path)) {
+    show_transient(tr("인쇄 중이라 열지 않았습니다"));
+    return;
+  }
   show_transient(tr("여는 중: %1").arg(QFileInfo(path).fileName()));
   session_.open(path);
 }
@@ -321,6 +326,20 @@ bool MainWindow::print_with(QPrinter& printer) {
   const bool started = job->start();
   update_print_action();  // 시작한 뒤에야 active 라 인쇄 중 비활성이 반영된다
   return started;
+}
+
+bool MainWindow::confirm_cancel_print_for(const QString& path) {
+  QMessageBox box(QMessageBox::Question, tr("인쇄 중입니다"),
+                  tr("문서를 인쇄하고 있습니다. 인쇄를 취소하고 %1 을(를) 열까요?").arg(QFileInfo(path).fileName()),
+                  QMessageBox::NoButton, this);
+  box.setObjectName(QStringLiteral("print_busy_question"));
+  QPushButton* cancel_and_open = box.addButton(tr("인쇄 취소하고 열기"), QMessageBox::AcceptRole);
+  QPushButton* keep = box.addButton(tr("인쇄 계속하기"), QMessageBox::RejectRole);
+  box.setDefaultButton(keep);  // 실수로 Enter 를 눌러도 인쇄가 끊기지 않게
+  box.exec();
+  if (box.clickedButton() != cancel_and_open) return false;
+  cancel_print();  // finished(kCancelled) → "인쇄를 취소했습니다"
+  return true;
 }
 
 void MainWindow::discard_print_job() {
