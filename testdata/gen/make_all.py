@@ -38,6 +38,7 @@ GENERATED = {
     "unicode-metadata.pdf": docs.make_unicode_metadata,
     "transparency.pdf": docs.make_transparency,
     "text-layout.pdf": docs.make_text_layout,
+    "outline-cycle.pdf": docs.make_outline_cycle,
 }
 
 

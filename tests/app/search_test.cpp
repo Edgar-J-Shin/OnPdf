@@ -122,7 +122,16 @@ TEST_F(SearchFlowTest, FindsNavigatesAndWraps) {
   EXPECT_EQ(s().current_ordinal(), 2u);
   EXPECT_EQ(s().current()->page, 1);
   EXPECT_EQ(window_.search_bar()->status_text(), QStringLiteral("2 / 2"));
-  EXPECT_EQ(window_.document_view()->current_page(), 1);  // 결과 쪽으로 스크롤
+  {
+    // 결과가 뷰포트 안에 보인다 (이미 보이면 스크롤하지 않으므로 현재 쪽은 배율·창 크기에 따라 다르다)
+    const auto& rects = s().current_rects();
+    ASSERT_FALSE(rects.empty());
+    auto* view = window_.document_view();
+    const QPointF tl = view->page_point_to_viewport(1, {rects.front().x, rects.front().y});
+    const QPointF br = view->page_point_to_viewport(1, {rects.front().right(), rects.front().bottom()});
+    EXPECT_GE(tl.y(), 0.0);
+    EXPECT_LE(br.y(), view->viewport()->height());
+  }
   press(window_.search_bar()->line_edit(), Qt::Key_Return);  // 끝에서 순환
   EXPECT_EQ(s().current_ordinal(), 1u);
   EXPECT_TRUE(s().wrapped());

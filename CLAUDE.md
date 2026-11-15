@@ -50,6 +50,7 @@ ctest --preset dev                      # unit + rendering regression
 ./build/dev/bin/onpdf_cli tiles in.pdf out-dir --page 0 --scale 2   # 타일 PNG + stitched.png + full.png
 ./build/dev/bin/onpdf_cli text in.pdf --page 0                       # 글자·줄·링크 수 + 추출 텍스트
 ./build/dev/bin/onpdf_cli search in.pdf "query" [--case] [--word]    # 쪽별 결과 + 문맥
+./build/dev/bin/onpdf_cli outline in.pdf                             # 목차 트리 (깊이 들여쓰기, [p.N]/[uri])
 ONPDF_UPDATE_REFERENCES=1 ./build/dev/bin/onpdf_render_tests   # 렌더링 기준 이미지 갱신
 cmake --preset dev-app && cmake --build --preset dev-app        # Qt 앱 포함 빌드
 ./build/dev-app/bin/onpdf_app testdata/simple.pdf              # 앱 실행
@@ -65,15 +66,16 @@ ctest --preset dev-app                                         # app 테스트(o
 # Architecture
 
 ```text
-app/          Qt UI (Qt 의존). onpdf_app_lib(UiDispatcher·DocumentSession·qt_image·DocumentTileSource·DocumentView·SearchBar·MainWindow) + onpdf_app(main 만)
+app/          Qt UI (Qt 의존). onpdf_app_lib(UiDispatcher·DocumentSession·qt_image·DocumentTileSource·DocumentView·SearchBar·ThumbnailPanel·OutlinePanel·MainWindow) + onpdf_app(main 만)
 edit/         Command, 실행 취소 스택, 선택 모델, 텍스트 블록 모델, 폰트 매니저
 core/         Document, Page, 렌더 캐시(타일 LRU), 텍스트 인덱스       (Qt 의존 금지)
-core/engine/  PdfiumLibrary(init RAII) · PdfiumDocument(열기·크기·렌더·load_text) · TextPage(FPDFText/FPDFLink 추출, 좌표 변환) · pdfium_handles
+core/engine/  PdfiumLibrary(init RAII) · PdfiumDocument(열기·크기·렌더·load_text·load_outline·resolve_location) · TextPage(FPDFText/FPDFLink 추출, 좌표 변환) · dest(목적지·URI·UTF-16 변환 공용, 내부) · pdfium_handles
               PdfiumWorker(전용 스레드 + High/Normal/Low 큐 + 취소) · DocumentHandle(워커 쪽 문서의 스레드 안전 핸들), QpdfTools(M2)
 core/image/   png_io (stb 기반 PNG 읽기/쓰기, BGRA↔RGBA)
 core/view/    PageLayout(세로 연속 레이아웃·좌표 변환) · tile.h(TileKey, 512px, 1/64 배율 양자화) · TileCache(바이트 상한 LRU)
               TileScheduler(뷰포트→필요 타일, High/Low 요청·취소·실패 집합) · TileSource(SyncTileSource=CLI·테스트)
               PageTextIndex(쪽 텍스트 불변 스냅샷: 글자·줄·링크, hit-test, 선택 사각형 — 생성은 워커, 조회는 메인) · TextSelection(다중 쪽 선택)
+              Outline(목차 불변 스냅샷: 전위 평탄화, 깊이 32·10만 개 상한, 순환 차단, item_at 현재 항목)
               search(SearchSession: 현재 쪽부터 순환 검색, 동시 4쪽·kNormal, 세대·10만 상한 — 실행기 주입, 메인 스레드; map_source_range)   (Qt 금지)
 core/platform/ path.h (UTF-8 ↔ std::filesystem::path)
 cli/          렌더·병합·검증용 명령줄 도구                            (core/edit 만 사용)
@@ -109,6 +111,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 - 뷰는 쪽 배경 → 미리보기 → 이전 배율 타일(늘려 그림) → 현재 배율 타일 순으로 그려 확대·스크롤 중 빈 화면이 없다
 - 배율은 `quantize_scale(zoom × dpr)` 로 1/64 단위. 맞춤 배율은 내림(`fit_*_scale_q`) 이라 문서가 뷰포트를 넘지 않는다
 - 타일 경계는 AGG 클리핑 때문에 전체 렌더와 픽셀 단위로 완전히 같지는 않다(0.03% 수준). `tile_stitch_test` 가 0.1% 상한으로 검증
+- 사이드바(F4): `ThumbnailPanel` 은 보이는 행 ±4 쪽만 `render_page`(kLow, 동시 8) → `QCache` 64MB, 문서 교체·폭 32px 이상 변화 시 세대 증가로 늦은 결과를 버린다. `OutlinePanel` 은 `load_outline`(kNormal) 스냅샷을 표시하고, /XYZ 이동은 `resolve_location`(kHigh) → `scroll_to_page_point`. 현재 항목은 `DocumentView::reading_position` + `Outline::item_at`
 
 # Coding Guidelines
 1. **Safety First**: 모든 PDFium 반환값(nullptr, FALSE, 음수)을 검사한다. 파일 I/O 와 외부 라이브러리 호출은 `std::expected` 또는 명시적 에러 타입으로 전파하고, 예외는 경계(UI·CLI)에서만 잡는다.

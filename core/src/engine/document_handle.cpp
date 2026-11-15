@@ -273,6 +273,30 @@ std::future<Result<view::PageSearchResult>> DocumentHandle::search_page(int page
       });
 }
 
+TaskHandle DocumentHandle::load_outline(Priority priority,
+                                        std::function<void(Result<view::Outline>)> on_done) const {
+  return DocumentHandleAccess::post_document_task<view::Outline>(
+      *this, priority, [](PdfiumDocument& doc) { return doc.load_outline(); }, std::move(on_done));
+}
+
+std::future<Result<view::Outline>> DocumentHandle::load_outline(Priority priority) const {
+  return DocumentHandleAccess::to_future<view::Outline>(
+      [=, this](std::function<void(Result<view::Outline>)> cb) { return load_outline(priority, std::move(cb)); });
+}
+
+TaskHandle DocumentHandle::resolve_location(int page_index, Point user_pt, Priority priority,
+                                            std::function<void(Result<Point>)> on_done) const {
+  return DocumentHandleAccess::post_document_task<Point>(
+      *this, priority, [page_index, user_pt](PdfiumDocument& doc) { return doc.resolve_location(page_index, user_pt); },
+      std::move(on_done));
+}
+
+std::future<Result<Point>> DocumentHandle::resolve_location(int page_index, Point user_pt, Priority priority) const {
+  return DocumentHandleAccess::to_future<Point>([=, this](std::function<void(Result<Point>)> cb) {
+    return resolve_location(page_index, user_pt, priority, std::move(cb));
+  });
+}
+
 void DocumentHandle::close() noexcept {
   if (state_) state_->request_close();
 }

@@ -467,6 +467,20 @@ std::optional<std::pair<int, onpdf::Point>> DocumentView::page_point_at(QPointF 
   return std::make_pair(page, layout_->page_px_to_pt(page, in_page));
 }
 
+std::optional<std::pair<int, onpdf::Point>> DocumentView::reading_position() const {
+  if (!layout_ || layout_->page_count() == 0) return std::nullopt;
+  // 이동 함수들은 대상을 여백(margin) 만큼 아래에 둔다 → 그보다 1 논리 px 아래를 본다
+  const double probe_y = layout_->options().margin / dpr() + 1.0;
+  auto hit = page_point_at(QPointF(viewport()->width() / 2.0, probe_y));
+  if (!hit) return std::nullopt;
+  auto& [page, pt] = *hit;
+  if (pt.y > layout_->page_size_pt(page).height && page + 1 < layout_->page_count()) {
+    page += 1;  // 간격은 위쪽 쪽에 귀속되므로 다음 쪽 맨 위로 본다
+    pt = {0.0, 0.0};
+  }
+  return hit;
+}
+
 QPointF DocumentView::page_point_to_viewport(int page, onpdf::Point pt) const {
   if (!layout_) return {};
   const double d = dpr();
