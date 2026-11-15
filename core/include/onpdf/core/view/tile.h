@@ -7,6 +7,7 @@
 #include "onpdf/core/engine/render_types.h"
 #include "onpdf/core/geometry.h"
 
+#include <algorithm>
 #include <cmath>
 #include <compare>
 #include <cstddef>
@@ -49,6 +50,15 @@ struct TileKeyHash {
 [[nodiscard]] inline Size page_pixel_size(engine::PageSize pt, int scale_q) noexcept {
   const double s = dequantize_scale(scale_q);
   return {std::ceil(pt.width * s), std::ceil(pt.height * s)};
+}
+
+// 쪽 전체 미리보기 배율: 쪽 전체가 타일 하나(512px)에 들어가는 최대 배율, 상한 max_q.
+// 4,096pt 이하 쪽은 max_q(기본 1/8), 더 큰 포스터 쪽은 배율을 낮춰 미리보기가 쪽 전체를 덮게 한다. 하한 1/64
+[[nodiscard]] inline int preview_scale_q_for(engine::PageSize pt, int max_q) noexcept {
+  const double longest = std::max(pt.width, pt.height);
+  if (!(longest > 0.0) || !std::isfinite(longest)) return std::max(max_q, kMinScaleQ);
+  const double fit_q = std::floor(static_cast<double>(kTileSize) * kScaleQuantum / longest);
+  return std::clamp(static_cast<int>(std::min(fit_q, static_cast<double>(max_q))), kMinScaleQ, std::max(max_q, kMinScaleQ));
 }
 
 [[nodiscard]] inline int tiles_across(double px) noexcept {

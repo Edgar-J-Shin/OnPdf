@@ -535,6 +535,26 @@ def make_print_low_res() -> bytes:
                        file_id_name="print-low-res.pdf")
 
 
+def make_unicode_map_error() -> bytes:
+    """ToUnicode 없는 Type3 글꼴 + 표준 글리프 이름 목록(AGL) 밖 이름(/g1 /g2) → PDFium 유니코드 매핑 오류.
+    글자 코드 65·66 을 그린다. 뷰어는 PDFium 값을 그대로 쓰므로 "ABAB" 로 추출·검색된다 (#12 C1)."""
+    w = PdfWriter()
+    pages = w.reserve()
+    helv = g.simple_font(w)
+    g1 = w.stream(b"", content("600 0 0 0 500 700 d1", "50 0 400 700 re f"))
+    g2 = w.stream(b"", content("600 0 0 0 500 700 d1", "50 0 400 350 re f"))
+    t3 = w.add(b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 600 700] /FontMatrix [0.001 0 0 0.001 0 0] "
+               b"/CharProcs << /g1 %d 0 R /g2 %d 0 R >> /Encoding << /Type /Encoding /Differences [65 /g1 /g2] >> "
+               b"/FirstChar 65 /LastChar 66 /Widths [600 600] /Resources << >> >>" % (g1, g2))
+    c = w.stream(b"", content(_label(72, 740, 14, "Unicode map error test (Type3, no ToUnicode)"),
+                              "BT /T3 24 Tf 72 680 Td (ABAB) Tj ET"))
+    kids = [g.page(w, pages, g.LETTER, c, b"<< /Font << /F1 %d 0 R /T3 %d 0 R >> >>" % (helv, t3))]
+    g.pages_tree(w, pages, kids)
+    root = g.catalog(w, pages)
+    info = g.info_dict(w, "Unicode map error (Type3 without ToUnicode)")
+    return w.write(root=root, info=info, file_id=g.file_id_for("unicode-map-error.pdf"))
+
+
 def make_outline_cycle() -> bytes:
     """악성 목차: 형제 순환(B /Next A), 자식 자기 참조(A /First A), 깊이 40 체인(B 아래).
     뷰어는 무한 루프·스택 오버플로 없이 유한한 항목만 보여야 한다."""

@@ -379,12 +379,21 @@ void MainWindow::on_outline_item(const onpdf::view::Link& target) {
     on_link_activated(target);  // is_safe_uri + 사용자 확인
     return;
   }
+  navigate_to(target);
+}
+
+void MainWindow::navigate_to(const onpdf::view::Link& target) {
+  if (!view_->has_document() || target.kind != view::LinkKind::kPage) return;
   if (target.page < 0 || target.page >= view_->page_count()) return;
+  if (target.location) {  // 이미 쪽 포인트로 변환된 위치
+    view_->scroll_to_page_point(target.page, *target.location);
+    return;
+  }
   if (!target.user_location) {
     view_->go_to_page(target.page);
     return;
   }
-  // /XYZ 위치는 쪽을 열어야 쪽 포인트로 바꿀 수 있다 → 워커에서 변환 후 이동
+  // /XYZ 위치는 쪽을 열어야 쪽 포인트로 바꿀 수 있다 → 워커에서 변환 후 이동 (링크·목차 공용)
   const int generation = outline_generation_;
   const int page = target.page;
   UiDispatcher* dispatcher = &dispatcher_;
@@ -394,6 +403,7 @@ void MainWindow::on_outline_item(const onpdf::view::Link& target) {
       [dispatcher, self, generation, page](onpdf::Result<onpdf::Point> result) {
         auto shared = std::make_shared<onpdf::Result<onpdf::Point>>(std::move(result));
         dispatcher->post_to(self, [generation, page, shared](MainWindow* window) {
+          // 그 사이 다른 문서를 열었으면 버린다 (outline_generation_ 은 문서를 열 때마다 증가)
           if (generation != window->outline_generation_ || !window->view_->has_document()) return;
           if (*shared) {
             window->view_->scroll_to_page_point(page, **shared);
@@ -574,11 +584,7 @@ void MainWindow::on_select_all() { view_->select_all_on_current_page(); }
 
 void MainWindow::on_link_activated(const onpdf::view::Link& link) {
   if (link.kind == onpdf::view::LinkKind::kPage) {
-    if (link.location) {
-      view_->scroll_to_page_point(link.page, *link.location);
-    } else {
-      view_->go_to_page(link.page);
-    }
+    navigate_to(link);  // 위치는 클릭할 때 변환한다 (텍스트 추출 시 대상 쪽을 열지 않도록)
     return;
   }
   const QString uri = QString::fromUtf8(link.uri.data(), static_cast<qsizetype>(link.uri.size()));

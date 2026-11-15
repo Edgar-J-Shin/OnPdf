@@ -7,6 +7,8 @@
 
 #include <gtest/gtest.h>
 
+#include <string>
+
 #include <algorithm>
 
 namespace onpdf::engine {
@@ -120,10 +122,16 @@ TEST(TextPage, LinksFromAnnotationsPdf) {
     } else {
       ++page;
       EXPECT_EQ(link.page, 1);
-      ASSERT_TRUE(link.location.has_value());
-      // /XYZ 72 700 → 쪽 포인트 (72, 792-700=92)
-      EXPECT_NEAR(link.location->x, 72.0, 0.01);
-      EXPECT_NEAR(link.location->y, 92.0, 0.01);
+      // 추출 시에는 대상 쪽을 열지 않는다: 사용자 좌표만 있고 쪽 포인트는 비어 있다 (#12)
+      EXPECT_FALSE(link.location.has_value());
+      ASSERT_TRUE(link.user_location.has_value());
+      EXPECT_NEAR(link.user_location->x, 72.0, 0.01);
+      EXPECT_NEAR(link.user_location->y, 700.0, 0.01);
+      // 이동할 때 변환: /XYZ 72 700 → 쪽 포인트 (72, 792-700=92)
+      auto pt = doc->resolve_location(link.page, *link.user_location);
+      ASSERT_TRUE(pt) << pt.error().message;
+      EXPECT_NEAR(pt->x, 72.0, 0.01);
+      EXPECT_NEAR(pt->y, 92.0, 0.01);
     }
     EXPECT_FALSE(link.box.empty());
   }
@@ -269,4 +277,31 @@ TEST(TextPage, BookmarksPdfHasNoLinkAnnotations) {
 }
 
 }  // namespace
+// 유니코드 매핑 오류 글자는 U+FFFD 가 아니라 PDFium 값으로 추출·검색된다 (#12 C1).
+// 이 파일은 이전 동작(매핑 오류 → U+FFFD)에서 "\uFFFD\uFFFD\uFFFD\uFFFD" 로 추출됐다
+TEST(TextPage, UnicodeMapErrorKeepsPdfiumValue) {
+  auto doc = PdfiumDocument::open(testdata("unicode-map-error.pdf"));
+  ASSERT_TRUE(doc) << doc.error().message;
+  auto index = doc->load_text(0);
+  ASSERT_TRUE(index) << index.error().message;
+  std::u32string text;
+  for (const auto& ch : index->chars) text += ch.code;
+  EXPECT_NE(text.find(U"ABAB"), std::u32string::npos);
+  EXPECT_EQ(text.find(U'\uFFFD'), std::u32string::npos);
+  auto found = doc->search_page(0, "ABAB", {});
+  ASSERT_TRUE(found) << found.error().message;
+  EXPECT_EQ(found->ranges.size(), 1u);
+}
+
+TEST(TextPage, SanitizeTextCode) {
+  EXPECT_EQ(view::sanitize_text_code('A'), U'A');
+  EXPECT_EQ(view::sanitize_text_code(0xAC00), U'\uAC00');      // 한글 그대로
+  EXPECT_EQ(view::sanitize_text_code(0x1F600), U'\U0001F600');  // 보조 평면 그대로
+  EXPECT_EQ(view::sanitize_text_code(0), U'\uFFFD');
+  EXPECT_EQ(view::sanitize_text_code(0xD800), U'\uFFFD');       // 서로게이트
+  EXPECT_EQ(view::sanitize_text_code(0xDFFF), U'\uFFFD');
+  EXPECT_EQ(view::sanitize_text_code(0xFFFE), U'\uFFFD');       // 비문자
+  EXPECT_EQ(view::sanitize_text_code(0x110000), U'\uFFFD');     // 범위 밖
+}
+
 }  // namespace onpdf::engine
