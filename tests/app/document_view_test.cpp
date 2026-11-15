@@ -13,6 +13,9 @@
 #include <QEventLoop>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QNativeGestureEvent>
+#include <QPaintEvent>
+#include <QPointingDevice>
 #include <QScrollBar>
 #include <QTimer>
 
@@ -343,6 +346,108 @@ TEST_F(DocumentViewTest, ClearDocumentResetsState) {
   EXPECT_EQ(view_.current_page(), -1);
   EXPECT_EQ(view_.cache_stats().count, 0u);
   EXPECT_EQ(view_.verticalScrollBar()->maximum(), 0);
+}
+
+// 짧은 쪽(명함)·마지막 쪽으로 이동해도 현재 쪽은 이동한 쪽이다. 사용자가 스크롤하면 다시 중앙 기준
+TEST_F(DocumentViewTest, GoToPageKeepsShortAndLastPage) {
+  ASSERT_TRUE(open("mixed-sizes.pdf"));
+  const int last = view_.page_count() - 1;
+  int signalled = -1;
+  QObject::connect(&view_, &DocumentView::current_page_changed, &view_, [&](int p) { signalled = p; });
+  view_.go_to_page(4);  // 252×144pt 명함: 뷰포트 중앙은 다음 쪽에 걸린다
+  EXPECT_EQ(view_.current_page(), 4);
+  EXPECT_EQ(signalled, 4);
+  view_.go_to_page(last);  // 문서 끝: 쪽 위를 뷰포트 위로 올릴 수 없다
+  EXPECT_EQ(view_.current_page(), last);
+  EXPECT_EQ(signalled, last);
+  // 같은 쪽으로 다시 이동해도 유지
+  view_.go_to_page(4);
+  view_.go_to_page(4);
+  EXPECT_EQ(view_.current_page(), 4);
+  // 사용자가 스크롤하면 고정이 풀린다
+  view_.verticalScrollBar()->setValue(0);
+  EXPECT_EQ(view_.current_page(), 0);
+  // scroll_to_page_point 도 같은 규칙
+  view_.scroll_to_page_point(4, {0, 0});
+  EXPECT_EQ(view_.current_page(), 4);
+}
+
+// 배율이 바뀌면 스크롤 값이 같아도 고정을 풀고 중앙 기준으로 다시 계산한다:
+// 맨 위(값 0)에서 0쪽으로 이동해 고정한 뒤 크게 축소하면 값은 0 그대로지만 중앙에는 뒤쪽 쪽이 온다
+TEST_F(DocumentViewTest, ZoomReleasesPageAnchor) {
+  ASSERT_TRUE(open("bookmarks.pdf"));
+  view_.go_to_page(0);
+  ASSERT_EQ(view_.verticalScrollBar()->value(), 0);
+  // 앵커를 0쪽 왼쪽 위 모서리에 두면 확대 후에도 그 모서리가 같은 자리에 남아 스크롤 값이 0 그대로다
+  view_.set_zoom(DocumentView::kMinZoom, view_.page_point_to_viewport(0, {0, 0}));
+  ASSERT_EQ(view_.verticalScrollBar()->value(), 0);  // 전제: 값이 그대로
+  const auto center = view_.page_point_at(QPointF(view_.viewport()->width() / 2.0, view_.viewport()->height() / 2.0));
+  ASSERT_TRUE(center);
+  ASSERT_GT(center->first, 0);  // 전제: 중앙이 0쪽이 아니다
+  EXPECT_EQ(view_.current_page(), center->first);
+}
+
+// 텍스트 인덱스가 아직 없는 쪽에서 드래그해도, 인덱스가 오면 실제로 누른 글자부터 선택된다
+TEST_F(DocumentViewTest, DragOnUnloadedPageResolvesWhenIndexArrives) {
+  ASSERT_TRUE(open("bookmarks.pdf"));
+  view_.go_to_page(5);  // 이벤트를 처리하지 않았으므로 5쪽 인덱스는 아직 없다
+  ASSERT_EQ(view_.text_index(5), nullptr);
+  // "Bookmarks test - page 6 of 10" 줄 (사용자 y=720, 20pt) 의 가운데쯤에서 오른쪽으로
+  const QPointF from = view_.page_point_to_viewport(5, {170, 66});
+  const QPointF to = view_.page_point_to_viewport(5, {260, 66});
+  drag(from, to);
+  ASSERT_TRUE(wait_text(5));
+  QApplication::processEvents();
+  const auto& sel = view_.selection();
+  ASSERT_EQ(sel.anchor().page, 5);
+  const auto* index = view_.text_index(5);
+  EXPECT_EQ(sel.anchor().index, index->nearest_position({170, 66}));
+  EXPECT_EQ(sel.focus().index, index->nearest_position({260, 66}));
+  EXPECT_GT(sel.anchor().index, 0);  // 쪽 첫 글자가 아니다
+  const QString text = view_.selected_text();
+  EXPECT_FALSE(text.isEmpty());
+  EXPECT_FALSE(text.startsWith(QStringLiteral("Bookmarks")));
+}
+
+// 선택이 바뀌면 바뀐 사각형만 다시 그린다
+TEST_F(DocumentViewTest, SelectionChangeRepaintsOnlySelectionArea) {
+  ASSERT_TRUE(open("korean-embedded.pdf"));
+  ASSERT_TRUE(wait_text(0));
+  const view::TextRange line0 = view_.text_index(0)->lines[0].chars;
+  drag(char_left(0, line0.start), char_right(0, line0.start + 2));
+  QApplication::processEvents();
+
+  struct PaintSpy : QObject {
+    QRect bounds;
+    bool eventFilter(QObject*, QEvent* e) override {
+      if (e->type() == QEvent::Paint) bounds |= static_cast<QPaintEvent*>(e)->region().boundingRect();
+      return false;
+    }
+  } spy;
+  view_.viewport()->installEventFilter(&spy);
+  drag(char_left(0, line0.start), char_right(0, line0.start + 4));
+  QApplication::processEvents();
+  view_.viewport()->removeEventFilter(&spy);
+  ASSERT_FALSE(spy.bounds.isEmpty());
+  EXPECT_LT(spy.bounds.height(), view_.viewport()->height() / 4) << "selection change repainted the whole view";
+  EXPECT_LT(spy.bounds.width(), view_.viewport()->width());
+}
+
+// 트랙패드 핀치(NativeGesture) 는 viewport 로 와서 그 지점을 앵커로 확대한다
+TEST_F(DocumentViewTest, PinchGestureZoomsAroundPoint) {
+  ASSERT_TRUE(open("simple.pdf"));
+  const double before = view_.zoom();
+  const QPointF pos(view_.viewport()->width() / 2.0, view_.viewport()->height() / 3.0);
+  const auto anchor_before = view_.page_point_at(pos);
+  ASSERT_TRUE(anchor_before);
+  QNativeGestureEvent pinch(Qt::ZoomNativeGesture, QPointingDevice::primaryPointingDevice(), 2, pos, pos,
+                            view_.viewport()->mapToGlobal(pos), 0.25, QPointF());
+  QApplication::sendEvent(view_.viewport(), &pinch);
+  EXPECT_NEAR(view_.zoom() / before, 1.25, 0.03);
+  const auto anchor_after = view_.page_point_at(pos);
+  ASSERT_TRUE(anchor_after);
+  EXPECT_EQ(anchor_after->first, anchor_before->first);
+  EXPECT_NEAR(anchor_after->second.y, anchor_before->second.y, 2.0);  // 손가락 아래 지점이 고정
 }
 
 }  // namespace

@@ -110,6 +110,8 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 - 쪽을 512×512 타일로 나눠 `PdfiumDocument::render_region`(`FPDF_RenderPageBitmapWithMatrix`, 회전 0 기준 — `page_size` 가 /Rotate 반영) 으로 그리고 `TileCache`(기본 256MB LRU) 에 보관
 - `TileScheduler::update(viewport)` 가 보이는 타일·쪽 미리보기(배율 1/8)를 kHigh, 앞뒤 1쪽(타일 ≤32개일 때)을 kLow 로 요청하고 밀려난 요청은 `TaskHandle::cancel`
 - 뷰는 쪽 배경 → 미리보기 → 이전 배율 타일(늘려 그림) → 현재 배율 타일 순으로 그려 확대·스크롤 중 빈 화면이 없다
+- 현재 쪽: `go_to_page`·`scroll_to_page_point` 직후 스크롤 값이 그대로인 동안은 이동한 쪽(이동 고정 쪽), 그 밖에는 뷰포트 중앙 쪽. 짧은 쪽·문서 끝에서도 쪽 번호가 유지된다
+- 텍스트 인덱스가 없는 쪽의 드래그 지점은 보류했다가 인덱스 도착 시 다시 계산한다. 선택 변경은 선택 사각형 영역만 다시 그린다
 - 배율은 `quantize_scale(zoom × dpr)` 로 1/64 단위. 맞춤 배율은 내림(`fit_*_scale_q`) 이라 문서가 뷰포트를 넘지 않는다
 - 타일 경계는 AGG 클리핑 때문에 전체 렌더와 픽셀 단위로 완전히 같지는 않다(0.03% 수준). `tile_stitch_test` 가 0.1% 상한으로 검증
 - 사이드바(F4): `ThumbnailPanel` 은 보이는 행 ±4 쪽만 `render_page`(kLow, 동시 8) → `QCache` 64MB, 문서 교체·폭 32px 이상 변화 시 세대 증가로 늦은 결과를 버린다. `OutlinePanel` 은 `load_outline`(kNormal) 스냅샷을 표시하고, /XYZ 이동은 `resolve_location`(kHigh) → `scroll_to_page_point`. 현재 항목은 `DocumentView::reading_position` + `Outline::item_at`

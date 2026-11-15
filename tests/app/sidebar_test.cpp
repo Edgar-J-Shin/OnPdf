@@ -16,6 +16,7 @@
 #include <QKeyEvent>
 #include <QListView>
 #include <QScrollBar>
+#include <QSpinBox>
 #include <QTabWidget>
 #include <QTimer>
 #include <QTreeView>
@@ -243,6 +244,22 @@ TEST_F(SidebarTest, MaliciousOutlineIsBounded) {
   EXPECT_TRUE(o->cycle_detected);
   EXPECT_TRUE(o->truncated);
   EXPECT_EQ(outline().tree()->model()->rowCount(), 2);
+}
+
+// 쪽 번호 상자에 입력한 번호가 짧은 쪽·마지막 쪽에서도 그대로 남는다 (#12)
+TEST_F(SidebarTest, PageSpinKeepsTypedPage) {
+  ASSERT_TRUE(open("mixed-sizes.pdf", 0));
+  auto* spin = window_.findChild<QSpinBox*>();
+  ASSERT_NE(spin, nullptr);
+  spin->setValue(5);  // 명함 쪽
+  QApplication::processEvents();
+  EXPECT_EQ(window_.document_view()->current_page(), 4);
+  EXPECT_EQ(spin->value(), 5);
+  EXPECT_EQ(thumbs().current_page(), 4);
+  spin->setValue(spin->maximum());
+  QApplication::processEvents();
+  EXPECT_EQ(spin->value(), spin->maximum());
+  EXPECT_EQ(window_.document_view()->current_page(), spin->maximum() - 1);
 }
 
 }  // namespace

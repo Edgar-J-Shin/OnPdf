@@ -18,6 +18,7 @@
 #include "ui_dispatcher.h"
 
 #include <QAbstractScrollArea>
+#include <QRegion>
 #include <QElapsedTimer>
 #include <QImage>
 #include <QPoint>
@@ -127,6 +128,14 @@ class DocumentView : public QAbstractScrollArea {
   void paint_page(QPainter& painter, int page, const QRectF& page_logical);
   void on_tile_ready(const view::TileKey& key);
   void emit_page_if_changed();
+  // 쪽 이동 명령의 공통 끝: 목표 스크롤 값을 자르고 "이동 고정 쪽" 으로 기억한 뒤 스크롤한다
+  void scroll_to_anchored(int page, double value_logical);
+  // 드래그 위치 → 글자 위치. 그 쪽 텍스트 인덱스가 아직 없으면 pending 에 쪽 포인트를 보관한다
+  view::TextPos drag_position(QPointF viewport_pos, std::optional<std::pair<int, onpdf::Point>>& pending);
+  // 인덱스가 도착한 쪽의 보류된 드래그 지점을 실제 글자 위치로 바꾼다
+  void resolve_pending_drag(int page, const view::PageTextIndex& index);
+  // 보이는 쪽의 선택 사각형이 차지하는 뷰포트 영역 (부분 다시 그리기용)
+  [[nodiscard]] QRegion selection_region() const;
   // 텍스트
   void request_text_indexes();
   void on_text_index(int page, int generation, std::shared_ptr<const view::PageTextIndex> index, bool cancelled);
@@ -144,6 +153,16 @@ class DocumentView : public QAbstractScrollArea {
   ZoomMode mode_ = ZoomMode::kFitWidth;
   double zoom_ = 1.0;
   int last_page_ = -1;
+  // 이동 고정 쪽: go_to_page·scroll_to_page_point 직후 스크롤 값이 그대로인 동안 현재 쪽으로 쓴다.
+  // 짧은 쪽(명함)이나 문서 끝처럼 뷰포트 중앙이 다른 쪽에 걸려도 사용자가 고른 쪽이 유지된다
+  struct NavAnchor {
+    int page = 0;
+    int scroll = 0;
+  };
+  std::optional<NavAnchor> nav_anchor_;
+  // 텍스트 인덱스가 없는 쪽에서 시작·이동한 드래그 지점 (쪽, 쪽 포인트)
+  std::optional<std::pair<int, onpdf::Point>> pending_anchor_;
+  std::optional<std::pair<int, onpdf::Point>> pending_focus_;
   bool first_view_pending_ = false;
   QString placeholder_;
   QTimer resize_timer_;
