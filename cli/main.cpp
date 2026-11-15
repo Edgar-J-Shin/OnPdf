@@ -27,7 +27,7 @@ int usage() {
   std::fputs(
       "usage:\n"
       "  onpdf_cli info   <in.pdf> [--password PW]\n"
-      "  onpdf_cli render <in.pdf> <out.png> [--page N] [--scale S] [--rotate R] [--password PW]\n"
+      "  onpdf_cli render <in.pdf> <out.png> [--page N] [--scale S] [--rotate R] [--print] [--password PW]\n"
       "  onpdf_cli tiles  <in.pdf> <out-dir> [--page N] [--scale S] [--password PW]\n"
       "  onpdf_cli text   <in.pdf> [--page N] [--password PW]   (chars/lines/links + extracted text)\n"
       "                   (writes 512px tile PNGs, stitched.png and full.png)\n"
@@ -59,6 +59,7 @@ struct Args {
   std::string password;
   bool match_case = false;
   bool whole_word = false;
+  bool printing = false;
 };
 
 bool parse_args(int argc, char** argv, Args& args) {
@@ -87,6 +88,8 @@ bool parse_args(int argc, char** argv, Args& args) {
       args.match_case = true;
     } else if (a == "--word") {
       args.whole_word = true;
+    } else if (a == "--print") {
+      args.printing = true;
     } else if (a == "--password") {
       if (!next(v)) return false;
       args.password = std::string(v);
@@ -110,6 +113,23 @@ int cmd_info(const Args& args) {
     if (!size) return fail(size.error());
     std::printf("  page %d: %.2f x %.2f pt\n", i, size->width, size->height);
   }
+  auto print = doc->print_preferences();
+  if (!print) return fail(print.error());
+  std::string ranges;
+  for (const auto& [first, last] : print->page_ranges) {
+    if (!ranges.empty()) ranges += ",";
+    ranges += std::to_string(first + 1) + "-" + std::to_string(last + 1);
+  }
+  const char* duplex = "-";
+  switch (print->duplex) {
+    case onpdf::view::Duplex::kSimplex: duplex = "simplex"; break;
+    case onpdf::view::Duplex::kFlipShortEdge: duplex = "short-edge"; break;
+    case onpdf::view::Duplex::kFlipLongEdge: duplex = "long-edge"; break;
+    case onpdf::view::Duplex::kUndefined: break;
+  }
+  std::printf("print: %s · scaling %s · copies %d · ranges %s · duplex %s\n",
+              !print->allowed ? "denied" : (print->high_quality ? "allowed" : "low-res only"),
+              print->no_scaling ? "none" : "default", print->copies, ranges.empty() ? "all" : ranges.c_str(), duplex);
   return 0;
 }
 
@@ -121,6 +141,7 @@ int cmd_render(const Args& args) {
   RenderOptions options;
   options.scale = args.scale;
   options.rotation = args.rotate;
+  options.printing = args.printing;
   auto bitmap = doc->render_page(args.page, options);
   if (!bitmap) return fail(bitmap.error());
 

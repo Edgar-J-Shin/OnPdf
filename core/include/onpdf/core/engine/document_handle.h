@@ -18,6 +18,7 @@
 #include "onpdf/core/error.h"
 #include "onpdf/core/geometry.h"
 #include "onpdf/core/view/outline.h"
+#include "onpdf/core/view/print_layout.h"
 #include "onpdf/core/view/search.h"
 #include "onpdf/core/view/text_index.h"
 
@@ -34,6 +35,7 @@ namespace onpdf::engine {
 struct DocumentInfo {
   int page_count = 0;
   std::vector<PageSize> page_sizes;
+  view::PrintPreferences print;  // 인쇄 권한·문서 인쇄 기본값
 };
 
 class DocumentHandle {

@@ -19,6 +19,10 @@ struct RenderOptions {
   bool render_annotations = true;
   // LCD 서브픽셀 텍스트
   bool lcd_text = false;
+  // 인쇄용 렌더 (FPDF_PRINTING): 주석의 /F Print 플래그 규칙을 따른다 (화면 전용 주석 제외, 인쇄 전용 주석 포함)
+  bool printing = false;
+  // 회색조 렌더 (FPDF_GRAYSCALE)
+  bool grayscale = false;
 };
 
 }  // namespace onpdf::engine

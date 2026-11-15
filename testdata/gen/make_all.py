@@ -39,6 +39,8 @@ GENERATED = {
     "transparency.pdf": docs.make_transparency,
     "text-layout.pdf": docs.make_text_layout,
     "outline-cycle.pdf": docs.make_outline_cycle,
+    "print-flags.pdf": docs.make_print_flags,
+    "print-low-res.pdf": docs.make_print_low_res,
 }
 
 

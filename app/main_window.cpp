@@ -21,6 +21,10 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QPointer>
+#include <QPrintDialog>
+#include <QPrinter>
+#include <QProgressBar>
+#include <QProgressDialog>
 #include <QScrollBar>
 #include <QSpinBox>
 #include <QSplitter>
@@ -118,6 +122,7 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
 }
 
 MainWindow::~MainWindow() {
+  print_job_.reset();  // 신호 없이 취소 (printer_ 보다 먼저)
   view_->set_search(nullptr);  // 세션이 먼저 사라지므로 뷰가 댕글 포인터를 들지 않게
 }
 
@@ -125,6 +130,9 @@ void MainWindow::build_menus() {
   QMenu* file = menuBar()->addMenu(tr("파일(&F)"));
   QAction* open = file->addAction(tr("열기(&O)..."), QKeySequence::Open, this, &MainWindow::on_open_action);
   open->setStatusTip(tr("PDF 파일을 연다"));
+  file->addSeparator();
+  print_action_ = file->addAction(tr("인쇄(&P)..."), QKeySequence::Print, this, &MainWindow::on_print);
+  print_action_->setEnabled(false);
   file->addSeparator();
   // QKeySequence::Quit 은 Windows 에서 비어 있으므로 Ctrl+Q 를 명시한다
   file->addAction(tr("종료(&Q)"), QKeySequence(Qt::CTRL | Qt::Key_Q), qApp, &QApplication::quit);
@@ -180,6 +188,7 @@ void MainWindow::fail_screenshot(const QString& reason) {
 }
 
 void MainWindow::open_file(const QString& path) {
+  cancel_print();  // 인쇄 중인 문서를 바꾸지 않는다
   show_transient(tr("여는 중: %1").arg(QFileInfo(path).fileName()));
   session_.open(path);
 }
@@ -199,6 +208,9 @@ void MainWindow::on_opened(const QString& path, int page_count) {
       return;
     }
     reset_search();
+    print_job_.reset();
+    print_prefs_applied_ = false;
+    update_print_action();
     ++outline_generation_;
     thumbnail_panel_->clear_document();
     outline_panel_->set_outline(nullptr);
@@ -213,6 +225,9 @@ void MainWindow::on_opened(const QString& path, int page_count) {
   page_total_label_->setText(tr("/ %1 쪽").arg(page_count));
   view_->set_document(session_.handle(), dispatcher_);
   view_->setFocus();
+  print_job_.reset();
+  print_prefs_applied_ = false;
+  update_print_action();
   thumbnail_panel_->set_document(session_.handle(), dispatcher_);
   thumbnail_panel_->set_current_page(std::max(0, view_->current_page()));
   load_outline();
@@ -222,6 +237,109 @@ void MainWindow::on_opened(const QString& path, int page_count) {
     on_search_query(search_bar_->query(), search_bar_->options());
   }
   refresh_status();
+}
+
+// ---------------------------------------------------------------- 인쇄
+
+void MainWindow::update_print_action() {
+  const bool has_pages = session_.has_document() && session_.handle().valid() && session_.handle().info().page_count > 0;
+  const bool allowed = has_pages && session_.handle().info().print.allowed;
+  const bool busy = print_job_ && print_job_->active();
+  print_action_->setEnabled(allowed && !busy);
+  const QString tip = has_pages && !allowed ? tr("이 문서는 인쇄가 허용되지 않습니다") : tr("문서를 인쇄한다");
+  print_action_->setStatusTip(tip);
+  print_action_->setToolTip(tip);
+}
+
+void MainWindow::on_print() {
+  if (!print_action_->isEnabled()) return;
+  if (!printer_) printer_ = std::make_unique<QPrinter>(QPrinter::HighResolution);
+  const auto& info = session_.handle().info();
+  if (!print_prefs_applied_) {
+    apply_print_preferences(*printer_, info.print, info.page_count);
+    print_prefs_applied_ = true;
+  }
+  QPrintDialog dialog(printer_.get(), this);
+  dialog.setWindowTitle(tr("인쇄"));
+  dialog.setOptions(QAbstractPrintDialog::PrintPageRange | QAbstractPrintDialog::PrintCurrentPage |
+                    QAbstractPrintDialog::PrintCollateCopies | QAbstractPrintDialog::PrintToFile |
+                    QAbstractPrintDialog::PrintShowPageSize);
+  dialog.setMinMax(1, info.page_count);
+  if (dialog.exec() != QDialog::Accepted) return;
+  print_with(*printer_);
+}
+
+bool MainWindow::print_with(QPrinter& printer) {
+  if (!session_.has_document() || !session_.handle().valid()) return false;
+  if (print_job_ && print_job_->active()) return false;
+  const engine::DocumentHandle handle = session_.handle();
+  if (!handle.info().print.allowed) {
+    show_transient(tr("이 문서는 인쇄가 허용되지 않습니다"));
+    return false;
+  }
+  PrintJob::Request request = make_print_request(printer, handle.info(), std::max(0, view_->current_page()));
+  if (request.steps.empty()) {
+    show_transient(tr("인쇄할 쪽이 없습니다"));
+    return false;
+  }
+  print_job_ = std::make_unique<PrintJob>(handle, dispatcher_, printer, std::move(request));
+  PrintJob* job = print_job_.get();
+
+  delete print_progress_;
+  print_progress_ = new QProgressDialog(tr("인쇄 중…"), tr("취소"), 0, job->total_sheets(), this);
+  print_progress_->setWindowTitle(tr("인쇄"));
+  // 비모달: 모달 진행 대화상자는 setValue 마다 이벤트를 안에서 처리해 인쇄 처리에 재진입을 일으키고,
+  // macOS 에서는 시트 애니메이션이 메인 스레드를 수백 ms 붙잡는다. 문서 교체·창 닫기는 인쇄를 취소한다
+  print_progress_->setWindowModality(Qt::NonModal);
+  print_progress_->setMinimumDuration(300);
+  print_progress_->setAutoClose(false);
+  print_progress_->setAutoReset(false);
+  auto* bar = new QProgressBar(print_progress_);
+  bar->setFormat(tr("%v / %m 장"));  // 레이블을 매 장 바꾸면 대화상자 크기를 다시 계산한다
+  bar->setTextVisible(true);
+  print_progress_->setBar(bar);
+  QProgressDialog* progress = print_progress_;
+  // 다음 이벤트 턴에 갱신: 그리기 처리 시간에 UI 갱신이 섞이지 않게
+  connect(job, &PrintJob::progress, progress, [progress](int done, int) { progress->setValue(done); },
+          Qt::QueuedConnection);
+  connect(progress, &QProgressDialog::canceled, this, &MainWindow::cancel_print);
+  connect(job, &PrintJob::finished, this, &MainWindow::on_print_finished);
+  const bool started = job->start();
+  update_print_action();  // 시작한 뒤에야 active 라 인쇄 중 비활성이 반영된다
+  return started;
+}
+
+void MainWindow::cancel_print() {
+  if (print_job_ && print_job_->active()) print_job_->cancel();
+}
+
+void MainWindow::on_print_finished(PrintJob::Outcome outcome) {
+  if (print_progress_ != nullptr) {
+    print_progress_->hide();
+    print_progress_->deleteLater();
+    print_progress_ = nullptr;
+  }
+  update_print_action();
+  const PrintJob* job = print_job_.get();
+  switch (outcome) {
+    case PrintJob::Outcome::kCompleted: {
+      show_transient(tr("%1장 인쇄 완료").arg(job != nullptr ? job->printed_sheets() : 0));
+      if (job != nullptr && !job->failed_pages().empty()) {
+        QStringList pages;
+        for (int page : job->failed_pages()) pages << QString::number(page + 1);
+        QMessageBox::warning(this, tr("일부 쪽을 인쇄하지 못했습니다"),
+                             tr("다음 쪽은 빈 쪽으로 인쇄되었습니다: %1").arg(pages.join(QStringLiteral(", "))));
+      }
+      break;
+    }
+    case PrintJob::Outcome::kCancelled:
+      show_transient(tr("인쇄를 취소했습니다"));
+      break;
+    case PrintJob::Outcome::kFailed:
+      QMessageBox::warning(this, tr("인쇄하지 못했습니다"),
+                           tr("프린터를 열 수 없거나 문서를 더 읽을 수 없습니다."));
+      break;
+  }
 }
 
 // ---------------------------------------------------------------- 사이드바

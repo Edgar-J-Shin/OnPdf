@@ -11,7 +11,7 @@ Your goal is to write Safe, Testable, and Maintainable modern C++ (C++23, std::e
 Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜치 `develop`, 릴리스 `main`)
 1인 개발(주 10~15시간). 전체 계획서: [pdf-editor-plan.md](pdf-editor-plan.md) — 범위·로드맵·위험 대응은 이 문서가 기준이다.
 
-**현재 단계**: M1 뷰어 (M0 완료 2026-11-14: CI·첫 쪽 표시·테스트 PDF 29개). 연속 스크롤·타일 캐시(#10) 위에 검색·썸네일·목차·텍스트 선택·인쇄를 쌓는다.
+**현재 단계**: M1 뷰어 (M0 완료 2026-11-14: CI·첫 쪽 표시·테스트 PDF 29개). 연속 스크롤(#10)·텍스트 선택(#15)·검색(#17)·사이드바(#19) 완료, 인쇄(#21) 진행. 남은 것: 후속 정리(#12)·Windows 실기기 QA·v0.1
 
 | 마일스톤 | 핵심 | 완료 기준 |
 |---|---|---|
@@ -45,8 +45,8 @@ python3 third_party/fetch_pdfium.py     # PDFium 사전 빌드 받기 (버전: t
 cmake --preset dev                      # configure (vcpkg manifest 설치 포함)
 cmake --build --preset dev              # build all → build/dev/bin/
 ctest --preset dev                      # unit + rendering regression
-./build/dev/bin/onpdf_cli info in.pdf
-./build/dev/bin/onpdf_cli render in.pdf out.png --page 0 --scale 2
+./build/dev/bin/onpdf_cli info in.pdf                                # 쪽 크기 + 인쇄 권한·문서 인쇄 기본값
+./build/dev/bin/onpdf_cli render in.pdf out.png --page 0 --scale 2 [--print]   # --print: 인쇄용 렌더(FPDF_PRINTING)
 ./build/dev/bin/onpdf_cli tiles in.pdf out-dir --page 0 --scale 2   # 타일 PNG + stitched.png + full.png
 ./build/dev/bin/onpdf_cli text in.pdf --page 0                       # 글자·줄·링크 수 + 추출 텍스트
 ./build/dev/bin/onpdf_cli search in.pdf "query" [--case] [--word]    # 쪽별 결과 + 문맥
@@ -66,15 +66,16 @@ ctest --preset dev-app                                         # app 테스트(o
 # Architecture
 
 ```text
-app/          Qt UI (Qt 의존). onpdf_app_lib(UiDispatcher·DocumentSession·qt_image·DocumentTileSource·DocumentView·SearchBar·ThumbnailPanel·OutlinePanel·MainWindow) + onpdf_app(main 만)
+app/          Qt UI (Qt 의존). onpdf_app_lib(UiDispatcher·DocumentSession·qt_image·DocumentTileSource·DocumentView·SearchBar·ThumbnailPanel·OutlinePanel·PrintJob·MainWindow) + onpdf_app(main 만)
 edit/         Command, 실행 취소 스택, 선택 모델, 텍스트 블록 모델, 폰트 매니저
 core/         Document, Page, 렌더 캐시(타일 LRU), 텍스트 인덱스       (Qt 의존 금지)
-core/engine/  PdfiumLibrary(init RAII) · PdfiumDocument(열기·크기·렌더·load_text·load_outline·resolve_location) · TextPage(FPDFText/FPDFLink 추출, 좌표 변환) · dest(목적지·URI·UTF-16 변환 공용, 내부) · pdfium_handles
+core/engine/  PdfiumLibrary(init RAII) · PdfiumDocument(열기·크기·렌더·load_text·load_outline·resolve_location·print_preferences) · TextPage(FPDFText/FPDFLink 추출, 좌표 변환) · dest(목적지·URI·UTF-16 변환 공용, 내부) · pdfium_handles
               PdfiumWorker(전용 스레드 + High/Normal/Low 큐 + 취소) · DocumentHandle(워커 쪽 문서의 스레드 안전 핸들), QpdfTools(M2)
 core/image/   png_io (stb 기반 PNG 읽기/쓰기, BGRA↔RGBA)
 core/view/    PageLayout(세로 연속 레이아웃·좌표 변환) · tile.h(TileKey, 512px, 1/64 배율 양자화) · TileCache(바이트 상한 LRU)
               TileScheduler(뷰포트→필요 타일, High/Low 요청·취소·실패 집합) · TileSource(SyncTileSource=CLI·테스트)
               PageTextIndex(쪽 텍스트 불변 스냅샷: 글자·줄·링크, hit-test, 선택 사각형 — 생성은 워커, 조회는 메인) · TextSelection(다중 쪽 선택)
+              print_layout(인쇄: 쪽 범위→순서·매수, 용지 배치 맞춤/실제/큰 쪽만 축소·자동 회전, 렌더 DPI 300·저품질 150·16M px 상한, PrintPreferences)
               Outline(목차 불변 스냅샷: 전위 평탄화, 깊이 32·10만 개 상한, 순환 차단, item_at 현재 항목)
               search(SearchSession: 현재 쪽부터 순환 검색, 동시 4쪽·kNormal, 세대·10만 상한 — 실행기 주입, 메인 스레드; map_source_range)   (Qt 금지)
 core/platform/ path.h (UTF-8 ↔ std::filesystem::path)
@@ -112,6 +113,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 - 배율은 `quantize_scale(zoom × dpr)` 로 1/64 단위. 맞춤 배율은 내림(`fit_*_scale_q`) 이라 문서가 뷰포트를 넘지 않는다
 - 타일 경계는 AGG 클리핑 때문에 전체 렌더와 픽셀 단위로 완전히 같지는 않다(0.03% 수준). `tile_stitch_test` 가 0.1% 상한으로 검증
 - 사이드바(F4): `ThumbnailPanel` 은 보이는 행 ±4 쪽만 `render_page`(kLow, 동시 8) → `QCache` 64MB, 문서 교체·폭 32px 이상 변화 시 세대 증가로 늦은 결과를 버린다. `OutlinePanel` 은 `load_outline`(kNormal) 스냅샷을 표시하고, /XYZ 이동은 `resolve_location`(kHigh) → `scroll_to_page_point`. 현재 항목은 `DocumentView::reading_position` + `Outline::item_at`
+- 인쇄(Ctrl/Cmd+P): 래스터 인쇄. `PrintJob` 이 쪽을 `render_page`(kNormal, `printing=true`, 렌더 중+대기 비트맵 ≤2장)로 그려 메인 스레드에서 쪽 순서대로 `QPrinter` 에 `drawImage`. 권한(비트 3·12)·`/PrintScaling`·`/NumCopies`·`/PrintPageRange`(1 기준)·`/Duplex` 반영. 진행 창은 비모달(모달 `QProgressDialog::setValue` 는 이벤트를 재진입 처리). 앱 테스트는 `QPrinter::PdfFormat` 출력을 다시 열어 검증
 
 # Coding Guidelines
 1. **Safety First**: 모든 PDFium 반환값(nullptr, FALSE, 음수)을 검사한다. 파일 I/O 와 외부 라이브러리 호출은 `std::expected` 또는 명시적 에러 타입으로 전파하고, 예외는 경계(UI·CLI)에서만 잡는다.

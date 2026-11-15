@@ -6,6 +6,7 @@
 #include "onpdf/core/error.h"
 #include "onpdf/core/geometry.h"
 #include "onpdf/core/view/outline.h"
+#include "onpdf/core/view/print_layout.h"
 #include "onpdf/core/view/search.h"
 #include "onpdf/core/view/text_index.h"
 
@@ -42,6 +43,8 @@ class PdfiumDocument {
   [[nodiscard]] Result<view::PageTextIndex> load_text(int page_index) const;
   // 문서 목차. 순환·깊이(32)·노드 수(10만) 제한. 대상 위치는 사용자 좌표(user_location)로만 보관
   [[nodiscard]] Result<view::Outline> load_outline() const;
+  // 인쇄 권한(FPDF_GetDocPermissions)과 문서가 정한 인쇄 기본값(/ViewerPreferences)
+  [[nodiscard]] Result<view::PrintPreferences> print_preferences() const;
   // 쪽의 사용자 좌표 → 쪽 포인트(좌상단 원점, 회전 반영)
   [[nodiscard]] Result<Point> resolve_location(int page_index, Point user_pt) const;
   // 쪽 검색: 텍스트 페이지를 한 번 열어 인덱스 추출 + PDFium 검색 + 인덱스 범위 매핑

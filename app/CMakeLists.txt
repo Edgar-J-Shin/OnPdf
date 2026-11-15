@@ -1,6 +1,6 @@
 # Qt 6 Widgets UI. ONPDF_BUILD_APP=ON (preset dev-app) 일 때만 빌드한다.
 # 사전 준비: export QT_ROOT=$(brew --prefix qt)   (preset 이 CMAKE_PREFIX_PATH 로 넘긴다)
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets PrintSupport)
 qt_standard_project_setup()
 # .ui 파일을 쓰지 않는다. AUTOUIC 가 켜져 있으면 "ui_*.h" 헤더를 uic 산출물로 오해한다.
 set(CMAKE_AUTOUIC OFF)
@@ -15,10 +15,11 @@ add_library(onpdf_app_lib STATIC
   search_bar.h search_bar.cpp
   outline_panel.h outline_panel.cpp
   thumbnail_panel.h thumbnail_panel.cpp
+  print_job.h print_job.cpp
   main_window.h main_window.cpp
 )
 target_include_directories(onpdf_app_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(onpdf_app_lib PUBLIC onpdf::core Qt6::Core Qt6::Gui Qt6::Widgets)
+target_link_libraries(onpdf_app_lib PUBLIC onpdf::core Qt6::Core Qt6::Gui Qt6::Widgets Qt6::PrintSupport)
 onpdf_set_warnings(onpdf_app_lib)
 
 qt_add_executable(onpdf_app

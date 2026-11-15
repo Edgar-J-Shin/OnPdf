@@ -493,6 +493,48 @@ def make_text_layout() -> bytes:
     return w.write(root=root, info=info, file_id=g.file_id_for("text-layout.pdf"))
 
 
+def make_print_flags() -> bytes:
+    """인쇄 플래그 주석 + 문서 인쇄 기본값.
+    녹색 상자: /F 0 (Print 비트 없음) → 화면에만 보이고 인쇄되지 않는다.
+    빨간 상자: /F 36 (Print + NoView) → 화면에 안 보이고 인쇄에만 나온다.
+    /ViewerPreferences: PrintScaling None, NumCopies 2, PrintPageRange [2 2](1 기준, 2쪽만), 긴 쪽 양면."""
+    w = PdfWriter()
+    pages = w.reserve()
+    helv = g.simple_font(w)
+    page_nums = [w.reserve(), w.reserve()]
+
+    def box_ap(rect: tuple[int, int, int, int], rgb: str) -> int:
+        x0, y0, x1, y1 = rect
+        return w.stream(b"/Type /XObject /Subtype /Form /BBox [%d %d %d %d]" % rect,
+                        content(f"{rgb} rg {x0} {y0} {x1 - x0} {y1 - y0} re f"))
+
+    screen_rect = (72, 520, 272, 640)
+    print_rect = (340, 520, 540, 640)
+    annots = [
+        w.add(b"<< /Type /Annot /Subtype /Square /Rect [%d %d %d %d] /F 0 /P %d 0 R /Contents (screen only) "
+              b"/AP << /N %d 0 R >> >>" % (*screen_rect, page_nums[0], box_ap(screen_rect, "0 0.6 0"))),
+        w.add(b"<< /Type /Annot /Subtype /Square /Rect [%d %d %d %d] /F 36 /P %d 0 R /Contents (print only) "
+              b"/AP << /N %d 0 R >> >>" % (*print_rect, page_nums[0], box_ap(print_rect, "0.85 0 0"))),
+    ]
+    c1 = w.stream(b"", content(_label(72, 720, 20, "Print flags test - page 1"),
+                               _label(72, 650, 12, "Left: SCREEN ONLY (green)"),
+                               _label(340, 650, 12, "Right: PRINT ONLY (red)")))
+    c2 = w.stream(b"", content(_label(72, 720, 20, "Print flags test - page 2 (PrintPageRange)")))
+    kids = [g.page(w, pages, g.LETTER, c1, _helv_resources(helv), annots=annots, num=page_nums[0]),
+            g.page(w, pages, g.LETTER, c2, _helv_resources(helv), num=page_nums[1])]
+    g.pages_tree(w, pages, kids)
+    root = g.catalog(w, pages, b" /ViewerPreferences << /PrintScaling /None /NumCopies 2 /PrintPageRange [2 2] "
+                               b"/Duplex /DuplexFlipLongEdge >>")
+    info = g.info_dict(w, "Print flags and viewer preferences")
+    return w.write(root=root, info=info, file_id=g.file_id_for("print-flags.pdf"))
+
+
+def make_print_low_res() -> bytes:
+    # 소유자 암호만, 인쇄는 허용하되 고품질 인쇄(비트 12) 금지 → 저해상도 인쇄만 (P = -2052)
+    return make_simple(encrypt=g.Encryption("", "owner", permissions=-2052), title="Print low resolution only",
+                       file_id_name="print-low-res.pdf")
+
+
 def make_outline_cycle() -> bytes:
     """악성 목차: 형제 순환(B /Next A), 자식 자기 참조(A /First A), 깊이 40 체인(B 아래).
     뷰어는 무한 루프·스택 오버플로 없이 유한한 항목만 보여야 한다."""

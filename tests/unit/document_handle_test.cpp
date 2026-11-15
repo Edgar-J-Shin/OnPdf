@@ -79,6 +79,21 @@ TEST_F(DocumentHandleTest, OpenReturnsInfo) {
   EXPECT_TRUE(is_registered(doc.id()));
 }
 
+TEST_F(DocumentHandleTest, OpenReturnsPrintPreferences) {
+  auto f = DocumentHandle::open(worker_, testdata("print-flags.pdf"));
+  auto r = get_or_fail(f);
+  ASSERT_TRUE(r) << r.error().message;
+  EXPECT_TRUE(r->info().print.allowed);
+  EXPECT_TRUE(r->info().print.no_scaling);
+  EXPECT_EQ(r->info().print.copies, 2);
+  EXPECT_FALSE(open_simple().info().print.no_scaling);
+
+  auto denied_future = DocumentHandle::open(worker_, testdata("encrypted-owner-only.pdf"));
+  auto denied = get_or_fail(denied_future);
+  ASSERT_TRUE(denied) << denied.error().message;
+  EXPECT_FALSE(denied->info().print.allowed);
+}
+
 TEST_F(DocumentHandleTest, OpenWithCallbackRunsOnWorkerThread) {
   std::promise<bool> on_worker;
   auto f = on_worker.get_future();
