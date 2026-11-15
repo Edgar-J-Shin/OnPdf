@@ -12,10 +12,15 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QKeyEvent>
 #include <QListView>
+#include <QWheelEvent>
+#include <QStatusBar>
+#include <QLabel>
 #include <QMouseEvent>
+#include <QScreen>
 #include <QScrollBar>
 #include <QSpinBox>
 #include <QTabWidget>
@@ -23,8 +28,10 @@
 #include <QTreeView>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <string>
+#include <set>
 
 namespace onpdf::app {
 namespace {
@@ -286,6 +293,135 @@ TEST_F(SidebarTest, InternalLinkNavigatesImmediately) {
   const QPointF target = view->page_point_to_viewport(1, {72, 92});
   EXPECT_GE(target.y(), 0.0);
   EXPECT_LE(target.y(), view->viewport()->height());
+}
+
+// 썸네일 스크롤바를 끄는 동안에는 요청하지 않고, 놓으면 그 자리를 요청한다 (#12)
+TEST_F(SidebarTest, ThumbnailSliderDragDefersRequests) {
+  ASSERT_TRUE(open("large-1000.pdf", 0));
+  ASSERT_TRUE(spin_until([&] { return thumbs().cached_count() > 0 && thumbs().pending_requests() == 0; }));
+  QScrollBar* bar = thumbs().list()->verticalScrollBar();
+  const int before = thumbs().requested_total();
+  bar->setSliderDown(true);
+  for (int step = 1; step <= 10; ++step) {
+    bar->setValue(bar->maximum() * step / 20);
+    QApplication::processEvents();
+  }
+  settle(100);
+  EXPECT_EQ(thumbs().requested_total(), before) << "no requests while dragging";
+  bar->setSliderDown(false);  // sliderReleased
+  ASSERT_TRUE(spin_until([&] { return thumbs().requested_total() > before && thumbs().pending_requests() == 0; }));
+  const QModelIndex mid = thumbs().list()->indexAt(thumbs().list()->viewport()->rect().center());
+  ASSERT_TRUE(mid.isValid());
+  EXPECT_FALSE(thumbs().thumbnail(mid.row()).isNull());
+  EXPECT_LE(thumbs().requested_total() - before, 20);  // 놓은 자리 근처만
+}
+
+// 화면 배율이 바뀌면(모니터 이동) 썸네일을 새 배율로 다시 렌더한다 (#12)
+TEST_F(SidebarTest, DevicePixelRatioChangeRerendersThumbnails) {
+  ASSERT_TRUE(open("simple.pdf", 0));
+  ASSERT_TRUE(spin_until([&] { return thumbs().cached_count() == 2 && thumbs().pending_requests() == 0; }));
+  const int generation = thumbs().generation();
+  const int requested = thumbs().requested_total();
+  QEvent change(QEvent::DevicePixelRatioChange);
+  QApplication::sendEvent(&thumbs(), &change);
+  EXPECT_GT(thumbs().generation(), generation);
+  EXPECT_FALSE(thumbs().thumbnail(0).isNull());  // 새 그림이 올 때까지 이전 그림을 늘려 그린다
+  ASSERT_TRUE(spin_until([&] { return thumbs().requested_total() >= requested + 2 && thumbs().pending_requests() == 0; }));
+  EXPECT_EQ(thumbs().cached_count(), 2);
+}
+
+// 연속(관성) 스크롤 중에도 목차 강조가 따라간다: 강조 타이머는 스크롤마다 다시 시작하지 않는다(스로틀).
+// 디바운스면 스크롤이 계속되는 동안 타이머가 계속 미뤄져 강조가 멈춘다 (#12)
+TEST_F(SidebarTest, OutlineHighlightTimerIsThrottledNotDebounced) {
+  ASSERT_TRUE(open("bookmarks.pdf", 15));
+  auto* timer = window_.findChild<QTimer*>(QStringLiteral("outline_highlight_timer"));
+  ASSERT_NE(timer, nullptr);
+  // 문서를 연 직후의 갱신이 끝날 때까지 (느린 CI 에서는 100ms 고정 대기로 부족했다)
+  ASSERT_TRUE(spin_until([&] { return !timer->isActive(); }, 3000));
+  QScrollBar* bar = window_.document_view()->verticalScrollBar();
+  bar->setValue(bar->value() + 30);  // 스크롤 → 타이머 시작
+  ASSERT_TRUE(timer->isActive());
+  const int first = timer->remainingTime();
+  // 이벤트를 처리하지 않고 15ms 기다린 뒤(타이머가 만료될 수 없음) 다시 스크롤
+  QElapsedTimer wait;
+  wait.start();
+  while (wait.elapsed() < 15) {
+  }
+  bar->setValue(bar->value() + 30);
+  ASSERT_TRUE(timer->isActive());
+  EXPECT_LE(timer->remainingTime(), first - 10) << "timer was restarted (debounce) instead of kept (throttle)";
+  EXPECT_GT(first, 80);  // 100ms 간격
+}
+
+// 다른 문서를 열면 이전 문서의 목차 로드 작업을 취소한다 (#12)
+TEST_F(SidebarTest, ReopenCancelsPreviousOutlineLoad) {
+  ASSERT_TRUE(open("bookmarks.pdf", 15));
+  const engine::TaskHandle previous = window_.outline_task();
+  ASSERT_TRUE(previous.valid());
+  EXPECT_FALSE(previous.is_cancelled());
+  ASSERT_TRUE(open("outline-cycle.pdf", 33));
+  EXPECT_TRUE(previous.is_cancelled());
+  EXPECT_FALSE(window_.outline_task().is_cancelled());
+}
+
+TEST_F(SidebarTest, OutlineIndentationFitsNarrowSidebar) {
+  ASSERT_TRUE(open("outline-cycle.pdf", 33));
+  EXPECT_EQ(outline().tree()->indentation(), 16);
+}
+
+// 쪽이 바뀌지 않아도 타일이 도착하면 상태 표시줄 통계를 갱신한다 — 1초에 한 번으로 묶는다 (#12)
+TEST_F(SidebarTest, StatusBarRefreshesWhenTilesArrive) {
+  ASSERT_TRUE(open("simple.pdf", 0));
+  auto* view = window_.document_view();
+  auto* timer = window_.findChild<QTimer*>(QStringLiteral("status_timer"));
+  ASSERT_NE(timer, nullptr);
+  ASSERT_TRUE(spin_until([&] { return view->pending_visible_tiles() == 0; }));
+  ASSERT_TRUE(spin_until([&] { return !timer->isActive(); }, 2000));
+  QLabel* status = nullptr;
+  for (auto* label : window_.statusBar()->findChildren<QLabel*>()) {
+    if (label->text().contains(QStringLiteral("MB"))) status = label;
+  }
+  ASSERT_NE(status, nullptr);
+  status->setText(QStringLiteral("stale"));  // 갱신 여부를 보기 위한 표지
+  emit view->tiles_changed();
+  ASSERT_TRUE(timer->isActive());
+  const int first = timer->remainingTime();
+  QElapsedTimer wait;
+  wait.start();
+  while (wait.elapsed() < 20) {
+  }
+  emit view->tiles_changed();  // 연속 도착: 다시 시작하지 않는다
+  EXPECT_LE(timer->remainingTime(), first - 15);
+  EXPECT_EQ(status->text(), QStringLiteral("stale"));  // 아직 갱신 전
+  EXPECT_GT(first, 900);  // 1초 간격
+  ASSERT_TRUE(spin_until([&] { return status->text().contains(QStringLiteral("MB")); }, 3000));
+}
+
+// 실제 화면 이동: 창을 배율이 다른 화면으로 옮기면 썸네일이 그 배율로 다시 렌더된다 (#12).
+// 배율이 다른 화면이 둘 이상 있을 때만 (예: macOS 내장 Retina + 외장 모니터). offscreen·단일 화면이면 건너뛴다
+TEST_F(SidebarTest, MovingToScreenWithDifferentDprRerendersThumbnails) {
+  ASSERT_TRUE(open("simple.pdf", 0));
+  QScreen* home = window_.screen();
+  QScreen* other = nullptr;
+  for (QScreen* screen : QGuiApplication::screens()) {
+    if (screen->devicePixelRatio() != home->devicePixelRatio()) other = screen;
+  }
+  if (other == nullptr) GTEST_SKIP() << "needs two screens with different device pixel ratios";
+  ASSERT_TRUE(spin_until([&] { return thumbs().cached_count() == 2 && thumbs().pending_requests() == 0; }));
+
+  auto rendered_at = [&](qreal dpr) {
+    const QImage image = thumbs().thumbnail(0);
+    return !image.isNull() && image.devicePixelRatio() == dpr && thumbs().pending_requests() == 0 &&
+           std::abs(image.width() - static_cast<int>(thumbs().thumb_width() * dpr)) <= 2;
+  };
+  ASSERT_TRUE(rendered_at(home->devicePixelRatio()));
+  for (QScreen* target : {other, home}) {
+    window_.move(target->availableGeometry().topLeft() + QPoint(40, 40));
+    ASSERT_TRUE(spin_until([&] { return thumbs().devicePixelRatioF() == target->devicePixelRatio(); }, 5000))
+        << "window did not move to screen " << target->name().toStdString();
+    EXPECT_TRUE(spin_until([&] { return rendered_at(target->devicePixelRatio()); }, 5000))
+        << "thumbnails not re-rendered at dpr " << target->devicePixelRatio();
+  }
 }
 
 }  // namespace

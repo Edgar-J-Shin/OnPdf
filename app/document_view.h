@@ -98,6 +98,7 @@ class DocumentView : public QAbstractScrollArea {
   void zoom_changed(double zoom);
   // 보이는 타일이 전부 도착한 최초 시점 (문서마다 한 번). 스크린샷·테스트용
   void first_view_rendered();
+  void tiles_changed();  // 타일이 캐시에 들어왔다 (통계 갱신용, 자주 온다)
   void selection_changed(bool has_selection);
   void text_index_ready(int page);
   void link_activated(const onpdf::view::Link& link);   // 안전 검사 전. 수신자가 is_safe_uri 로 판단

@@ -45,6 +45,7 @@ class MainWindow : public QMainWindow {
   [[nodiscard]] QAction* sidebar_action() const noexcept { return sidebar_action_; }
   [[nodiscard]] QAction* print_action() const noexcept { return print_action_; }
   [[nodiscard]] PrintJob* print_job() const noexcept { return print_job_.get(); }
+  [[nodiscard]] engine::TaskHandle outline_task() const { return outline_task_; }  // 테스트용
   // 대화상자 없이 이 프린터 설정으로 인쇄를 시작한다 (파일 > 인쇄 의 뒷부분, 테스트용). 시작하면 true
   bool print_with(QPrinter& printer);
   // 첫 쪽이 그려지면 창을 PNG 로 저장하고 앱을 종료한다 (QA·CI 스크린샷용, --screenshot 옵션).
@@ -76,6 +77,9 @@ class MainWindow : public QMainWindow {
   void on_print();
   void on_print_finished(PrintJob::Outcome outcome);
   void cancel_print();
+  // 인쇄 중 새 문서를 열려 할 때 확인. "인쇄 취소하고 열기" 면 인쇄를 취소하고 true
+  bool confirm_cancel_print_for(const QString& path);
+  void discard_print_job();  // 진행 중이던 인쇄를 조용히 버리고 진행 창을 닫는다 (새 문서가 열렸을 때)
   void update_print_action();
   void on_outline_item(const onpdf::view::Link& target);
   // 쪽 대상으로 이동: location(링크)이면 바로, user_location(목차)이면 워커에서 변환 후, 둘 다 없으면 쪽 맨 위
@@ -108,6 +112,8 @@ class MainWindow : public QMainWindow {
   QProgressDialog* print_progress_ = nullptr;
   bool print_prefs_applied_ = false;  // 문서마다 처음 인쇄할 때 문서 인쇄 기본값을 대화상자에 넣는다
   QTimer* outline_highlight_timer_ = nullptr;
+  QTimer* status_timer_ = nullptr;
+  engine::TaskHandle outline_task_;  // 진행 중인 목차 로드 (문서 교체 시 취소)
   int outline_generation_ = 0;  // 문서를 열 때마다 증가. 늦게 온 목차·위치 결과를 버린다
   std::unique_ptr<view::SearchSession> search_;
   int search_scroll_anchor_ = 0;  // 검색 시작 시 스크롤 위치. 사용자가 움직였으면 첫 결과로 끌고 가지 않는다

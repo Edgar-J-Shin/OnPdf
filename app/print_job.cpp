@@ -33,7 +33,7 @@ PrintJob::~PrintJob() {
 bool PrintJob::start() {
   if (active_) return false;
   if (!handle_.valid() || request_.steps.empty()) {
-    emit finished(Outcome::kFailed);
+    emit_finished_later(Outcome::kFailed);
     return false;
   }
   // 인쇄 가능 영역(포인트). fullPage=false 이므로 painter 원점이 이 영역의 좌상단이다
@@ -41,7 +41,7 @@ bool PrintJob::start() {
   printable_pt_ = engine::PageSize{paint.width(), paint.height()};
   device_per_pt_ = printer_.resolution() / 72.0;
   if (!painter_.begin(&printer_)) {
-    emit finished(Outcome::kFailed);
+    emit_finished_later(Outcome::kFailed);
     return false;
   }
   active_ = true;
@@ -176,7 +176,13 @@ void PrintJob::finish(Outcome outcome) {
   placements_.clear();
   if (outcome != Outcome::kCompleted) printer_.abort();
   if (painter_.isActive()) painter_.end();
-  emit finished(outcome);
+  emit_finished_later(outcome);
+}
+
+void PrintJob::emit_finished_later(Outcome outcome) {
+  // 다음 이벤트 턴에 보낸다: 처리기(모달 대화상자 등)가 drain·on_rendered 호출 스택 안에서 돌지 않게.
+  // 그 전에 작업이 파괴되면 이벤트도 함께 버려진다 (파괴한 쪽이 알림을 맡는다)
+  QMetaObject::invokeMethod(this, [this, outcome] { emit finished(outcome); }, Qt::QueuedConnection);
 }
 
 PrintJob::Request make_print_request(const QPrinter& printer, const engine::DocumentInfo& info, int current_page) {

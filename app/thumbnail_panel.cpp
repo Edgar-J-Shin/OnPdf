@@ -154,6 +154,8 @@ ThumbnailPanel::ThumbnailPanel(QWidget* parent) : QWidget(parent) {
   request_timer_->setInterval(0);
   connect(request_timer_, &QTimer::timeout, this, &ThumbnailPanel::request_visible);
   connect(list_->verticalScrollBar(), &QScrollBar::valueChanged, this, &ThumbnailPanel::schedule_request);
+  // 스크롤바를 끄는 동안에는 요청하지 않고, 놓으면 그 자리만 요청한다
+  connect(list_->verticalScrollBar(), &QScrollBar::sliderReleased, this, &ThumbnailPanel::schedule_request);
   connect(list_, &QListView::clicked, this, &ThumbnailPanel::on_user_activated);
   connect(list_, &QListView::activated, this, &ThumbnailPanel::on_user_activated);
   connect(list_->selectionModel(), &QItemSelectionModel::currentChanged, this,
@@ -249,6 +251,17 @@ void ThumbnailPanel::resizeEvent(QResizeEvent* event) {
   schedule_request();
 }
 
+bool ThumbnailPanel::event(QEvent* event) {
+  if (event->type() == QEvent::DevicePixelRatioChange) {
+    // 다른 배율의 화면으로 옮겨졌다: 대기 요청은 이전 배율이므로 버리고, 캐시 그림은 새 그림이 올 때까지 늘려 그린다
+    cancel_all();
+    ++generation_;
+    failed_.clear();
+    schedule_request();
+  }
+  return QWidget::event(event);
+}
+
 void ThumbnailPanel::showEvent(QShowEvent* event) {
   QWidget::showEvent(event);
   update_thumb_width(false);
@@ -262,6 +275,7 @@ void ThumbnailPanel::schedule_request() {
 void ThumbnailPanel::request_visible() {
   const int rows = model_->rowCount();
   if (!handle_.valid() || rows == 0 || dispatcher_ == nullptr || !isVisible()) return;
+  if (list_->verticalScrollBar()->isSliderDown()) return;  // 드래그 중: 지나가는 쪽은 요청하지 않는다
 
   const QRect vp = list_->viewport()->rect();
   QModelIndex first = list_->indexAt(QPoint(vp.center().x(), vp.top() + 1));
@@ -295,7 +309,7 @@ void ThumbnailPanel::request_visible() {
     if (static_cast<int>(pending_.size()) >= kMaxConcurrent) break;
     if (pending_.contains(page) || failed_.contains(page)) continue;
     const Entry* entry = cache_.object(page);
-    if (entry != nullptr && entry->generation == generation_) continue;
+    if (entry != nullptr && entry->generation == generation_ && entry->dpr == dpr) continue;
     if (static_cast<std::size_t>(page) >= sizes.size()) continue;
     const auto& size = sizes[static_cast<std::size_t>(page)];
     if (size.width <= 0 || size.height <= 0) continue;
@@ -336,6 +350,7 @@ void ThumbnailPanel::on_rendered(int page, int generation, std::uint64_t serial,
   auto entry = std::make_unique<Entry>();
   entry->image = to_qimage(std::move(*result), devicePixelRatioF());
   entry->generation = generation;
+  entry->dpr = devicePixelRatioF();
   const auto bytes = entry->image.sizeInBytes();
   const int cost = std::max(1, static_cast<int>(bytes / 1024));
   cache_.insert(page, entry.release(), cost);

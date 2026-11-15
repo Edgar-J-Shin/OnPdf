@@ -38,9 +38,9 @@ class PrintJob : public QObject {
   // 진행 중이면 신호 없이 취소한다 (소유자가 소멸 중일 수 있으므로)
   ~PrintJob() override;
 
-  // 인쇄를 시작한다. 시작하지 못하면 finished(kFailed) 를 보내고 false
+  // 인쇄를 시작한다. 시작하지 못하면 false (finished(kFailed) 는 다음 이벤트 턴에)
   bool start();
-  // 대기 렌더 취소 + 프린터 작업 중단 → finished(kCancelled). 이미 끝났으면 아무것도 하지 않는다
+  // 대기 렌더 취소 + 프린터 작업 중단 → finished(kCancelled) (다음 이벤트 턴). 이미 끝났으면 아무것도 하지 않는다
   void cancel();
 
   [[nodiscard]] bool active() const noexcept { return active_; }
@@ -76,6 +76,7 @@ class PrintJob : public QObject {
   void drain();         // 다음 순번부터 준비된 장을 그린다
   void on_rendered(std::size_t step, std::uint64_t serial, onpdf::Result<onpdf::Bitmap> result);
   void finish(Outcome outcome);
+  void emit_finished_later(Outcome outcome);
 
   engine::DocumentHandle handle_;
   UiDispatcher& dispatcher_;

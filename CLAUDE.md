@@ -115,8 +115,8 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 - 텍스트 인덱스가 없는 쪽의 드래그 지점은 보류했다가 인덱스 도착 시 다시 계산한다. 선택 변경은 선택 사각형 영역만 다시 그린다
 - 배율은 `quantize_scale(zoom × dpr)` 로 1/64 단위. 맞춤 배율은 내림(`fit_*_scale_q`) 이라 문서가 뷰포트를 넘지 않는다
 - 타일 경계는 AGG 클리핑 때문에 전체 렌더와 픽셀 단위로 완전히 같지는 않다(0.03% 수준). `tile_stitch_test` 가 0.1% 상한으로 검증
-- 사이드바(F4): `ThumbnailPanel` 은 보이는 행 ±4 쪽만 `render_page`(kLow, 동시 8) → `QCache` 64MB, 문서 교체·폭 32px 이상 변화 시 세대 증가로 늦은 결과를 버린다. `OutlinePanel` 은 `load_outline`(kNormal) 스냅샷을 표시하고, /XYZ 이동은 `resolve_location`(kHigh) → `scroll_to_page_point`. 현재 항목은 `DocumentView::reading_position` + `Outline::item_at`
-- 인쇄(Ctrl/Cmd+P): 래스터 인쇄. `PrintJob` 이 쪽을 `render_page`(kNormal, `printing=true`, 렌더 중+대기 비트맵 ≤2장)로 그려 메인 스레드에서 쪽 순서대로 `QPrinter` 에 `drawImage`. 권한(비트 3·12)·`/PrintScaling`·`/NumCopies`·`/PrintPageRange`(1 기준)·`/Duplex` 반영. 진행 창은 비모달(모달 `QProgressDialog::setValue` 는 이벤트를 재진입 처리). 앱 테스트는 `QPrinter::PdfFormat` 출력을 다시 열어 검증
+- 사이드바(F4): `ThumbnailPanel` 은 보이는 행 ±4 쪽만 `render_page`(kLow, 동시 8) → `QCache` 64MB, 문서 교체·폭 32px 이상 변화·화면 배율 변경(`DevicePixelRatioChange`) 시 세대 증가로 늦은 결과를 버린다. 스크롤바를 끄는 동안은 요청하지 않는다. 목차 강조·상태 표시줄 통계는 스로틀(100ms·1초)로 갱신. `OutlinePanel` 은 `load_outline`(kNormal) 스냅샷을 표시하고, /XYZ 이동은 `resolve_location`(kHigh) → `scroll_to_page_point`. 현재 항목은 `DocumentView::reading_position` + `Outline::item_at`
+- 인쇄(Ctrl/Cmd+P): 래스터 인쇄. `PrintJob` 이 쪽을 `render_page`(kNormal, `printing=true`, 렌더 중+대기 비트맵 ≤2장)로 그려 메인 스레드에서 쪽 순서대로 `QPrinter` 에 `drawImage`. 권한(비트 3·12)·`/PrintScaling`·`/NumCopies`·`/PrintPageRange`(1 기준)·`/Duplex` 반영. 진행 창은 비모달(모달 `QProgressDialog::setValue` 는 이벤트를 재진입 처리). `finished` 는 다음 이벤트 턴에 보낸다. 인쇄 중 다른 문서를 열면 먼저 묻는다("인쇄 취소하고 열기" / "인쇄 계속하기"), 계속하기면 열지 않는다. 앱 테스트는 `QPrinter::PdfFormat` 출력을 다시 열어 검증
 
 # Coding Guidelines
 1. **Safety First**: 모든 PDFium 반환값(nullptr, FALSE, 음수)을 검사한다. 파일 I/O 와 외부 라이브러리 호출은 `std::expected` 또는 명시적 에러 타입으로 전파하고, 예외는 경계(UI·CLI)에서만 잡는다.

@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
 #include <QElapsedTimer>
@@ -16,6 +17,8 @@
 #include <QPageRanges>
 #include <QPageSize>
 #include <QPrinter>
+#include <QProgressDialog>
+#include <QMessageBox>
 #include <QTemporaryDir>
 #include <QTimer>
 
@@ -266,8 +269,10 @@ TEST_F(PrintTest, CancelLargeDocumentKeepsUiResponsive) {
   QObject::connect(job, &PrintJob::finished, [&](PrintJob::Outcome o) { cancelled = o == PrintJob::Outcome::kCancelled; });
   job->cancel();
   tick.stop();
-  EXPECT_TRUE(cancelled);
   EXPECT_FALSE(job->active());
+  // 완료 신호는 cancel() 호출 스택 밖, 다음 이벤트 턴에 온다 (#12)
+  EXPECT_FALSE(cancelled);
+  ASSERT_TRUE(spin_until([&] { return cancelled; }, 3000));
   EXPECT_LT(job->printed_sheets(), 1000);
   EXPECT_LE(job->max_in_flight(), PrintJob::kMaxInFlight);
   // 최적화 빌드 실측: 장당 메인 스레드 ≤ 30ms, 인쇄 시작·진행 창 표시 때 한 번 ≤ 200ms.
@@ -281,18 +286,70 @@ TEST_F(PrintTest, CancelLargeDocumentKeepsUiResponsive) {
   std::printf("[print] sheets before cancel=%d worst event-loop gap=%lldms max draw=%lldms max handler=%lldms\n",
               job->printed_sheets(), static_cast<long long>(worst_gap), static_cast<long long>(job->max_draw_ms()),
               static_cast<long long>(job->max_handler_ms()));
-  EXPECT_TRUE(window_.print_action()->isEnabled());
+  ASSERT_TRUE(spin_until([&] { return window_.print_action()->isEnabled(); }, 3000));
   // 워커가 계속 쓸 수 있다
   ASSERT_TRUE(open("simple.pdf"));
 }
 
-TEST_F(PrintTest, OpeningAnotherDocumentCancelsPrinting) {
+// 인쇄 중 확인 대화상자("print_busy_question")에 자동으로 답한다. cancel_and_open=false 면 "인쇄 계속하기"
+void answer_print_question(bool cancel_and_open, bool* asked) {
+  auto* poll = new QTimer();
+  poll->setInterval(10);
+  QObject::connect(poll, &QTimer::timeout, poll, [poll, cancel_and_open, asked] {
+    auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+    if (box == nullptr || box->objectName() != QStringLiteral("print_busy_question")) return;
+    *asked = true;
+    for (QAbstractButton* button : box->buttons()) {
+      const auto role = box->buttonRole(button);
+      if ((cancel_and_open && role == QMessageBox::AcceptRole) || (!cancel_and_open && role == QMessageBox::RejectRole)) {
+        button->click();
+        break;
+      }
+    }
+    poll->deleteLater();
+  });
+  poll->start();
+}
+
+// 인쇄 중 새 문서를 열려 하면 먼저 묻는다: "인쇄 계속하기" 면 열지 않고, "인쇄 취소하고 열기" 면 취소 후 연다 (#12)
+TEST_F(PrintTest, OpeningWhilePrintingAsksFirst) {
   ASSERT_TRUE(open("large-1000.pdf"));
-  auto printer = pdf_printer("replaced.pdf");
+  auto printer = pdf_printer("busy.pdf");
   ASSERT_TRUE(window_.print_with(*printer));
-  ASSERT_TRUE(spin_until([&] { return window_.print_job()->printed_sheets() >= 2; }));
+  PrintJob* job = window_.print_job();
+  ASSERT_TRUE(spin_until([&] { return job->printed_sheets() >= 2; }));
+
+  // 1) 인쇄 계속하기 → 열지 않는다
+  bool asked = false;
+  answer_print_question(false, &asked);
+  window_.open_file(QString::fromStdString(onpdf::path_to_utf8(testdata("bookmarks.pdf"))));
+  EXPECT_TRUE(asked);
+  const int before = job->printed_sheets();
+  ASSERT_TRUE(spin_until([&] { return job->printed_sheets() >= before + 3; }));
+  EXPECT_EQ(window_.print_job(), job);
+  EXPECT_TRUE(job->active());
+  EXPECT_TRUE(window_.windowTitle().endsWith(QStringLiteral("large-1000.pdf")));
+
+  // 2) 인쇄 취소하고 열기 → 취소 후 새 문서, 진행 창 닫힘
+  asked = false;
+  bool cancelled = false;
+  QObject::connect(job, &PrintJob::finished, [&](PrintJob::Outcome o) { cancelled = o == PrintJob::Outcome::kCancelled; });
+  answer_print_question(true, &asked);
   ASSERT_TRUE(open("bookmarks.pdf"));
+  EXPECT_TRUE(asked);
   EXPECT_EQ(window_.print_job(), nullptr);
+  QApplication::processEvents();
+  for (auto* dialog : window_.findChildren<QProgressDialog*>()) EXPECT_FALSE(dialog->isVisible());
+  EXPECT_TRUE(window_.print_action()->isEnabled());
+}
+
+// 인쇄 중이 아니면 묻지 않고 바로 연다
+TEST_F(PrintTest, OpeningWhenIdleDoesNotAsk) {
+  ASSERT_TRUE(open("simple.pdf"));
+  bool asked = false;
+  answer_print_question(true, &asked);
+  ASSERT_TRUE(open("bookmarks.pdf"));
+  EXPECT_FALSE(asked);
   QApplication::processEvents();
 }
 
