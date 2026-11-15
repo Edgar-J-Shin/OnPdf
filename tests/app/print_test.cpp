@@ -12,6 +12,7 @@
 #include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
+#include <QDropEvent>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QPageRanges>
@@ -19,6 +20,8 @@
 #include <QPrinter>
 #include <QProgressDialog>
 #include <QMessageBox>
+#include <QUrl>
+#include <QMimeData>
 #include <QTemporaryDir>
 #include <QTimer>
 
@@ -291,6 +294,15 @@ TEST_F(PrintTest, CancelLargeDocumentKeepsUiResponsive) {
   ASSERT_TRUE(open("simple.pdf"));
 }
 
+// 끌기 진입 이벤트. Qt 6.8(CI)에는 QPoint 생성자만 있고 6.12 는 그것을 구식으로 표시한다 → 공통 생성자 + 경고 억제
+void send_drag_enter(QWidget& target, QPointF at, QMimeData& mime) {
+  QT_WARNING_PUSH
+  QT_WARNING_DISABLE_DEPRECATED
+  QDragEnterEvent enter(at.toPoint(), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+  QT_WARNING_POP
+  QApplication::sendEvent(&target, &enter);
+}
+
 // 인쇄 중 확인 대화상자("print_busy_question")에 자동으로 답한다. cancel_and_open=false 면 "인쇄 계속하기"
 void answer_print_question(bool cancel_and_open, bool* asked) {
   auto* poll = new QTimer();
@@ -341,6 +353,46 @@ TEST_F(PrintTest, OpeningWhilePrintingAsksFirst) {
   QApplication::processEvents();
   for (auto* dialog : window_.findChildren<QProgressDialog*>()) EXPECT_FALSE(dialog->isVisible());
   EXPECT_TRUE(window_.print_action()->isEnabled());
+}
+
+// 인쇄 중 파일을 끌어놓으면 drop 처리는 바로 끝나고, 확인 대화상자는 다음 이벤트 턴에 뜬다 (#27).
+// drop 안에서 모달을 돌리면 끌기 원본(Finder)이 멈춘다
+TEST_F(PrintTest, DropWhilePrintingDoesNotBlockDropEvent) {
+  ASSERT_TRUE(open("large-1000.pdf"));
+  auto printer = pdf_printer("drop.pdf");
+  ASSERT_TRUE(window_.print_with(*printer));
+  ASSERT_TRUE(spin_until([&] { return window_.print_job()->printed_sheets() >= 1; }));
+
+  bool asked = false;
+  answer_print_question(false, &asked);  // "인쇄 계속하기"
+  QMimeData mime;
+  mime.setUrls({QUrl::fromLocalFile(QString::fromStdString(onpdf::path_to_utf8(testdata("bookmarks.pdf"))))});
+  const QPointF at(window_.width() / 2.0, window_.height() / 2.0);
+  send_drag_enter(window_, at, mime);
+  QDropEvent drop(at, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+  QApplication::sendEvent(&window_, &drop);
+  // 대화상자에 답하기 전에 drop 이 돌아왔다 = drop 처리 안에서 모달을 돌리지 않았다
+  EXPECT_FALSE(asked) << "confirmation ran inside dropEvent";
+  EXPECT_TRUE(drop.isAccepted());
+  ASSERT_TRUE(spin_until([&] { return asked; }, 3000));
+  EXPECT_TRUE(window_.print_job()->active());  // 계속하기 → 인쇄 유지, 문서 그대로
+  EXPECT_TRUE(window_.windowTitle().endsWith(QStringLiteral("large-1000.pdf")));
+  // 지역 프린터가 창보다 먼저 사라지므로 끝내기 전에 인쇄를 멈춘다 (앱에서는 창이 프린터를 소유)
+  window_.print_job()->cancel();
+  ASSERT_TRUE(spin_until([&] { return !window_.print_job()->active(); }));
+}
+
+// 인쇄 중이 아니면 끌어놓은 파일이 (다음 이벤트 턴에) 열린다
+TEST_F(PrintTest, DropWhenIdleOpensFile) {
+  ASSERT_TRUE(open("simple.pdf"));
+  QMimeData mime;
+  mime.setUrls({QUrl::fromLocalFile(QString::fromStdString(onpdf::path_to_utf8(testdata("bookmarks.pdf"))))});
+  const QPointF at(window_.width() / 2.0, window_.height() / 2.0);
+  send_drag_enter(window_, at, mime);
+  QDropEvent drop(at, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+  QApplication::sendEvent(&window_, &drop);
+  EXPECT_TRUE(drop.isAccepted());
+  ASSERT_TRUE(spin_until([&] { return window_.windowTitle().endsWith(QStringLiteral("bookmarks.pdf")); }));
 }
 
 // 인쇄 중이 아니면 묻지 않고 바로 연다
