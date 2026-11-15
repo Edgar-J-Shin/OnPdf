@@ -145,6 +145,8 @@ Result<Bitmap> PdfiumDocument::render_page(int page_index, const RenderOptions& 
   int flags = 0;
   if (options.render_annotations) flags |= FPDF_ANNOT;
   if (options.lcd_text) flags |= FPDF_LCD_TEXT;
+  if (options.printing) flags |= FPDF_PRINTING;
+  if (options.grayscale) flags |= FPDF_GRAYSCALE;
   FPDF_RenderPageBitmap(bitmap.get(), page->get(), 0, 0, width, height, rotate, flags);
 
   const int stride = FPDFBitmap_GetStride(bitmap.get());
@@ -192,6 +194,8 @@ Result<Bitmap> PdfiumDocument::render_region(int page_index, const RenderOptions
   int flags = 0;
   if (options.render_annotations) flags |= FPDF_ANNOT;
   if (options.lcd_text) flags |= FPDF_LCD_TEXT;
+  if (options.printing) flags |= FPDF_PRINTING;
+  if (options.grayscale) flags |= FPDF_GRAYSCALE;
   FPDF_RenderPageBitmapWithMatrix(bitmap.get(), page->get(), &matrix, &clip, flags);
 
   const int stride = FPDFBitmap_GetStride(bitmap.get());
@@ -322,6 +326,38 @@ Result<Point> PdfiumDocument::resolve_location(int page_index, Point user_pt) co
   auto page = load_page(page_index);
   if (!page) return std::unexpected(page.error());
   return detail::PageSpace::of(page->get()).to_pt(user_pt.x, user_pt.y);
+}
+
+Result<view::PrintPreferences> PdfiumDocument::print_preferences() const {
+  PdfiumLibrary::assert_current_thread();
+  FPDF_DOCUMENT doc = doc_.get();
+  view::PrintPreferences prefs;
+  // 권한: 암호화되지 않았거나 소유자 암호로 열면 모든 비트가 켜져 있다
+  const unsigned long perm = FPDF_GetDocPermissions(doc);
+  prefs.allowed = (perm & (1UL << 2)) != 0;
+  prefs.high_quality = prefs.allowed && (perm & (1UL << 11)) != 0;
+
+  prefs.no_scaling = !FPDF_VIEWERREF_GetPrintScaling(doc);
+  prefs.copies = std::clamp(FPDF_VIEWERREF_GetNumCopies(doc), 1, 999);
+
+  const int count = page_count();
+  if (FPDF_PAGERANGE range = FPDF_VIEWERREF_GetPrintPageRange(doc); range != nullptr) {
+    const std::size_t n = FPDF_VIEWERREF_GetPrintPageRangeCount(range);
+    // 쌍으로만 해석한다. PDF 명세상 1 기준 쪽 번호이고 PDFium 은 값을 그대로 돌려준다 → 0 기준으로 변환
+    for (std::size_t i = 0; i + 1 < n && prefs.page_ranges.size() < 1000; i += 2) {
+      const int first = FPDF_VIEWERREF_GetPrintPageRangeElement(range, i) - 1;
+      const int last = FPDF_VIEWERREF_GetPrintPageRangeElement(range, i + 1) - 1;
+      if (first < 0 || last < first || first >= count) continue;
+      prefs.page_ranges.emplace_back(first, std::min(last, count - 1));
+    }
+  }
+  switch (FPDF_VIEWERREF_GetDuplex(doc)) {
+    case Simplex: prefs.duplex = view::Duplex::kSimplex; break;
+    case DuplexFlipShortEdge: prefs.duplex = view::Duplex::kFlipShortEdge; break;
+    case DuplexFlipLongEdge: prefs.duplex = view::Duplex::kFlipLongEdge; break;
+    default: prefs.duplex = view::Duplex::kUndefined; break;
+  }
+  return prefs;
 }
 
 Result<view::PageSearchResult> PdfiumDocument::search_page(int page_index, const std::string& query_utf8,

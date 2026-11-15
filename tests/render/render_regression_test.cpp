@@ -27,6 +27,8 @@ struct RenderCase {
   int page;
   float scale;
   const char* expected;
+  bool printing = false;  // FPDF_PRINTING (인쇄 플래그 주석 규칙)
+  int rotation = 0;
 };
 
 bool update_references() {
@@ -39,6 +41,8 @@ void expect_matches_reference(const RenderCase& c) {
   ASSERT_TRUE(doc) << doc.error().message;
   RenderOptions options;
   options.scale = c.scale;
+  options.printing = c.printing;
+  options.rotation = c.rotation;
   auto actual = doc->render_page(c.page, options);
   ASSERT_TRUE(actual) << actual.error().message;
 
@@ -79,6 +83,20 @@ TEST(RenderRegression, Annotations) {
 // /Rotate 90 쪽: 가로·세로가 바뀐 비트맵
 TEST(RenderRegression, RotatedPage) {
   expect_matches_reference({"mixed-sizes.pdf", 5, 0.5f, "mixed-sizes-p5.png"});
+}
+
+// 인쇄 플래그: 화면 렌더는 녹색(화면 전용)만, 인쇄 렌더는 빨강(인쇄 전용)만
+TEST(RenderRegression, PrintFlagsScreen) {
+  expect_matches_reference({"print-flags.pdf", 0, 0.5f, "print-flags-p0-screen.png"});
+}
+
+TEST(RenderRegression, PrintFlagsPrint) {
+  expect_matches_reference({"print-flags.pdf", 0, 0.5f, "print-flags-p0-print.png", true});
+}
+
+// 인쇄 자동 회전: 가로 쪽을 반시계 90° 로 렌더
+TEST(RenderRegression, PrintRotatedLandscape) {
+  expect_matches_reference({"simple.pdf", 1, 0.5f, "simple-p1-rot270.png", true, 270});
 }
 
 }  // namespace

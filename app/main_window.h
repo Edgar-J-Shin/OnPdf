@@ -1,6 +1,7 @@
 #pragma once
 
 #include "document_session.h"
+#include "print_job.h"
 #include "onpdf/core/engine/pdfium_worker.h"
 #include "onpdf/core/view/search.h"
 #include "onpdf/core/view/text_index.h"
@@ -11,6 +12,8 @@
 #include <memory>
 
 class QLabel;
+class QPrinter;
+class QProgressDialog;
 class QSpinBox;
 class QSplitter;
 class QTabWidget;
@@ -40,6 +43,10 @@ class MainWindow : public QMainWindow {
   [[nodiscard]] OutlinePanel* outline_panel() const noexcept { return outline_panel_; }
   [[nodiscard]] ThumbnailPanel* thumbnail_panel() const noexcept { return thumbnail_panel_; }
   [[nodiscard]] QAction* sidebar_action() const noexcept { return sidebar_action_; }
+  [[nodiscard]] QAction* print_action() const noexcept { return print_action_; }
+  [[nodiscard]] PrintJob* print_job() const noexcept { return print_job_.get(); }
+  // 대화상자 없이 이 프린터 설정으로 인쇄를 시작한다 (파일 > 인쇄 의 뒷부분, 테스트용). 시작하면 true
+  bool print_with(QPrinter& printer);
   // 첫 쪽이 그려지면 창을 PNG 로 저장하고 앱을 종료한다 (QA·CI 스크린샷용, --screenshot 옵션).
   void screenshot_after_render(const QString& png_path);
 
@@ -66,6 +73,10 @@ class MainWindow : public QMainWindow {
   void update_search_status();
   void on_current_page_changed(int page);
   void load_outline();
+  void on_print();
+  void on_print_finished(PrintJob::Outcome outcome);
+  void cancel_print();
+  void update_print_action();
   void on_outline_item(const onpdf::view::Link& target);
   void update_outline_highlight();
   void on_zoom_changed(double zoom);
@@ -91,11 +102,17 @@ class MainWindow : public QMainWindow {
   ThumbnailPanel* thumbnail_panel_ = nullptr;
   OutlinePanel* outline_panel_ = nullptr;
   QAction* sidebar_action_ = nullptr;
+  QAction* print_action_ = nullptr;
+  QProgressDialog* print_progress_ = nullptr;
+  bool print_prefs_applied_ = false;  // 문서마다 처음 인쇄할 때 문서 인쇄 기본값을 대화상자에 넣는다
   QTimer* outline_highlight_timer_ = nullptr;
   int outline_generation_ = 0;  // 문서를 열 때마다 증가. 늦게 온 목차·위치 결과를 버린다
   std::unique_ptr<view::SearchSession> search_;
   int search_scroll_anchor_ = 0;  // 검색 시작 시 스크롤 위치. 사용자가 움직였으면 첫 결과로 끌고 가지 않는다
   QString screenshot_path_;
+  // 선언 순서 중요: print_job_ 이 printer_ 를 참조하므로 printer_ 가 먼저 선언되어 나중에 소멸한다
+  std::unique_ptr<QPrinter> printer_;
+  std::unique_ptr<PrintJob> print_job_;
 };
 
 }  // namespace onpdf::app

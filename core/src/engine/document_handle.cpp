@@ -64,6 +64,8 @@ struct DocumentHandleAccess {
       if (!size) return std::unexpected(size.error());
       info.page_sizes.push_back(*size);
     }
+    // 인쇄 정보는 부가 정보: 실패해도 열기는 성공시키고 기본값(인쇄 허용)을 쓴다
+    if (auto print = doc->print_preferences()) info.print = std::move(*print);
 
     std::shared_ptr<State> state(new State(), [](State* s) {
       s->request_close();
