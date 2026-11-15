@@ -385,7 +385,7 @@ void MainWindow::on_outline_item(const onpdf::view::Link& target) {
 void MainWindow::navigate_to(const onpdf::view::Link& target) {
   if (!view_->has_document() || target.kind != view::LinkKind::kPage) return;
   if (target.page < 0 || target.page >= view_->page_count()) return;
-  if (target.location) {  // 이미 쪽 포인트로 변환된 위치
+  if (target.location) {  // 링크: 추출 때 변환된 쪽 포인트 → 바로 이동
     view_->scroll_to_page_point(target.page, *target.location);
     return;
   }
@@ -393,7 +393,7 @@ void MainWindow::navigate_to(const onpdf::view::Link& target) {
     view_->go_to_page(target.page);
     return;
   }
-  // /XYZ 위치는 쪽을 열어야 쪽 포인트로 바꿀 수 있다 → 워커에서 변환 후 이동 (링크·목차 공용)
+  // 목차: /XYZ 위치는 쪽을 열어야 쪽 포인트로 바꿀 수 있다 → 워커에서 변환 후 이동
   const int generation = outline_generation_;
   const int page = target.page;
   UiDispatcher* dispatcher = &dispatcher_;
@@ -584,7 +584,7 @@ void MainWindow::on_select_all() { view_->select_all_on_current_page(); }
 
 void MainWindow::on_link_activated(const onpdf::view::Link& link) {
   if (link.kind == onpdf::view::LinkKind::kPage) {
-    navigate_to(link);  // 위치는 클릭할 때 변환한다 (텍스트 추출 시 대상 쪽을 열지 않도록)
+    navigate_to(link);  // 링크는 location 이 이미 변환되어 있어 바로 이동한다
     return;
   }
   const QString uri = QString::fromUtf8(link.uri.data(), static_cast<qsizetype>(link.uri.size()));

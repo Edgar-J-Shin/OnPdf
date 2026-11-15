@@ -29,10 +29,9 @@ struct PageSpace {
   [[nodiscard]] Rect to_rect(double left, double right, double bottom, double top) const;
 };
 
-// 대상 → link.page + link.location(쪽 포인트). 위치 변환을 위해 대상 쪽을 연다.
-// 현재 호출자 없음 — 링크·목차는 fill_target_lazy + resolve_location 을 쓴다(#12). 쪽 포인트가 미리 필요할 때를 위해 남긴다
+// 대상 → link.page + link.location(쪽 포인트). 위치 변환을 위해 대상 쪽을 연다 (링크: 쪽당 수가 적다)
 bool fill_location(FPDF_DOCUMENT doc, FPDF_DEST dest, view::Link& link);
-// 대상 → link.page + link.user_location(사용자 좌표, 미변환). 쪽을 열지 않는다 (링크·목차)
+// 대상 → link.page + link.user_location(사용자 좌표, 미변환). 쪽을 열지 않는다 (목차: 항목이 수만 개일 수 있다)
 bool fill_target_lazy(FPDF_DOCUMENT doc, FPDF_DEST dest, view::Link& link);
 
 // URI 액션의 URI (원시 바이트)

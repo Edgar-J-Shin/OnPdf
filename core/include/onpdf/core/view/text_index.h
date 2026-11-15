@@ -39,9 +39,11 @@ struct Link {
   Rect box;
   LinkKind kind = LinkKind::kPage;
   int page = -1;                   // kPage
-  // kPage: /XYZ 위치(대상 쪽 포인트), 변환된 경우에만. 텍스트 추출·목차는 채우지 않는다(대상 쪽을 열지 않도록)
+  // kPage 의 /XYZ 위치는 둘 중 하나만 채운다 (둘 다 없으면 쪽 맨 위):
+  //  - location: 쪽 포인트(좌상단 원점, 회전 반영). 링크(PageTextIndex::links) — 텍스트 추출 때 대상 쪽을 열어 바로 변환
+  //  - user_location: 대상 쪽 사용자 좌표(미변환). 목차(Outline) — 항목이 많아 로드 때 쪽을 열지 않고, 이동 시
+  //    resolve_location 으로 변환
   std::optional<Point> location;
-  // kPage: /XYZ 위치(대상 쪽 사용자 좌표, 미변환). 이동할 때 resolve_location 으로 쪽 포인트로 바꾼다
   std::optional<Point> user_location;
   std::string uri;                 // kUri, UTF-8
 };

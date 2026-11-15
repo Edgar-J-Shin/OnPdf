@@ -122,16 +122,16 @@ TEST(TextPage, LinksFromAnnotationsPdf) {
     } else {
       ++page;
       EXPECT_EQ(link.page, 1);
-      // 추출 시에는 대상 쪽을 열지 않는다: 사용자 좌표만 있고 쪽 포인트는 비어 있다 (#12)
-      EXPECT_FALSE(link.location.has_value());
-      ASSERT_TRUE(link.user_location.has_value());
-      EXPECT_NEAR(link.user_location->x, 72.0, 0.01);
-      EXPECT_NEAR(link.user_location->y, 700.0, 0.01);
-      // 이동할 때 변환: /XYZ 72 700 → 쪽 포인트 (72, 792-700=92)
-      auto pt = doc->resolve_location(link.page, *link.user_location);
-      ASSERT_TRUE(pt) << pt.error().message;
-      EXPECT_NEAR(pt->x, 72.0, 0.01);
-      EXPECT_NEAR(pt->y, 92.0, 0.01);
+      // 링크는 추출 때 바로 쪽 포인트로 변환한다: /XYZ 72 700 → (72, 792-700=92). 미변환 좌표는 두지 않는다
+      ASSERT_TRUE(link.location.has_value());
+      EXPECT_FALSE(link.user_location.has_value());
+      EXPECT_NEAR(link.location->x, 72.0, 0.01);
+      EXPECT_NEAR(link.location->y, 92.0, 0.01);
+      // 목차가 쓰는 지연 변환 경로와 같은 결과 (두 경로가 같은 좌표계)
+      auto lazy = doc->resolve_location(link.page, {72, 700});
+      ASSERT_TRUE(lazy) << lazy.error().message;
+      EXPECT_NEAR(lazy->x, link.location->x, 0.01);
+      EXPECT_NEAR(lazy->y, link.location->y, 0.01);
     }
     EXPECT_FALSE(link.box.empty());
   }
@@ -277,20 +277,21 @@ TEST(TextPage, BookmarksPdfHasNoLinkAnnotations) {
 }
 
 }  // namespace
-// 유니코드 매핑 오류 글자는 U+FFFD 가 아니라 PDFium 값으로 추출·검색된다 (#12 C1).
-// 이 파일은 이전 동작(매핑 오류 → U+FFFD)에서 "\uFFFD\uFFFD\uFFFD\uFFFD" 로 추출됐다
-TEST(TextPage, UnicodeMapErrorKeepsPdfiumValue) {
+// 유니코드 매핑 오류 글자는 U+FFFD 로 추출되고, PDFium 이 준 글자 코드("ABAB")로는 검색되지 않는다 (#12 C1 결정).
+// 이 파일은 ToUnicode 없는 Type3 글꼴이라 PDFium 값 그대로면 "ABAB" 가 된다 — 그 값을 쓰지 않는 것이 결정이다
+TEST(TextPage, UnicodeMapErrorBecomesReplacement) {
   auto doc = PdfiumDocument::open(testdata("unicode-map-error.pdf"));
   ASSERT_TRUE(doc) << doc.error().message;
   auto index = doc->load_text(0);
   ASSERT_TRUE(index) << index.error().message;
   std::u32string text;
   for (const auto& ch : index->chars) text += ch.code;
-  EXPECT_NE(text.find(U"ABAB"), std::u32string::npos);
-  EXPECT_EQ(text.find(U'\uFFFD'), std::u32string::npos);
+  EXPECT_NE(text.find(U"\uFFFD\uFFFD\uFFFD\uFFFD"), std::u32string::npos);
+  EXPECT_EQ(text.find(U"ABAB"), std::u32string::npos);
+  EXPECT_NE(text.find(U"Unicode map error test"), std::u32string::npos);  // 정상 글꼴 줄은 그대로
   auto found = doc->search_page(0, "ABAB", {});
   ASSERT_TRUE(found) << found.error().message;
-  EXPECT_EQ(found->ranges.size(), 1u);
+  EXPECT_TRUE(found->ranges.empty());
 }
 
 TEST(TextPage, SanitizeTextCode) {

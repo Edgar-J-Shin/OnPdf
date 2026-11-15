@@ -376,9 +376,18 @@ Result<view::PageSearchResult> PdfiumDocument::search_page(int page_index, const
   if (found.empty()) return result;
   auto index = text_page->extract(doc_.get(), page->get(), page_index);
   if (!index) return std::unexpected(index.error());
+  // PDFium 검색기는 매핑 오류 글자도 PDFium 값(글자 코드)으로 맞춘다. 인덱스는 그 글자를 U+FFFD 로 두므로
+  // (복사·선택과 같은 기준으로) U+FFFD 글자를 포함한 결과는 버린다. 검색어에 U+FFFD 가 있으면 그대로 둔다
+  const bool query_has_replacement = query_utf8.find("\xEF\xBF\xBD") != std::string::npos;
   for (const view::SourceRange& src : found) {
     const view::TextRange range = view::map_source_range(*index, src);
-    if (!range.empty()) result.ranges.push_back(range);
+    if (range.empty()) continue;
+    if (!query_has_replacement) {
+      const auto first = index->chars.begin() + range.start;
+      const auto last = index->chars.begin() + range.end;
+      if (std::any_of(first, last, [](const view::TextChar& ch) { return ch.code == U'\uFFFD'; })) continue;
+    }
+    result.ranges.push_back(range);
   }
   std::sort(result.ranges.begin(), result.ranges.end(),
             [](const view::TextRange& a, const view::TextRange& b) { return a.start < b.start; });

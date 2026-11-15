@@ -537,7 +537,7 @@ def make_print_low_res() -> bytes:
 
 def make_unicode_map_error() -> bytes:
     """ToUnicode 없는 Type3 글꼴 + 표준 글리프 이름 목록(AGL) 밖 이름(/g1 /g2) → PDFium 유니코드 매핑 오류.
-    글자 코드 65·66 을 그린다. 뷰어는 PDFium 값을 그대로 쓰므로 "ABAB" 로 추출·검색된다 (#12 C1)."""
+    글자 코드 65·66 을 그린다. PDFium 값은 "ABAB" 지만 뷰어는 매핑 오류 글자를 U+FFFD 로 추출한다 (#12 C1)."""
     w = PdfWriter()
     pages = w.reserve()
     helv = g.simple_font(w)

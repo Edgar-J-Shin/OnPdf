@@ -16,7 +16,7 @@ namespace onpdf::engine {
 
 namespace {
 
-using detail::fill_target_lazy;
+using detail::fill_location;
 using detail::PageSpace;
 using detail::to_wide;
 using detail::uri_of;
@@ -71,10 +71,9 @@ Result<view::PageTextIndex> TextPage::extract(FPDF_DOCUMENT doc, FPDF_PAGE page,
     }
     view::TextChar ch;
     ch.generated = FPDFText_IsGenerated(tp, i) == 1;
-    // 유니코드 매핑 오류(ToUnicode 없음 등) 글자도 PDFium 이 준 값을 그대로 쓴다 (Chrome 과 같은 동작).
-    // 단순 글꼴은 글자 코드가 ASCII 와 같은 경우가 많아 읽을 수 있는 텍스트가 복사·검색된다. U+FFFD 로 바꾸면
-    // 이런 경우를 모두 잃는다. 값이 유니코드 스칼라가 아닐 때만 U+FFFD 로 바꾼다 (#12 C1 결정)
-    ch.code = view::sanitize_text_code(code);
+    // 유니코드 매핑 오류(ToUnicode 없음 등) 글자는 U+FFFD. PDFium 이 주는 값은 유니코드가 아닌 글자 코드라
+    // 그대로 쓰면 복사·검색에 엉뚱한 글자가 조용히 섞인다 (#12 C1 결정). 그 밖에 유니코드 스칼라가 아닌 값도 U+FFFD
+    ch.code = FPDFText_HasUnicodeMapError(tp, i) == 1 ? char32_t{0xFFFD} : view::sanitize_text_code(code);
     ch.font_size = static_cast<float>(FPDFText_GetFontSize(tp, i));
     double l = 0, r = 0, b = 0, t = 0;
     bool has_box = false;
@@ -148,7 +147,7 @@ Result<view::PageTextIndex> TextPage::extract(FPDF_DOCUMENT doc, FPDF_PAGE page,
     link.box = space.to_rect(rect.left, rect.right, rect.bottom, rect.top);
     if (FPDF_DEST dest = FPDFLink_GetDest(doc, link_handle); dest != nullptr) {
       link.kind = view::LinkKind::kPage;
-      if (!fill_target_lazy(doc, dest, link)) continue;  // 대상 쪽을 열지 않는다. 위치는 클릭 시 변환
+      if (!fill_location(doc, dest, link)) continue;  // 링크는 추출 때 대상 위치를 쪽 포인트로 바로 변환
     } else if (FPDF_ACTION action = FPDFLink_GetAction(link_handle); action != nullptr) {
       const unsigned long type = FPDFAction_GetType(action);
       if (type == PDFACTION_URI) {
@@ -159,7 +158,7 @@ Result<view::PageTextIndex> TextPage::extract(FPDF_DOCUMENT doc, FPDF_PAGE page,
         FPDF_DEST action_dest = FPDFAction_GetDest(doc, action);
         if (action_dest == nullptr) continue;
         link.kind = view::LinkKind::kPage;
-        if (!fill_target_lazy(doc, action_dest, link)) continue;
+        if (!fill_location(doc, action_dest, link)) continue;
       } else {
         continue;  // REMOTEGOTO, LAUNCH, EMBEDDEDGOTO 는 지원하지 않음 (보안)
       }

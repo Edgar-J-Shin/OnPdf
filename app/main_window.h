@@ -78,7 +78,7 @@ class MainWindow : public QMainWindow {
   void cancel_print();
   void update_print_action();
   void on_outline_item(const onpdf::view::Link& target);
-  // 쪽 대상(링크·목차)으로 이동: location 이 있으면 바로, user_location 이면 워커에서 변환 후, 없으면 쪽 맨 위
+  // 쪽 대상으로 이동: location(링크)이면 바로, user_location(목차)이면 워커에서 변환 후, 둘 다 없으면 쪽 맨 위
   void navigate_to(const onpdf::view::Link& target);
   void update_outline_highlight();
   void on_zoom_changed(double zoom);
