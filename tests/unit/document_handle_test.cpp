@@ -84,7 +84,7 @@ TEST_F(DocumentHandleTest, OpenReturnsInfo) {
 TEST_F(DocumentHandleTest, ModifyApplyChangeAndSave) {
   DocumentHandle doc = open_simple();
   ASSERT_TRUE(doc.valid());
-  EXPECT_TRUE(doc.info().can_modify);
+  EXPECT_TRUE(doc.info().permissions.assemble);
   EXPECT_EQ(doc.info().signature_count, 0);
   auto changed_future = doc.modify([](EditableDocument& d) -> Result<ChangeSet> {
     if (auto r = d.set_page_rotation(0, 1); !r) return std::unexpected(r.error());

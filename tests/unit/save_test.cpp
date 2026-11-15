@@ -132,16 +132,101 @@ TEST(SaveDocument, IncrementalSaveKeepsSignedBytes) {
   EXPECT_EQ(*reopened->page_rotation(0), 1);
 }
 
-TEST(SaveDocument, PermissionsReported) {
+// 원본 권한을 유지한다: 본인만 읽을 수 있던 문서가 저장 뒤 다른 사용자에게 열리면 안 된다 (#31 리뷰 C1)
+TEST(SaveDocument, PermissionsPreserved) {
+  ScopedTempDir dir;
+  const auto target = dir / "private.pdf";
+  std::filesystem::copy_file(testdata("simple.pdf"), target);
+  std::filesystem::permissions(target, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+                               std::filesystem::perm_options::replace);
+  const auto before = std::filesystem::status(target).permissions();
+  auto doc = PdfiumDocument::open(target);
+  ASSERT_TRUE(doc);
+  ASSERT_TRUE(doc->set_page_rotation(0, 1));
+  ASSERT_TRUE(save_document_safely(*doc, target, {}));
+  EXPECT_EQ(std::filesystem::status(target).permissions(), before);
+}
+
+// 읽기 전용 파일은 몰래 덮어쓰지 않는다: 쓸 수 없음으로 거절하고 원본·폴더를 그대로 둔다 (#31 리뷰 C1)
+TEST(SaveDocument, ReadOnlyFileIsRefused) {
+  ScopedTempDir dir;
+  const auto target = dir / "readonly.pdf";
+  std::filesystem::copy_file(testdata("simple.pdf"), target);
+  const auto original = read_bytes(target);
+  namespace fs = std::filesystem;
+  fs::permissions(target, fs::perms::owner_read | fs::perms::group_read | fs::perms::others_read,
+                  fs::perm_options::replace);
+  struct Restore {  // 폴더 정리를 위해 쓰기 권한을 되돌린다 (Windows 는 읽기 전용 파일을 지우지 못한다)
+    fs::path path;
+    ~Restore() {
+      std::error_code ec;
+      fs::permissions(path, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::add, ec);
+    }
+  } restore{target};
+  if (std::ofstream probe(target, std::ios::binary | std::ios::app); probe) {
+    GTEST_SKIP() << "running with privileges that can write read-only files";
+  }
+  auto doc = PdfiumDocument::open(target);
+  ASSERT_TRUE(doc);
+  ASSERT_TRUE(doc->set_page_rotation(0, 1));
+  auto saved = save_document_safely(*doc, target, {});
+  ASSERT_FALSE(saved);
+  EXPECT_EQ(saved.error().code, ErrorCode::kNotWritable);
+  EXPECT_EQ(read_bytes(target), original);
+  EXPECT_EQ(files_in(dir.path()), 1u);
+}
+
+// 심볼릭 링크로 연 문서: 링크는 그대로 두고 링크가 가리키는 실제 파일을 갱신한다 (#31 리뷰 C1)
+TEST(SaveDocument, SymlinkIsKeptAndRealFileUpdated) {
+  ScopedTempDir dir;
+  const auto real = dir / "real.pdf";
+  const auto link = dir / "link.pdf";
+  std::filesystem::copy_file(testdata("simple.pdf"), real);
+  std::error_code ec;
+  std::filesystem::create_symlink(real, link, ec);
+  if (ec) GTEST_SKIP() << "cannot create symlinks here: " << ec.message();
+  auto doc = PdfiumDocument::open(link);
+  ASSERT_TRUE(doc);
+  ASSERT_TRUE(doc->set_page_rotation(0, 1));
+  auto saved = save_document_safely(*doc, link, {});
+  ASSERT_TRUE(saved) << saved.error().message;
+  EXPECT_EQ(saved->path, link);
+  EXPECT_TRUE(std::filesystem::is_symlink(std::filesystem::symlink_status(link)));
+  auto reopened = PdfiumDocument::open(real);
+  ASSERT_TRUE(reopened);
+  EXPECT_EQ(*reopened->page_rotation(0), 1);
+  EXPECT_EQ(files_in(dir.path()), 2u);  // real + link, 임시 없음
+}
+
+TEST(SaveDocument, EditPermissionsByKind) {
   auto plain = PdfiumDocument::open(testdata("simple.pdf"));
   ASSERT_TRUE(plain);
-  EXPECT_TRUE(plain->can_modify());
-  auto restricted = PdfiumDocument::open(testdata("encrypted-owner-only.pdf"));
+  const EditPermissions all = plain->edit_permissions();
+  EXPECT_TRUE(all.modify_contents && all.annotate && all.fill_forms && all.assemble);
+
+  auto restricted = PdfiumDocument::open(testdata("encrypted-owner-only.pdf"));  // P=-3904: 전부 금지
   ASSERT_TRUE(restricted);
-  EXPECT_FALSE(restricted->can_modify());  // P=-3904: 수정 금지
-  auto owner = PdfiumDocument::open(testdata("encrypted-owner-only.pdf"), "owner");
+  const EditPermissions none = restricted->edit_permissions();
+  EXPECT_FALSE(none.modify_contents);
+  EXPECT_FALSE(none.annotate);
+  EXPECT_FALSE(none.fill_forms);
+  EXPECT_FALSE(none.assemble);
+  auto owner = PdfiumDocument::open(testdata("encrypted-owner-only.pdf"), "owner");  // 소유자 암호: 제한 해제
   ASSERT_TRUE(owner);
-  EXPECT_TRUE(owner->can_modify());
+  EXPECT_TRUE(owner->edit_permissions().assemble);
+
+  // 쪽 조립만 허용(비트 11 설정·비트 4 해제): 회전은 되고 내용 수정은 안 된다
+  auto assemble_only = PdfiumDocument::open(testdata("perm-assemble-only.pdf"));
+  ASSERT_TRUE(assemble_only) << assemble_only.error().message;
+  EXPECT_TRUE(assemble_only->edit_permissions().assemble);
+  EXPECT_FALSE(assemble_only->edit_permissions().modify_contents);
+  EXPECT_TRUE(assemble_only->edit_permissions().annotate);
+
+  // 내용 수정은 허용·조립 금지(R3 에서 비트 11 해제): 회전 불가
+  auto no_assemble = PdfiumDocument::open(testdata("perm-no-assemble.pdf"));
+  ASSERT_TRUE(no_assemble) << no_assemble.error().message;
+  EXPECT_FALSE(no_assemble->edit_permissions().assemble);
+  EXPECT_TRUE(no_assemble->edit_permissions().modify_contents);
 }
 
 }  // namespace

@@ -309,15 +309,18 @@ void MainWindow::update_title() {
 void MainWindow::update_edit_actions() {
   const bool has_pages = session_.has_document() && session_.handle().valid() && session_.handle().info().page_count > 0;
   const bool printing = print_job_ && print_job_->active();
-  const bool can_edit = has_pages && session_.handle().info().can_modify && !edit_->busy() && !saving_ && !printing;
-  rotate_cw_action_->setEnabled(can_edit);
-  rotate_ccw_action_->setEnabled(can_edit);
-  const QString edit_tip = has_pages && !session_.handle().info().can_modify ? tr("이 문서는 수정이 허용되지 않습니다")
-                                                                             : QString();
-  rotate_cw_action_->setStatusTip(edit_tip);
-  rotate_ccw_action_->setStatusTip(edit_tip);
-  undo_action_->setEnabled(can_edit && edit_->can_undo());
-  redo_action_->setEnabled(can_edit && edit_->can_redo());
+  // 편집 가능 상태(작업 중이 아님)와 편집 종류별 문서 권한을 따로 본다
+  const bool idle = has_pages && !edit_->busy() && !saving_ && !printing;
+  const bool can_assemble = has_pages && session_.handle().info().permissions.assemble;  // 쪽 회전·삭제·삽입
+  rotate_cw_action_->setEnabled(idle && can_assemble);
+  rotate_ccw_action_->setEnabled(idle && can_assemble);
+  const QString assemble_tip = has_pages && !can_assemble ? tr("이 문서는 쪽 편집(회전·삭제·삽입)이 허용되지 않습니다")
+                                                          : QString();
+  rotate_cw_action_->setStatusTip(assemble_tip);
+  rotate_ccw_action_->setStatusTip(assemble_tip);
+  // 실행 취소 대상은 이미 허용된 편집이므로 작업 중이 아니면 된다
+  undo_action_->setEnabled(idle && edit_->can_undo());
+  redo_action_->setEnabled(idle && edit_->can_redo());
   undo_action_->setText(edit_->can_undo() ? tr("실행 취소: %1(&U)").arg(command_label(edit_->undo_id()))
                                           : tr("실행 취소(&U)"));
   redo_action_->setText(edit_->can_redo() ? tr("다시 실행: %1(&R)").arg(command_label(edit_->redo_id()))
@@ -376,10 +379,13 @@ bool MainWindow::start_save(const QString& path, std::function<void()> then) {
           if (generation != window->outline_generation_) return;  // 다른 문서로 바뀌었다
           if (!*shared) {
             window->update_edit_actions();
+            const QString reason =
+                shared->error().code == ErrorCode::kNotWritable
+                    ? window->tr("파일에 쓸 수 없습니다. 읽기 전용이거나 다른 프로그램이 사용 중입니다.\n"
+                                 "다른 이름으로 저장하세요.")
+                    : QString::fromStdString(shared->error().message);
             QMessageBox box(QMessageBox::Warning, window->tr("저장하지 못했습니다"),
-                            window->tr("%1\n\n원본 파일은 바뀌지 않았습니다.")
-                                .arg(QString::fromStdString(shared->error().message)),
-                            QMessageBox::Ok, window);
+                            window->tr("%1\n\n원본 파일은 바뀌지 않았습니다.").arg(reason), QMessageBox::Ok, window);
             box.setObjectName(QStringLiteral("save_failed"));
             box.exec();
             return;

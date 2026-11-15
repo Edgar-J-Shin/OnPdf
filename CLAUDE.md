@@ -72,6 +72,7 @@ core/         Document, Page, 렌더 캐시(타일 LRU), 텍스트 인덱스    
 core/engine/  PdfiumLibrary(init RAII) · PdfiumDocument(열기·크기·렌더·load_text·load_outline·resolve_location·print_preferences·회전·save_to — EditableDocument 구현) · TextPage(FPDFText/FPDFLink 추출, 좌표 변환) · dest(목적지·URI·UTF-16 변환 공용, 내부) · pdfium_handles
               PdfiumWorker(전용 스레드 + High/Normal/Low 큐 + 취소) · DocumentHandle(워커 쪽 문서의 스레드 안전 핸들), QpdfTools(M2)
 core/engine/  EditableDocument(PDFium 없는 편집 인터페이스 — edit/ 가 씀)·ChangeSet · save(save_document_safely: 임시→검증→rename)
+core/platform/ fs_sync(flush_file_to_disk·replace_file·flush_directory — 저장의 플랫폼 분기는 여기만)
 core/image/   png_io (stb 기반 PNG 읽기/쓰기, BGRA↔RGBA)
 core/view/    PageLayout(세로 연속 레이아웃·좌표 변환) · tile.h(TileKey, 512px, 1/64 배율 양자화) · TileCache(바이트 상한 LRU)
               TileScheduler(뷰포트→필요 타일, High/Low 요청·취소·실패 집합) · TileSource(SyncTileSource=CLI·테스트)
@@ -110,8 +111,8 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 ### 편집·저장 (구현: edit + core/engine/save + app/EditController)
 - `edit/` 는 PDFium 헤더를 끌어오는 `pdfium_document.h` 를 쓰지 않고 `engine::EditableDocument`(PDFium 없음)로만 문서를 바꾼다
 - 실행: `EditController::run(cmd)` → `DocumentHandle::modify`(워커, kHigh) → 결과 `ChangeSet` 을 메인에서 `apply_change`(문서 정보의 쪽 크기 — 메인 스레드만 고친다) → `UndoStack` → `document_changed` → `DocumentView::invalidate_pages`(타일·텍스트 버림, 스케줄러 재생성으로 이전 모양의 늦은 타일 폐기, 크기가 바뀌면 레이아웃 재구성)·`ThumbnailPanel::invalidate_pages`·검색 재실행. 한 번에 하나(busy)
-- 저장: `DocumentHandle::save` → 워커 `save_document_safely`: 같은 폴더 임시 파일 → 같은 암호로 다시 열어 쪽 수·크기·모든 쪽 로드(증분이면 원본 바이트 앞부분 일치) 검증 → `std::filesystem::rename`. 실패하면 원본 불변·임시 삭제. 서명 문서(`signature_count > 0`)는 증분 저장 강제, 암호화는 유지
-- 앱: 수정 표시(`setWindowModified`, 제목 `"<파일>[*] — OnPdf"`), 닫기·종료(→`close()`)·다른 문서 열기 전 `maybe_save`(저장/저장 안 함/취소, 그다음 인쇄 확인). 수정 권한(비트 4)이 없거나 인쇄·저장 중이면 편집 비활성
+- 저장: `DocumentHandle::save` → 워커 `save_document_safely`: 심볼릭 링크면 실제 파일로(링크 유지) → 기존 파일은 일반 파일·쓰기 가능(읽기 전용·잠금이면 `kNotWritable` 로 거절) 확인 → 같은 폴더 임시 파일(64비트 난수 이름) → 같은 암호로 다시 열어 쪽 수·크기·모든 쪽 로드(증분이면 원본 바이트 앞부분 일치) 검증 → 원본 권한 복사 → `platform::flush_file_to_disk`(macOS F_FULLFSYNC·fsync / Windows FlushFileBuffers) → `platform::replace_file`(rename / MoveFileExW+WRITE_THROUGH) → 폴더 동기화. 실패하면 원본 불변·임시 삭제. 서명 문서(`signature_count > 0`)는 증분 저장 강제, 암호화는 유지
+- 앱: 수정 표시(`setWindowModified`, 제목 `"<파일>[*] — OnPdf"`), 닫기·종료(→`close()`)·다른 문서 열기 전 `maybe_save`(저장/저장 안 함/취소, 그다음 인쇄 확인). 편집 종류별 권한(`DocumentInfo::permissions`: 쪽 회전·삭제·삽입 = `assemble`(R≥3 비트 11, R2 비트 4), 주석 = `annotate`(비트 6))이 없거나 인쇄·저장 중이면 해당 편집 비활성
 - 모든 Command 는 실행 → 취소 → 재실행 후 문서 상태 비교 테스트(가짜 `EditableDocument` + 실제 PDFium) 필수. 원래 경로로 저장하는 테스트는 testdata 사본(`ScopedTempDir`)을 연다
 
 ### 렌더링 (구현: core/view + app/DocumentView)

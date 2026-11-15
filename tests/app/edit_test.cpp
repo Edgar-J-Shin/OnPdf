@@ -21,6 +21,7 @@
 #include <QTimer>
 
 #include <filesystem>
+#include <fstream>
 #include <string>
 
 namespace onpdf::app {
@@ -237,6 +238,51 @@ TEST_F(EditTest, ReadOnlyDocumentDisablesEditing) {
   EXPECT_FALSE(window_.isWindowModified());
   ASSERT_TRUE(open("simple.pdf"));
   EXPECT_TRUE(window_.rotate_cw_action()->isEnabled());
+}
+
+// 쪽 회전은 "쪽 조립" 권한(R≥3 비트 11)으로 판정한다 — 내용 수정 비트(4)와 무관 (#31 리뷰 W1)
+TEST_F(EditTest, RotationFollowsAssemblePermission) {
+  ASSERT_TRUE(open("perm-assemble-only.pdf"));  // 내용 수정 금지·조립 허용
+  EXPECT_TRUE(window_.rotate_cw_action()->isEnabled());
+  ASSERT_TRUE(open("perm-no-assemble.pdf"));  // 내용 수정 허용·조립 금지
+  EXPECT_FALSE(window_.rotate_cw_action()->isEnabled());
+  EXPECT_TRUE(window_.rotate_cw_action()->statusTip().contains(QStringLiteral("쪽 편집")));
+}
+
+// 읽기 전용 파일에 저장하면 원본을 그대로 두고 "다른 이름으로 저장" 을 안내한다 (#31 리뷰 C1)
+TEST_F(EditTest, SavingReadOnlyFileExplainsAndKeepsOriginal) {
+  const auto copy = open_copy("simple.pdf");
+  const auto original = read_bytes(copy);
+  namespace fs = std::filesystem;
+  fs::permissions(copy, fs::perms::owner_read | fs::perms::group_read | fs::perms::others_read,
+                  fs::perm_options::replace);
+  struct Restore {
+    fs::path path;
+    ~Restore() {
+      std::error_code ec;
+      fs::permissions(path, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::add, ec);
+    }
+  } restore{copy};
+  if (std::ofstream probe(copy, std::ios::binary | std::ios::app); probe) {
+    GTEST_SKIP() << "running with privileges that can write read-only files";
+  }
+  ASSERT_TRUE(rotate(1));
+  QString message;
+  auto* poll = new QTimer();
+  poll->setInterval(10);
+  QObject::connect(poll, &QTimer::timeout, poll, [poll, &message] {
+    auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+    if (box == nullptr || box->objectName() != QStringLiteral("save_failed")) return;
+    message = box->text();
+    box->accept();
+    poll->deleteLater();
+  });
+  poll->start();
+  window_.save_action()->trigger();
+  ASSERT_TRUE(spin_until([&] { return !message.isEmpty() && !window_.saving(); }));
+  EXPECT_TRUE(message.contains(QStringLiteral("다른 이름으로 저장"))) << message.toStdString();
+  EXPECT_TRUE(window_.isWindowModified());
+  EXPECT_EQ(read_bytes(copy), original);
 }
 
 TEST_F(EditTest, SignedDocumentSavesIncrementally) {

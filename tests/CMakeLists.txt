@@ -36,6 +36,7 @@ onpdf_add_test(onpdf_unit_tests
   unit/undo_stack_test.cpp
   unit/rotate_page_test.cpp
   unit/save_test.cpp
+  unit/fs_sync_test.cpp
 )
 target_compile_definitions(onpdf_unit_tests PRIVATE ONPDF_TEST_GLOBAL_PDFIUM=1)
 target_link_libraries(onpdf_unit_tests PRIVATE onpdf::edit)

@@ -43,6 +43,8 @@ GENERATED = {
     "print-low-res.pdf": docs.make_print_low_res,
     "unicode-map-error.pdf": docs.make_unicode_map_error,
     "signed-dummy.pdf": docs.make_signed_dummy,
+    "perm-assemble-only.pdf": docs.make_perm_assemble_only,
+    "perm-no-assemble.pdf": docs.make_perm_no_assemble,
 }
 
 

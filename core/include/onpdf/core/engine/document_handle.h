@@ -40,7 +40,7 @@ struct DocumentInfo {
   int page_count = 0;
   std::vector<PageSize> page_sizes;
   view::PrintPreferences print;  // 인쇄 권한·문서 인쇄 기본값
-  bool can_modify = true;        // 수정 권한 (권한 비트 4, 소유자 암호면 참)
+  EditPermissions permissions;   // 편집 권한 (종류별). 소유자 암호로 열었거나 암호화되지 않았으면 모두 참
   int signature_count = 0;       // 전자서명 수. 0 보다 크면 저장은 증분 저장
 };
 

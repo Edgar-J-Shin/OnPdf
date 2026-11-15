@@ -66,7 +66,7 @@ struct DocumentHandleAccess {
     }
     // 인쇄 정보는 부가 정보: 실패해도 열기는 성공시키고 기본값(인쇄 허용)을 쓴다
     if (auto print = doc->print_preferences()) info.print = std::move(*print);
-    info.can_modify = doc->can_modify();
+    info.permissions = doc->edit_permissions();
     info.signature_count = doc->signature_count();
 
     std::shared_ptr<State> state(new State(), [](State* s) {

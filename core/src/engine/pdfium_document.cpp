@@ -152,9 +152,18 @@ int PdfiumDocument::signature_count() const {
   return std::max(0, FPDF_GetSignatureCount(doc_.get()));
 }
 
-bool PdfiumDocument::can_modify() const {
+EditPermissions PdfiumDocument::edit_permissions() const {
   PdfiumLibrary::assert_current_thread();
-  return (FPDF_GetDocPermissions(doc_.get()) & (1UL << 3)) != 0;
+  // 소유자 암호로 열었거나 암호화되지 않았으면 모든 비트가 켜져 있다
+  const unsigned long p = FPDF_GetDocPermissions(doc_.get());
+  const auto bit = [p](int n) { return (p & (1UL << (n - 1))) != 0; };
+  const int revision = FPDF_GetSecurityHandlerRevision(doc_.get());  // 암호화되지 않았으면 -1
+  EditPermissions permissions;
+  permissions.modify_contents = bit(4);
+  permissions.annotate = bit(6);
+  permissions.fill_forms = bit(6) || (revision >= 3 && bit(9));
+  permissions.assemble = revision >= 3 ? bit(11) : bit(4);
+  return permissions;
 }
 
 Result<ScopedPage> PdfiumDocument::load_page(int page_index) const {

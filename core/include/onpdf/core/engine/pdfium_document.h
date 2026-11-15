@@ -46,8 +46,8 @@ class PdfiumDocument final : public EditableDocument {
   // 원자적 교체·검증은 save_document_safely 가 맡는다
   [[nodiscard]] Result<void> save_to(const std::filesystem::path& path, bool incremental) const;
   [[nodiscard]] int signature_count() const;
-  // 수정 권한(권한 비트 4). 암호화되지 않았거나 소유자 암호로 열었으면 참
-  [[nodiscard]] bool can_modify() const;
+  // 편집 권한 (보안 처리기 리비전에 따라 비트 해석). 암호화되지 않았거나 소유자 암호로 열었으면 모두 참
+  [[nodiscard]] EditPermissions edit_permissions() const;
   // 열 때 쓴 암호 (저장 검증에서 같은 암호로 다시 열기 위해)
   [[nodiscard]] const std::string& password() const noexcept { return password_; }
   // 열 때 읽은 원본 바이트 (증분 저장 검증: 새 파일 앞부분과 같아야 한다)

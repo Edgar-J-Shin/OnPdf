@@ -17,6 +17,15 @@ struct ChangeSet {
   std::vector<std::pair<int, PageSize>> new_sizes;  // 크기가 바뀐 쪽 (회전 포함, /Rotate 반영 크기)
 };
 
+// 문서 보안 설정의 편집 권한 (PDF 32000-1 표 22). 암호화되지 않았거나 소유자 암호로 열었으면 모두 참.
+// 앱은 편집 종류마다 해당 권한으로 판정한다 (쪽 회전·삭제·삽입 = assemble, 주석 = annotate)
+struct EditPermissions {
+  bool modify_contents = true;  // 비트 4: 아래 셋이 다루지 않는 내용 수정
+  bool annotate = true;         // 비트 6: 주석 추가·수정, 폼 채우기
+  bool fill_forms = true;       // 비트 9(R≥3) 또는 비트 6: 폼 채우기·서명
+  bool assemble = true;         // 쪽 삽입·회전·삭제, 목차: R≥3 은 비트 11, R2 는 비트 4
+};
+
 class EditableDocument {
  public:
   EditableDocument() = default;
