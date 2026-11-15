@@ -294,6 +294,15 @@ TEST_F(PrintTest, CancelLargeDocumentKeepsUiResponsive) {
   ASSERT_TRUE(open("simple.pdf"));
 }
 
+// 끌기 진입 이벤트. Qt 6.8(CI)에는 QPoint 생성자만 있고 6.12 는 그것을 구식으로 표시한다 → 공통 생성자 + 경고 억제
+void send_drag_enter(QWidget& target, QPointF at, QMimeData& mime) {
+  QT_WARNING_PUSH
+  QT_WARNING_DISABLE_DEPRECATED
+  QDragEnterEvent enter(at.toPoint(), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+  QT_WARNING_POP
+  QApplication::sendEvent(&target, &enter);
+}
+
 // 인쇄 중 확인 대화상자("print_busy_question")에 자동으로 답한다. cancel_and_open=false 면 "인쇄 계속하기"
 void answer_print_question(bool cancel_and_open, bool* asked) {
   auto* poll = new QTimer();
@@ -359,8 +368,7 @@ TEST_F(PrintTest, DropWhilePrintingDoesNotBlockDropEvent) {
   QMimeData mime;
   mime.setUrls({QUrl::fromLocalFile(QString::fromStdString(onpdf::path_to_utf8(testdata("bookmarks.pdf"))))});
   const QPointF at(window_.width() / 2.0, window_.height() / 2.0);
-  QDragEnterEvent enter(at, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
-  QApplication::sendEvent(&window_, &enter);
+  send_drag_enter(window_, at, mime);
   QDropEvent drop(at, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
   QApplication::sendEvent(&window_, &drop);
   // 대화상자에 답하기 전에 drop 이 돌아왔다 = drop 처리 안에서 모달을 돌리지 않았다
@@ -380,8 +388,7 @@ TEST_F(PrintTest, DropWhenIdleOpensFile) {
   QMimeData mime;
   mime.setUrls({QUrl::fromLocalFile(QString::fromStdString(onpdf::path_to_utf8(testdata("bookmarks.pdf"))))});
   const QPointF at(window_.width() / 2.0, window_.height() / 2.0);
-  QDragEnterEvent enter(at, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
-  QApplication::sendEvent(&window_, &enter);
+  send_drag_enter(window_, at, mime);
   QDropEvent drop(at, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
   QApplication::sendEvent(&window_, &drop);
   EXPECT_TRUE(drop.isAccepted());
