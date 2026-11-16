@@ -265,6 +265,15 @@ TEST(SaveDocument, EditPermissionsByKind) {
   ASSERT_TRUE(no_assemble) << no_assemble.error().message;
   EXPECT_FALSE(no_assemble->edit_permissions().assemble);
   EXPECT_TRUE(no_assemble->edit_permissions().modify_contents);
+  EXPECT_TRUE(no_assemble->edit_permissions().extract);
+
+  // 추출(비트 5)만 금지: 삽입 소스로 쓸 수 없다. 나머지는 허용
+  auto no_extract = PdfiumDocument::open(testdata("perm-no-extract.pdf"));
+  ASSERT_TRUE(no_extract) << no_extract.error().message;
+  EXPECT_FALSE(no_extract->edit_permissions().extract);
+  EXPECT_TRUE(no_extract->edit_permissions().assemble);
+  EXPECT_FALSE(none.extract);
+  EXPECT_TRUE(all.extract);
 }
 
 }  // namespace

@@ -125,6 +125,35 @@ void DocumentView::invalidate_pages(const std::vector<int>& pages, bool sizes_ch
   viewport()->update();
 }
 
+void DocumentView::rebuild_pages(int keep_page) {
+  if (!layout_ || !source_) return;
+  ++doc_generation_;  // 진행 중인 텍스트 추출·타일은 옛 쪽 번호 기준이다
+  for (auto& [page, task] : text_requested_) task.cancel();
+  text_requested_.clear();
+  text_cache_.clear();
+  cache_.clear();
+  clear_selection();
+  pending_anchor_.reset();
+  pending_focus_.reset();
+  nav_anchor_.reset();
+  pressed_link_.reset();
+  drag_ = Drag::kNone;
+  const int scale_q = layout_->scale_q();
+  layout_ = std::make_unique<view::PageLayout>(handle_.info().page_sizes);
+  layout_->set_scale_q(scale_q);
+  scheduler_ = std::make_unique<view::TileScheduler>(*source_, cache_);
+  scheduler_->set_on_tile([this](const view::TileKey& key) { on_tile_ready(key); });
+  scheduler_->set_layout(layout_.get());
+  relayout();
+  const int count = layout_->page_count();
+  if (count > 0) go_to_page(std::clamp(keep_page, 0, count - 1));
+  last_page_ = -1;  // 같은 번호라도 다른 쪽일 수 있다: 쪽 번호·썸네일 강조를 다시 맞춘다
+  emit_page_if_changed();
+  schedule_update();
+  request_text_indexes();
+  viewport()->update();
+}
+
 void DocumentView::clear_document(const QString& placeholder) {
   scheduler_.reset();
   source_.reset();

@@ -9,6 +9,7 @@
 #include <fpdf_signature.h>
 #include <fpdf_save.h>
 #include <fpdf_edit.h>
+#include <fpdf_ppo.h>
 #include <fpdfview.h>
 
 #include <algorithm>
@@ -55,6 +56,29 @@ Result<std::vector<std::uint8_t>> read_file(const std::filesystem::path& path) {
   return data;
 }
 
+// 메모리의 PDF 바이트를 연다. data 는 돌려준 문서보다 오래 살아야 한다
+Result<ScopedDocument> load_document(const std::vector<std::uint8_t>& data, std::string_view password) {
+  if (data.empty()) return make_error(ErrorCode::kInvalidFormat, "empty document");
+  const std::string pw(password);
+  ScopedDocument doc(FPDF_LoadMemDocument64(data.data(), data.size(), pw.empty() ? nullptr : pw.c_str()));
+  if (!doc) return std::unexpected(last_pdfium_error("FPDF_LoadMemDocument64 failed"));
+  return doc;
+}
+
+// 쪽 번호 목록이 오름차순·중복 없음·범위 안인지
+Result<void> check_page_list(const std::vector<int>& pages, int count, const char* what) {
+  if (pages.empty()) return make_error(ErrorCode::kInvalidArgument, std::string(what) + ": no pages");
+  for (std::size_t i = 0; i < pages.size(); ++i) {
+    if (pages[i] < 0 || pages[i] >= count) {
+      return make_error(ErrorCode::kInvalidArgument, std::string(what) + ": page index out of range: " + std::to_string(pages[i]));
+    }
+    if (i > 0 && pages[i] <= pages[i - 1]) {
+      return make_error(ErrorCode::kInvalidArgument, std::string(what) + ": pages must be ascending and unique");
+    }
+  }
+  return {};
+}
+
 }  // namespace
 
 PdfiumDocument::PdfiumDocument(std::vector<std::uint8_t> data, ScopedDocument doc)
@@ -72,17 +96,10 @@ Result<PdfiumDocument> PdfiumDocument::open(const std::filesystem::path& path,
 Result<PdfiumDocument> PdfiumDocument::open_from_memory(std::vector<std::uint8_t> data,
                                                         std::string_view password) {
   PdfiumLibrary::assert_current_thread();
-  if (data.empty()) {
-    return make_error(ErrorCode::kInvalidFormat, "empty document");
-  }
-  const std::string pw(password);
-  ScopedDocument doc(FPDF_LoadMemDocument64(data.data(), data.size(),
-                                            pw.empty() ? nullptr : pw.c_str()));
-  if (!doc) {
-    return std::unexpected(last_pdfium_error("FPDF_LoadMemDocument64 failed"));
-  }
-  PdfiumDocument result(std::move(data), std::move(doc));
-  result.password_ = pw;
+  auto doc = load_document(data, password);
+  if (!doc) return std::unexpected(doc.error());
+  PdfiumDocument result(std::move(data), std::move(*doc));
+  result.password_ = std::string(password);
   return result;
 }
 
@@ -112,6 +129,107 @@ Result<void> PdfiumDocument::set_page_rotation(int page_index, int quarter_turns
     return make_error(ErrorCode::kInvalidState, "FPDFPage_SetRotation did not apply");
   }
   return {};
+}
+
+// ---------------------------------------------------------------- 구조 편집
+
+Result<void> PdfiumDocument::delete_pages(const std::vector<int>& pages) {
+  PdfiumLibrary::assert_current_thread();
+  const int count = page_count();
+  if (auto ok = check_page_list(pages, count, "delete"); !ok) return ok;
+  const int n = static_cast<int>(pages.size());
+  if (count - n < 1) return make_error(ErrorCode::kInvalidArgument, "cannot delete all pages");
+  // 내림차순으로 지워야 앞쪽 번호가 밀리지 않는다. FPDFPage_Delete 는 반환값이 없어 쪽 수로 확인한다
+  for (auto it = pages.rbegin(); it != pages.rend(); ++it) FPDFPage_Delete(doc_.get(), *it);
+  if (page_count() != count - n) return make_error(ErrorCode::kInvalidState, "page count mismatch after delete");
+  return {};
+}
+
+Result<void> PdfiumDocument::move_pages(const std::vector<int>& pages, int dest) {
+  PdfiumLibrary::assert_current_thread();
+  const int count = page_count();
+  if (pages.empty()) return make_error(ErrorCode::kInvalidArgument, "move: no pages");
+  std::vector<int> sorted(pages);
+  std::sort(sorted.begin(), sorted.end());
+  if (auto ok = check_page_list(sorted, count, "move"); !ok) return ok;  // 범위·중복 (순서는 블록 안 순서라 자유)
+  const int n = static_cast<int>(pages.size());
+  if (dest < 0 || dest > count - n) {
+    return make_error(ErrorCode::kInvalidArgument, "move: destination out of range: " + std::to_string(dest));
+  }
+  // 여기까지 검증했으므로 실패하면 PDFium 내부 문제다 (실패 시 문서가 불확정일 수 있다고 문서화되어 있다)
+  if (!FPDF_MovePages(doc_.get(), pages.data(), static_cast<unsigned long>(pages.size()), dest)) {
+    return make_error(ErrorCode::kInvalidState, "FPDF_MovePages failed");
+  }
+  return {};
+}
+
+Result<SnapshotId> PdfiumDocument::copy_pages_to_snapshot(const std::vector<int>& pages) {
+  PdfiumLibrary::assert_current_thread();
+  if (auto ok = check_page_list(pages, page_count(), "snapshot"); !ok) return std::unexpected(ok.error());
+  ScopedDocument snapshot(FPDF_CreateNewDocument());
+  if (!snapshot) return make_error(ErrorCode::kIoError, "FPDF_CreateNewDocument failed");
+  if (!FPDF_ImportPagesByIndex(snapshot.get(), doc_.get(), pages.data(), static_cast<unsigned long>(pages.size()), 0)) {
+    return make_error(ErrorCode::kInvalidState, "cannot copy pages to snapshot");
+  }
+  if (FPDF_GetPageCount(snapshot.get()) != static_cast<int>(pages.size())) {
+    return make_error(ErrorCode::kInvalidState, "snapshot page count mismatch");
+  }
+  return store_snapshot({}, std::move(snapshot));
+}
+
+Result<SnapshotId> PdfiumDocument::open_snapshot(const std::filesystem::path& file, std::string_view password) {
+  PdfiumLibrary::assert_current_thread();
+  auto data = read_file(file);
+  if (!data) return std::unexpected(data.error());
+  auto doc = load_document(*data, password);
+  if (!doc) return std::unexpected(doc.error());
+  return store_snapshot(std::move(*data), std::move(*doc));
+}
+
+Result<SnapshotId> PdfiumDocument::store_snapshot(std::vector<std::uint8_t> data, ScopedDocument doc) {
+  const SnapshotId id = next_snapshot_++;
+  snapshots_.emplace(id, Snapshot{std::move(data), std::move(doc)});
+  return id;
+}
+
+Result<SnapshotInfo> PdfiumDocument::snapshot_info(SnapshotId id) const {
+  PdfiumLibrary::assert_current_thread();
+  const auto it = snapshots_.find(id);
+  if (it == snapshots_.end()) return make_error(ErrorCode::kInvalidArgument, "unknown snapshot");
+  SnapshotInfo info;
+  info.page_count = std::max(0, FPDF_GetPageCount(it->second.doc.get()));
+  info.permissions = permissions_of(it->second.doc.get());
+  return info;
+}
+
+Result<void> PdfiumDocument::insert_from_snapshot(SnapshotId id, const std::vector<int>& src_pages, int at) {
+  PdfiumLibrary::assert_current_thread();
+  const auto it = snapshots_.find(id);
+  if (it == snapshots_.end()) return make_error(ErrorCode::kInvalidArgument, "unknown snapshot");
+  FPDF_DOCUMENT source = it->second.doc.get();
+  const int source_count = std::max(0, FPDF_GetPageCount(source));
+  const int count = page_count();
+  if (at < 0 || at > count) return make_error(ErrorCode::kInvalidArgument, "insert: position out of range: " + std::to_string(at));
+  int n = source_count;
+  if (!src_pages.empty()) {
+    std::vector<int> sorted(src_pages);
+    std::sort(sorted.begin(), sorted.end());
+    if (auto ok = check_page_list(sorted, source_count, "insert"); !ok) return ok;
+    n = static_cast<int>(src_pages.size());
+  }
+  if (n == 0) return make_error(ErrorCode::kInvalidArgument, "insert: source has no pages");
+  const FPDF_BOOL ok = src_pages.empty()
+                           ? FPDF_ImportPagesByIndex(doc_.get(), source, nullptr, 0, at)
+                           : FPDF_ImportPagesByIndex(doc_.get(), source, src_pages.data(),
+                                                     static_cast<unsigned long>(src_pages.size()), at);
+  if (!ok) return make_error(ErrorCode::kInvalidState, "FPDF_ImportPagesByIndex failed");
+  if (page_count() != count + n) return make_error(ErrorCode::kInvalidState, "page count mismatch after insert");
+  return {};
+}
+
+void PdfiumDocument::drop_snapshot(SnapshotId id) noexcept {
+  PdfiumLibrary::assert_current_thread();
+  snapshots_.erase(id);
 }
 
 namespace {
@@ -154,11 +272,16 @@ int PdfiumDocument::signature_count() const {
 
 EditPermissions PdfiumDocument::edit_permissions() const {
   PdfiumLibrary::assert_current_thread();
+  return permissions_of(doc_.get());
+}
+
+EditPermissions PdfiumDocument::permissions_of(FPDF_DOCUMENT doc) {
   // 소유자 암호로 열었거나 암호화되지 않았으면 모든 비트가 켜져 있다
-  const unsigned long p = FPDF_GetDocPermissions(doc_.get());
+  const unsigned long p = FPDF_GetDocPermissions(doc);
   const auto bit = [p](int n) { return (p & (1UL << (n - 1))) != 0; };
-  const int revision = FPDF_GetSecurityHandlerRevision(doc_.get());  // 암호화되지 않았으면 -1
+  const int revision = FPDF_GetSecurityHandlerRevision(doc);  // 암호화되지 않았으면 -1
   EditPermissions permissions;
+  permissions.extract = bit(5);
   permissions.modify_contents = bit(4);
   permissions.annotate = bit(6);
   permissions.fill_forms = bit(6) || (revision >= 3 && bit(9));

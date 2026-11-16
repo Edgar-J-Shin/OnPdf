@@ -333,6 +333,11 @@ std::future<Result<SaveResult>> DocumentHandle::save(std::filesystem::path targe
 void DocumentHandle::apply_change(const ChangeSet& change) {
   if (!state_) return;
   DocumentInfo& info = state_->info;
+  if (change.structural) {  // 쪽 수·순서가 바뀌었다: 전체를 새 값으로
+    info.page_sizes = change.all_sizes;
+    info.page_count = static_cast<int>(change.all_sizes.size());
+    return;
+  }
   for (const auto& [page, size] : change.new_sizes) {
     if (page >= 0 && static_cast<std::size_t>(page) < info.page_sizes.size()) {
       info.page_sizes[static_cast<std::size_t>(page)] = size;

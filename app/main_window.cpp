@@ -2,6 +2,10 @@
 
 #include "document_view.h"
 #include "onpdf/core/platform/path.h"
+#include "onpdf/edit/delete_pages.h"
+#include "onpdf/edit/insert_pages.h"
+#include "onpdf/edit/move_pages.h"
+#include "onpdf/edit/page_ops.h"
 #include "onpdf/edit/rotate_page.h"
 #include "outline_panel.h"
 #include "search_bar.h"
@@ -20,6 +24,7 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMimeData>
@@ -103,8 +108,7 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
     update_edit_actions();
     update_title();
   });
-  connect(edit_, &EditController::failed, this,
-          [this](const QString& message) { show_transient(tr("편집하지 못했습니다: %1").arg(message)); });
+  connect(edit_, &EditController::failed, this, &MainWindow::on_edit_failed);
 
   connect(&session_, &DocumentSession::opened, this, &MainWindow::on_opened);
   connect(&session_, &DocumentSession::password_required, this, &MainWindow::on_password_required);
@@ -131,6 +135,13 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(thumbnail_panel_, &ThumbnailPanel::page_activated, this, [this](int page) {
     if (view_->has_document()) view_->go_to_page(page);
   });
+  connect(thumbnail_panel_, &ThumbnailPanel::move_requested, this,
+          [this](const std::vector<int>& pages, int drop_row) { move_pages(pages, drop_row); });
+  connect(thumbnail_panel_, &ThumbnailPanel::insert_file_requested, this,
+          [this](const QString& path, int drop_row) { insert_pages_from(path, drop_row); });
+  connect(thumbnail_panel_, &ThumbnailPanel::delete_requested, this,
+          [this](const std::vector<int>& pages) { delete_pages(pages); });
+  connect(thumbnail_panel_, &ThumbnailPanel::context_menu_requested, this, &MainWindow::on_thumbnail_context_menu);
   connect(outline_panel_, &OutlinePanel::item_activated, this, &MainWindow::on_outline_item);
   connect(view_->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] {
     // 스로틀: 진행 중이면 다시 시작하지 않는다 → 연속(관성) 스크롤 중에도 100ms 마다 갱신
@@ -185,6 +196,15 @@ void MainWindow::build_menus() {
                                       [this] { rotate_current_page(1); });
   rotate_ccw_action_ = page->addAction(tr("왼쪽으로 회전(&L)"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R), this,
                                        [this] { rotate_current_page(3); });
+  page->addSeparator();
+  // Delete 단축키는 썸네일 목록이 직접 처리한다 (목록 밖에서는 현재 쪽). 메뉴에 단축키를 두면 목록의 키와 겹친다
+  delete_pages_action_ = page->addAction(tr("쪽 삭제(&D)"), this, [this] { delete_pages(target_pages()); });
+  move_up_action_ = page->addAction(tr("위로 이동(&U)"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Up), this,
+                                    [this] { move_selection(-1); });
+  move_down_action_ = page->addAction(tr("아래로 이동(&W)"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Down), this,
+                                      [this] { move_selection(+1); });
+  page->addSeparator();
+  insert_pages_action_ = page->addAction(tr("파일에서 쪽 삽입(&I)..."), this, &MainWindow::on_insert_pages_action);
 
   QMenu* view = menuBar()->addMenu(tr("보기(&V)"));
   view->addAction(tr("너비 맞춤(&W)"), QKeySequence(Qt::CTRL | Qt::Key_1), this,
@@ -261,6 +281,8 @@ void MainWindow::on_opened(const QString& path, int page_count) {
     update_print_action();
     outline_task_.cancel();
     ++outline_generation_;
+    ++document_generation_;
+    pending_insert_.reset();
     thumbnail_panel_->clear_document();
     outline_panel_->set_outline(nullptr);
     view_->clear_document(tr("쪽이 없는 문서입니다"));
@@ -279,7 +301,10 @@ void MainWindow::on_opened(const QString& path, int page_count) {
   update_print_action();
   thumbnail_panel_->set_document(session_.handle(), dispatcher_);
   thumbnail_panel_->set_current_page(std::max(0, view_->current_page()));
-  load_outline();
+  ++document_generation_;
+  pending_insert_.reset();
+  signature_warned_ = false;
+  load_outline(true);
   reset_search();
   // 검색 바가 열려 있으면 새 문서에서 같은 검색어로 다시 찾는다
   if (search_bar_->isVisible() && !search_bar_->query().trimmed().isEmpty()) {
@@ -292,6 +317,9 @@ void MainWindow::on_opened(const QString& path, int page_count) {
 
 QString MainWindow::command_label(std::string_view id) const {
   if (id == "rotate_page") return tr("쪽 회전");
+  if (id == "delete_pages") return tr("쪽 삭제");
+  if (id == "move_pages") return tr("쪽 이동");
+  if (id == "insert_pages") return tr("쪽 삽입");
   return QString::fromUtf8(id.data(), static_cast<qsizetype>(id.size()));
 }
 
@@ -318,6 +346,11 @@ void MainWindow::update_edit_actions() {
                                                           : QString();
   rotate_cw_action_->setStatusTip(assemble_tip);
   rotate_ccw_action_->setStatusTip(assemble_tip);
+  for (QAction* action : {delete_pages_action_, move_up_action_, move_down_action_, insert_pages_action_}) {
+    action->setEnabled(idle && can_assemble);
+    action->setStatusTip(assemble_tip);
+  }
+  thumbnail_panel_->set_editable(idle && can_assemble);
   // 실행 취소 대상은 이미 허용된 편집이므로 작업 중이 아니면 된다
   undo_action_->setEnabled(idle && edit_->can_undo());
   redo_action_->setEnabled(idle && edit_->can_redo());
@@ -329,15 +362,160 @@ void MainWindow::update_edit_actions() {
   save_as_action_->setEnabled(has_pages && !saving_ && !edit_->busy());
 }
 
-void MainWindow::rotate_current_page(int quarter_turns) {
-  if (!rotate_cw_action_->isEnabled() || !view_->has_document()) return;
-  const int page = std::max(0, view_->current_page());
-  edit_->run(std::make_shared<edit::RotatePageCommand>(page, quarter_turns));
+void MainWindow::rotate_current_page(int quarter_turns) { rotate_pages(target_pages(), quarter_turns); }
+
+std::vector<int> MainWindow::target_pages() const {
+  if (!view_->has_document()) return {};
+  if (thumbnail_panel_->list_has_focus()) {
+    std::vector<int> selected = thumbnail_panel_->selected_pages();
+    if (!selected.empty()) return selected;
+  }
+  return {std::max(0, view_->current_page())};
+}
+
+bool MainWindow::rotate_pages(std::vector<int> pages, int quarter_turns) {
+  if (!rotate_cw_action_->isEnabled() || !view_->has_document() || pages.empty()) return false;
+  return edit_->run(std::make_shared<edit::RotatePageCommand>(std::move(pages), quarter_turns));
+}
+
+bool MainWindow::warn_signature_once() {
+  if (signature_warned_ || session_.handle().info().signature_count <= 0) return true;
+  QMessageBox box(QMessageBox::Warning, tr("서명된 문서"),
+                  tr("이 문서에는 전자서명이 있습니다. 쪽을 지우거나 옮기거나 넣으면 서명이 무효화될 수 있습니다.\n계속할까요?"),
+                  QMessageBox::NoButton, this);
+  box.setObjectName(QStringLiteral("signature_warning"));
+  QPushButton* go = box.addButton(tr("계속"), QMessageBox::AcceptRole);
+  QPushButton* cancel = box.addButton(tr("취소"), QMessageBox::RejectRole);
+  box.setDefaultButton(cancel);
+  box.exec();
+  if (box.clickedButton() != go) return false;
+  signature_warned_ = true;
+  return true;
+}
+
+bool MainWindow::delete_pages(std::vector<int> pages) {
+  if (!delete_pages_action_->isEnabled() || !view_->has_document()) return false;
+  pages = edit::normalize_pages(std::move(pages));
+  if (pages.empty()) return false;
+  if (static_cast<int>(pages.size()) >= session_.handle().info().page_count) {
+    show_transient(tr("문서에는 적어도 한 쪽이 있어야 합니다"));
+    return false;
+  }
+  if (!warn_signature_once()) return false;
+  return edit_->run(std::make_shared<edit::DeletePagesCommand>(std::move(pages)));
+}
+
+bool MainWindow::move_pages(std::vector<int> pages, int drop_row) {
+  if (!move_up_action_->isEnabled() || !view_->has_document()) return false;
+  pages = edit::normalize_pages(std::move(pages));
+  const int count = session_.handle().info().page_count;
+  if (pages.empty() || drop_row < 0 || drop_row > count) return false;
+  // 썸네일 행 기준 자리 → 블록을 뺀 뒤의 삽입 자리
+  int dest = drop_row;
+  for (int p : pages) {
+    if (p < drop_row) --dest;
+  }
+  if (!edit::validate_move(count, pages, dest)) return false;
+  // 자리가 그대로인 이동은 편집으로 치지 않는다
+  const std::vector<int> order = edit::simulate_move(count, pages, dest);
+  bool identity = true;
+  for (std::size_t i = 0; i < order.size(); ++i) identity = identity && order[i] == static_cast<int>(i);
+  if (identity) return false;
+  if (!warn_signature_once()) return false;
+  return edit_->run(std::make_shared<edit::MovePagesCommand>(std::move(pages), dest));
+}
+
+void MainWindow::move_selection(int delta) {
+  std::vector<int> pages = edit::normalize_pages(target_pages());
+  if (pages.empty()) return;
+  const int count = session_.handle().info().page_count;
+  if (delta < 0 && pages.front() == 0) return;
+  if (delta > 0 && pages.back() >= count - 1) return;
+  // 블록을 한 자리 위/아래로: 행 기준 자리는 첫 쪽 − 1 / 마지막 쪽 + 2
+  move_pages(pages, delta < 0 ? pages.front() - 1 : pages.back() + 2);
+}
+
+void MainWindow::on_insert_pages_action() {
+  if (!insert_pages_action_->isEnabled() || !view_->has_document()) return;
+  const QString path = QFileDialog::getOpenFileName(this, tr("쪽을 가져올 PDF"), QFileInfo(session_.path()).absolutePath(),
+                                                    tr("PDF 문서 (*.pdf)"));
+  if (path.isEmpty()) return;
+  insert_pages_from(path, std::max(0, view_->current_page()) + 1);  // 현재 쪽 뒤
+}
+
+bool MainWindow::insert_pages_from(const QString& path, int at, const QString& password) {
+  if (!insert_pages_action_->isEnabled() || !view_->has_document() || path.isEmpty()) return false;
+  const int count = session_.handle().info().page_count;
+  at = std::clamp(at, 0, count);
+  if (!warn_signature_once()) return false;
+  pending_insert_ = PendingInsert{path, at};
+  const QByteArray utf8 = path.toUtf8();
+  return edit_->run(std::make_shared<edit::InsertPagesCommand>(
+      onpdf::path_from_utf8(std::string(utf8.constData(), static_cast<std::size_t>(utf8.size()))),
+      password.toStdString(), std::vector<int>{}, at));
+}
+
+void MainWindow::on_edit_failed(onpdf::ErrorCode code, const QString& message) {
+  if (pending_insert_ && code == ErrorCode::kPasswordRequired) {
+    // 삽입 소스가 암호 문서: 묻고 같은 삽입을 다시 시도한다 (취소하면 끝)
+    const PendingInsert pending = *pending_insert_;
+    pending_insert_.reset();
+    QInputDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("insert_password"));
+    dialog.setWindowTitle(tr("암호"));
+    dialog.setLabelText(tr("%1 은(는) 암호로 보호되어 있습니다. 암호를 입력하세요.").arg(QFileInfo(pending.path).fileName()));
+    dialog.setTextEchoMode(QLineEdit::Password);
+    if (dialog.exec() != QDialog::Accepted || dialog.textValue().isEmpty()) return;
+    insert_pages_from(pending.path, pending.at, dialog.textValue());
+    return;
+  }
+  pending_insert_.reset();
+  if (code == ErrorCode::kPermissionDenied) {
+    show_transient(tr("이 문서는 쪽 추출이 허용되지 않아 삽입할 수 없습니다"));
+    return;
+  }
+  show_transient(tr("편집하지 못했습니다: %1").arg(message));
+}
+
+void MainWindow::on_thumbnail_context_menu(const QPoint& global_pos, const std::vector<int>& pages) {
+  if (pages.empty() || !view_->has_document()) return;
+  const bool enabled = delete_pages_action_->isEnabled();
+  QMenu menu(this);
+  menu.setObjectName(QStringLiteral("thumbnail_menu"));
+  QAction* del = menu.addAction(tr("쪽 삭제"), this, [this, pages] { delete_pages(pages); });
+  QAction* cw = menu.addAction(tr("오른쪽으로 회전"), this, [this, pages] { rotate_pages(pages, 1); });
+  QAction* ccw = menu.addAction(tr("왼쪽으로 회전"), this, [this, pages] { rotate_pages(pages, 3); });
+  menu.addSeparator();
+  const int before = pages.front();
+  const int after = pages.back() + 1;
+  QAction* ins_before = menu.addAction(tr("파일에서 쪽 삽입 (앞에)..."), this, [this, before] {
+    const QString path = QFileDialog::getOpenFileName(this, tr("쪽을 가져올 PDF"), QString(), tr("PDF 문서 (*.pdf)"));
+    if (!path.isEmpty()) insert_pages_from(path, before);
+  });
+  QAction* ins_after = menu.addAction(tr("파일에서 쪽 삽입 (뒤에)..."), this, [this, after] {
+    const QString path = QFileDialog::getOpenFileName(this, tr("쪽을 가져올 PDF"), QString(), tr("PDF 문서 (*.pdf)"));
+    if (!path.isEmpty()) insert_pages_from(path, after);
+  });
+  for (QAction* action : {del, cw, ccw, ins_before, ins_after}) action->setEnabled(enabled);
+  menu.exec(global_pos);
 }
 
 void MainWindow::on_document_changed(const onpdf::engine::ChangeSet& change) {
-  view_->invalidate_pages(change.pages, !change.new_sizes.empty());
-  thumbnail_panel_->invalidate_pages(change.pages);
+  pending_insert_.reset();
+  if (change.structural) {
+    // 쪽 수·순서가 바뀌었다: 뷰·썸네일을 새 쪽 목록으로 다시 세우고(현재 쪽은 새 범위로 클램프), 쪽 번호·목차를 갱신한다
+    const int n = session_.handle().info().page_count;
+    page_spin_->setRange(1, std::max(1, n));  // 뷰 재구성이 current_page_changed 로 값을 넣기 전에 범위를 넓힌다
+    page_total_label_->setText(tr("/ %1 쪽").arg(n));
+    view_->rebuild_pages(change.focus_page >= 0 ? change.focus_page : std::max(0, view_->current_page()));
+    thumbnail_panel_->reset_pages(std::max(0, view_->current_page()));
+    thumbnail_panel_->select_pages(change.selected_pages);  // 옮긴·넣은·되살린 쪽을 다시 선택해 연속 조작이 이어진다
+    print_prefs_applied_ = false;  // 인쇄 기본값의 쪽 범위는 이전 쪽 수 기준이었다
+    load_outline(false);          // 목차 항목의 쪽 번호가 밀렸다 (탭은 바꾸지 않는다)
+  } else {
+    view_->invalidate_pages(change.pages, !change.new_sizes.empty());
+    thumbnail_panel_->invalidate_pages(change.pages);
+  }
   // 검색 결과 사각형은 이전 모양 기준 → 같은 검색어로 다시 찾는다
   if (search_ && search_->active() && !search_bar_->query().trimmed().isEmpty()) {
     reset_search();
@@ -372,7 +550,7 @@ bool MainWindow::start_save(const QString& path, std::function<void()> then) {
   const QByteArray utf8 = path.toUtf8();
   UiDispatcher* dispatcher = &dispatcher_;
   QPointer<MainWindow> self(this);
-  const int generation = outline_generation_;  // 문서를 열 때마다 증가
+  const int generation = document_generation_;  // 문서를 열 때마다 증가
   session_.handle().save(
       onpdf::path_from_utf8(std::string(utf8.constData(), static_cast<std::size_t>(utf8.size()))), {},
       // 워커 스레드: 메인으로 넘기기만
@@ -380,7 +558,7 @@ bool MainWindow::start_save(const QString& path, std::function<void()> then) {
         auto shared = std::make_shared<onpdf::Result<engine::SaveResult>>(std::move(result));
         dispatcher->post_to(self, [path, generation, then, shared](MainWindow* window) {
           window->saving_ = false;
-          if (generation != window->outline_generation_) return;  // 다른 문서로 바뀌었다
+          if (generation != window->document_generation_) return;  // 다른 문서로 바뀌었다
           if (!*shared) {
             window->update_edit_actions();
             QString reason = QString::fromStdString(shared->error().message);
@@ -584,19 +762,19 @@ void MainWindow::on_print_finished(PrintJob::Outcome outcome) {
 
 // ---------------------------------------------------------------- 사이드바
 
-void MainWindow::load_outline() {
+void MainWindow::load_outline(bool switch_tab) {
   outline_task_.cancel();  // 이전 문서의 목차 순회가 아직 대기 중이면 워커를 점유하지 않게
   const int generation = ++outline_generation_;
   outline_panel_->set_outline(nullptr);
-  sidebar_->setCurrentWidget(thumbnail_panel_);
+  if (switch_tab) sidebar_->setCurrentWidget(thumbnail_panel_);
   UiDispatcher* dispatcher = &dispatcher_;
   QPointer<MainWindow> self(this);
   outline_task_ = session_.handle().load_outline(
       engine::Priority::kNormal,
       // 워커 스레드: 메인으로 넘기기만
-      [dispatcher, self, generation](onpdf::Result<view::Outline> result) {
+      [dispatcher, self, generation, switch_tab](onpdf::Result<view::Outline> result) {
         auto shared = std::make_shared<onpdf::Result<view::Outline>>(std::move(result));
-        dispatcher->post_to(self, [generation, shared](MainWindow* window) {
+        dispatcher->post_to(self, [generation, shared, switch_tab](MainWindow* window) {
           if (generation != window->outline_generation_) return;  // 그 사이 다른 문서를 열었다
           std::shared_ptr<const view::Outline> outline;
           if (*shared) {
@@ -605,10 +783,12 @@ void MainWindow::load_outline() {
             window->show_transient(window->tr("목차를 읽지 못했습니다"));
           }
           window->outline_panel_->set_outline(outline);
-          // 목차가 있으면 목차 탭, 없으면 썸네일 탭
-          window->sidebar_->setCurrentWidget(outline && !outline->empty()
-                                                 ? static_cast<QWidget*>(window->outline_panel_)
-                                                 : static_cast<QWidget*>(window->thumbnail_panel_));
+          // 문서를 열 때: 목차가 있으면 목차 탭, 없으면 썸네일 탭. 편집 뒤 재로드는 탭을 그대로 둔다
+          if (switch_tab) {
+            window->sidebar_->setCurrentWidget(outline && !outline->empty()
+                                                   ? static_cast<QWidget*>(window->outline_panel_)
+                                                   : static_cast<QWidget*>(window->thumbnail_panel_));
+          }
           window->update_outline_highlight();
         });
       });
@@ -635,7 +815,7 @@ void MainWindow::navigate_to(const onpdf::view::Link& target) {
     return;
   }
   // 목차: /XYZ 위치는 쪽을 열어야 쪽 포인트로 바꿀 수 있다 → 워커에서 변환 후 이동
-  const int generation = outline_generation_;
+  const int generation = document_generation_;
   const int page = target.page;
   UiDispatcher* dispatcher = &dispatcher_;
   QPointer<MainWindow> self(this);
@@ -644,8 +824,8 @@ void MainWindow::navigate_to(const onpdf::view::Link& target) {
       [dispatcher, self, generation, page](onpdf::Result<onpdf::Point> result) {
         auto shared = std::make_shared<onpdf::Result<onpdf::Point>>(std::move(result));
         dispatcher->post_to(self, [generation, page, shared](MainWindow* window) {
-          // 그 사이 다른 문서를 열었으면 버린다 (outline_generation_ 은 문서를 열 때마다 증가)
-          if (generation != window->outline_generation_ || !window->view_->has_document()) return;
+          // 그 사이 다른 문서를 열었으면 버린다 (document_generation_ 은 문서를 열 때마다 증가)
+          if (generation != window->document_generation_ || !window->view_->has_document()) return;
           if (*shared) {
             window->view_->scroll_to_page_point(page, **shared);
           } else {

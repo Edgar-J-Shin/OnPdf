@@ -7,16 +7,20 @@ namespace onpdf::edit {
 
 UndoStack::UndoStack(std::size_t limit) : limit_(std::max<std::size_t>(limit, 1)) {}
 
-void UndoStack::push(std::shared_ptr<Command> executed) {
-  if (!executed) return;
+std::vector<std::shared_ptr<Command>> UndoStack::push(std::shared_ptr<Command> executed) {
+  std::vector<std::shared_ptr<Command>> evicted;
+  if (!executed) return evicted;
   // 다시 실행 기록 버리기. 저장 지점이 그 안에 있었으면 다시는 도달할 수 없다
   if (index_ < items_.size()) {
     if (clean_index_ && *clean_index_ > index_) clean_index_.reset();
-    items_.erase(items_.begin() + static_cast<std::ptrdiff_t>(index_), items_.end());
+    const auto first = items_.begin() + static_cast<std::ptrdiff_t>(index_);
+    evicted.assign(first, items_.end());
+    items_.erase(first, items_.end());
   }
   items_.push_back(std::move(executed));
   ++index_;
   if (items_.size() > limit_) {
+    evicted.push_back(std::move(items_.front()));
     items_.erase(items_.begin());
     --index_;
     if (clean_index_) {
@@ -27,6 +31,7 @@ void UndoStack::push(std::shared_ptr<Command> executed) {
       }
     }
   }
+  return evicted;
 }
 
 std::shared_ptr<Command> UndoStack::undo_target() const { return can_undo() ? items_[index_ - 1] : nullptr; }
@@ -45,6 +50,12 @@ void UndoStack::clear() {
   items_.clear();
   index_ = 0;
   clean_index_ = 0;
+}
+
+void UndoStack::invalidate() {
+  items_.clear();
+  index_ = 0;
+  clean_index_.reset();
 }
 
 }  // namespace onpdf::edit

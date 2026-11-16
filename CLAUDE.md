@@ -67,11 +67,14 @@ ctest --preset dev-app                                         # app 테스트(o
 
 ```text
 app/          Qt UI (Qt 의존). onpdf_app_lib(UiDispatcher·DocumentSession·qt_image·DocumentTileSource·DocumentView·SearchBar·ThumbnailPanel·OutlinePanel·PrintJob·EditController·MainWindow) + onpdf_app(main 만)
-edit/         Command(execute/undo, EditableDocument 로만 문서 변경)·UndoStack(저장 지점)·RotatePageCommand. 선택·텍스트 블록·폰트(M3)
+edit/         Command(execute/undo/discard, EditableDocument 로만 문서 변경)·UndoStack(저장 지점, push 가 밀려난 명령 반환)
+              RotatePageCommand(여러 쪽)·DeletePagesCommand(스냅샷으로 취소)·MovePagesCommand(역순열 취소)·InsertPagesCommand(파일 스냅샷)
+              page_ops(normalize·validate_move·simulate_move·apply_order·structural_change). 선택·텍스트 블록·폰트(M3)
 core/         Document, Page, 렌더 캐시(타일 LRU), 텍스트 인덱스       (Qt 의존 금지)
 core/engine/  PdfiumLibrary(init RAII) · PdfiumDocument(열기·크기·렌더·load_text·load_outline·resolve_location·print_preferences·회전·save_to — EditableDocument 구현) · TextPage(FPDFText/FPDFLink 추출, 좌표 변환) · dest(목적지·URI·UTF-16 변환 공용, 내부) · pdfium_handles
               PdfiumWorker(전용 스레드 + High/Normal/Low 큐 + 취소) · DocumentHandle(워커 쪽 문서의 스레드 안전 핸들), QpdfTools(M2)
-core/engine/  EditableDocument(PDFium 없는 편집 인터페이스 — edit/ 가 씀)·ChangeSet · save(save_document_safely: 임시→검증→rename)
+core/engine/  EditableDocument(PDFium 없는 편집 인터페이스 — edit/ 가 씀: 회전·삭제·이동·스냅샷(SnapshotId)·삽입)·ChangeSet(structural+all_sizes)
+              save(save_document_safely: 임시→검증→rename)
 core/platform/ fs_sync(flush_file_to_disk·replace_file·flush_directory — 저장의 플랫폼 분기는 여기만)
 core/image/   png_io (stb 기반 PNG 읽기/쓰기, BGRA↔RGBA)
 core/view/    PageLayout(세로 연속 레이아웃·좌표 변환) · tile.h(TileKey, 512px, 1/64 배율 양자화) · TileCache(바이트 상한 LRU)
@@ -113,7 +116,10 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 - 실행: `EditController::run(cmd)` → `DocumentHandle::modify`(워커, kHigh) → 결과 `ChangeSet` 을 메인에서 `apply_change`(문서 정보의 쪽 크기 — 메인 스레드만 고친다) → `UndoStack` → `document_changed` → `DocumentView::invalidate_pages`(타일·텍스트 버림, 스케줄러 재생성으로 이전 모양의 늦은 타일 폐기, 크기가 바뀌면 레이아웃 재구성)·`ThumbnailPanel::invalidate_pages`·검색 재실행. 한 번에 하나(busy)
 - 저장: `DocumentHandle::save` → 워커 `save_document_safely`: 심볼릭 링크면 실제 파일로(링크 유지) → 기존 파일은 일반 파일·쓰기 가능(읽기 전용·잠금이면 `kNotWritable` 로 거절) 확인 → 같은 폴더 임시 파일(64비트 난수 이름) → 같은 암호로 다시 열어 쪽 수·크기·모든 쪽 로드(증분이면 원본 바이트 앞부분 일치) 검증 → 원본 권한 복사 → `platform::flush_file_to_disk`(macOS F_FULLFSYNC·fsync / Windows FlushFileBuffers) → `platform::replace_file`(rename / MoveFileExW+WRITE_THROUGH) → 폴더 동기화. 실패하면 원본 불변·임시 삭제. 서명 문서(`signature_count > 0`)는 증분 저장 강제, 암호화는 유지
 - 앱: 수정 표시(`setWindowModified`, 제목 `"<파일>[*] — OnPdf"`), 닫기·종료(→`close()`)·다른 문서 열기 전 `maybe_save`(저장/저장 안 함/취소, 그다음 인쇄 확인). 편집 종류별 권한(`DocumentInfo::permissions`: 쪽 회전·삭제·삽입 = `assemble`(R≥3 비트 11, R2 비트 4), 주석 = `annotate`(비트 6))이 없거나 인쇄·저장 중이면 해당 편집 비활성
-- 모든 Command 는 실행 → 취소 → 재실행 후 문서 상태 비교 테스트(가짜 `EditableDocument` + 실제 PDFium) 필수. 원래 경로로 저장하는 테스트는 testdata 사본(`ScopedTempDir`)을 연다
+- 모든 Command 는 실행 → 취소 → 재실행 후 문서 상태 비교 테스트(가짜 `EditableDocument`(`tests/fake_document.h`) + 실제 PDFium) 필수. 원래 경로로 저장하는 테스트는 testdata 사본(`ScopedTempDir`)을 연다
+- **쪽 구조 편집(삭제·이동·삽입, #33):** 결과는 `ChangeSet::structural` + `all_sizes` → `apply_change` 가 쪽 수·크기 목록을 통째로 교체 → `DocumentView::rebuild_pages`(캐시·텍스트·선택 전부 폐기, 레이아웃 재구성, 현재 쪽 클램프)·`ThumbnailPanel::reset_pages`(세대↑, 행 재설정)·쪽 번호 스핀·목차 재로드(`load_outline(false)`, 탭 유지)·검색 재실행. 저장·이동 결과 폐기는 `document_generation_`(열 때만 증가), 목차는 `outline_generation_`
+- **스냅샷은 문서가 소유한다.** 삭제 취소용 쪽 사본·삽입 소스는 `PdfiumDocument::snapshots_`(워커 전용 PDFium 문서)에 있고 Command 는 `SnapshotId` 만 쥔다 — Command 는 메인 스레드(실행 취소 스택)에서 소멸하므로 PDFium 핸들을 직접 쥐면 안 된다. 스택에서 밀려난 Command 는 `EditController` 가 워커에서 `discard` 를 불러 해제한다. `FPDF_MovePages` 는 실패 시 문서가 불확정이므로 `validate_move` 로 호출 전에 전부 검증한다. 전체 삭제는 금지(쪽 ≥ 1)
+- **썸네일:** 다중 선택(`ExtendedSelection`), 현재 쪽 강조는 선택과 분리. 끌어 놓기는 모델이 행을 옮기지 않고 `move_requested(pages, drop_row)` 만 내며(`dropMimeData` 는 항상 false), `MainWindow::move_pages` 가 `dest = drop_row − |{p < drop_row}|` 로 바꿔 Command 를 실행한다. 파일 URL 드롭은 삽입. Delete 키·우클릭 메뉴. 편집 불가 상태면 `set_editable(false)` 로 끌기 자체를 막는다. 삽입 소스 암호는 `failed(kPasswordRequired)` 뒤 `insert_password` 대화상자로 다시 시도, 추출 금지(권한 비트 5)는 `kPermissionDenied`. 서명 문서의 첫 구조 편집은 `signature_warning` 으로 한 번 묻는다
 
 ### 렌더링 (구현: core/view + app/DocumentView)
 - 쪽을 512×512 타일로 나눠 `PdfiumDocument::render_region`(`FPDF_RenderPageBitmapWithMatrix`, 회전 0 기준 — `page_size` 가 /Rotate 반영) 으로 그리고 `TileCache`(기본 256MB LRU) 에 보관

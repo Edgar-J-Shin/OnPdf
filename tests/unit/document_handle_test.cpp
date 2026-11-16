@@ -113,6 +113,28 @@ TEST_F(DocumentHandleTest, ModifyApplyChangeAndSave) {
 }
 
 // 서명 문서는 DocumentHandle::save 가 증분 저장을 강제한다
+// 구조 변경(쪽 삭제)이면 apply_change 가 쪽 수와 크기 목록을 통째로 바꾼다
+TEST_F(DocumentHandleTest, ModifyStructuralUpdatesPageCount) {
+  DocumentHandle doc = open_simple();
+  ASSERT_TRUE(doc.valid());
+  ASSERT_EQ(doc.info().page_count, 2);
+  const PageSize second = doc.info().page_sizes[1];
+  auto future = doc.modify([](EditableDocument& d) -> Result<ChangeSet> {
+    if (auto r = d.delete_pages({0}); !r) return std::unexpected(r.error());
+    ChangeSet change;
+    change.structural = true;
+    change.all_sizes.push_back(*d.page_size(0));
+    return change;
+  });
+  auto changed = get_or_fail(future);
+  ASSERT_TRUE(changed) << changed.error().message;
+  EXPECT_EQ(doc.info().page_count, 2);  // apply_change 전
+  doc.apply_change(*changed);
+  EXPECT_EQ(doc.info().page_count, 1);
+  ASSERT_EQ(doc.info().page_sizes.size(), 1u);
+  EXPECT_DOUBLE_EQ(doc.info().page_sizes[0].width, second.width);
+}
+
 TEST_F(DocumentHandleTest, SignedDocumentSavesIncrementally) {
   auto opened_future = DocumentHandle::open(worker_, testdata("signed-dummy.pdf"));
   auto opened = get_or_fail(opened_future);

@@ -587,6 +587,12 @@ def make_perm_no_assemble() -> bytes:
                        file_id_name="perm-no-assemble.pdf")
 
 
+def make_perm_no_extract() -> bytes:
+    # 소유자 암호만(R3). P=-17: 복사·추출(비트 5)만 금지 → 다른 문서로 쪽을 가져가는 삽입 소스가 될 수 없다
+    return make_simple(encrypt=g.Encryption("", "owner", permissions=-17), title="Permissions: no extraction",
+                       file_id_name="perm-no-extract.pdf")
+
+
 def make_outline_cycle() -> bytes:
     """악성 목차: 형제 순환(B /Next A), 자식 자기 참조(A /First A), 깊이 40 체인(B 아래).
     뷰어는 무한 루프·스택 오버플로 없이 유한한 항목만 보여야 한다."""

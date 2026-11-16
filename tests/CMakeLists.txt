@@ -35,6 +35,10 @@ onpdf_add_test(onpdf_unit_tests
   unit/print_layout_test.cpp
   unit/undo_stack_test.cpp
   unit/rotate_page_test.cpp
+  unit/page_ops_test.cpp
+  unit/delete_pages_test.cpp
+  unit/move_pages_test.cpp
+  unit/insert_pages_test.cpp
   unit/save_test.cpp
   unit/fs_sync_test.cpp
 )
@@ -53,6 +57,7 @@ onpdf_add_test(onpdf_roundtrip_tests
   roundtrip/roundtrip_test.cpp
 )
 target_compile_definitions(onpdf_roundtrip_tests PRIVATE ONPDF_TEST_GLOBAL_PDFIUM=1)
+target_link_libraries(onpdf_roundtrip_tests PRIVATE onpdf::edit)
 
 onpdf_add_test(onpdf_worker_tests
   unit/pdfium_worker_test.cpp

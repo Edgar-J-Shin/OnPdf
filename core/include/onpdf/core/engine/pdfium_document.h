@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace onpdf::engine {
@@ -40,6 +41,17 @@ class PdfiumDocument final : public EditableDocument {
   // ---- 편집 (EditableDocument) ----
   [[nodiscard]] Result<int> page_rotation(int page_index) const override;
   [[nodiscard]] Result<void> set_page_rotation(int page_index, int quarter_turns) override;
+  // ---- 구조 편집 (EditableDocument). 스냅샷은 이 문서가 소유하는 별도 PDFium 문서다 ----
+  [[nodiscard]] Result<void> delete_pages(const std::vector<int>& pages) override;
+  [[nodiscard]] Result<void> move_pages(const std::vector<int>& pages, int dest) override;
+  [[nodiscard]] Result<SnapshotId> copy_pages_to_snapshot(const std::vector<int>& pages) override;
+  [[nodiscard]] Result<SnapshotId> open_snapshot(const std::filesystem::path& file,
+                                                 std::string_view password) override;
+  [[nodiscard]] Result<SnapshotInfo> snapshot_info(SnapshotId id) const override;
+  [[nodiscard]] Result<void> insert_from_snapshot(SnapshotId id, const std::vector<int>& src_pages,
+                                                  int at) override;
+  void drop_snapshot(SnapshotId id) noexcept override;
+  [[nodiscard]] int snapshot_count() const noexcept { return static_cast<int>(snapshots_.size()); }  // 테스트용
 
   // ---- 저장 ----
   // 파일에 스트림으로 저장한다 (FPDF_SaveAsCopy). incremental 이면 원본 바이트 뒤에 변경만 덧붙인다(서명 보존).
@@ -73,11 +85,21 @@ class PdfiumDocument final : public EditableDocument {
   PdfiumDocument(std::vector<std::uint8_t> data, ScopedDocument doc);
 
   Result<ScopedPage> load_page(int page_index) const;
+  [[nodiscard]] static EditPermissions permissions_of(FPDF_DOCUMENT doc);
+  [[nodiscard]] Result<SnapshotId> store_snapshot(std::vector<std::uint8_t> data, ScopedDocument doc);
+
+  // 보조 문서: 삭제 취소용 쪽 사본 또는 삽입 소스 파일. data 가 doc 보다 오래 살아야 한다 (선언 순서)
+  struct Snapshot {
+    std::vector<std::uint8_t> data;
+    ScopedDocument doc;
+  };
 
   // 선언 순서 중요: doc_ 가 data_ 를 참조하므로 doc_ 가 먼저 소멸해야 한다.
   std::vector<std::uint8_t> data_;
   ScopedDocument doc_;
   std::string password_;
+  std::unordered_map<SnapshotId, Snapshot> snapshots_;
+  SnapshotId next_snapshot_ = 1;
 };
 
 }  // namespace onpdf::engine

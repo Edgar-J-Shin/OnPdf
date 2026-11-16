@@ -123,5 +123,30 @@ TEST(RenderRegression, RotatedAndSavedPage) {
   onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "simple-p0-rotated-saved.png");
 }
 
+
+// 쪽 이동(마지막 쪽을 맨 앞으로) 뒤 저장한 문서의 첫 쪽: 저장이 쪽 순서를 보존한다
+TEST(RenderRegression, MovedAndSavedPage) {
+  auto doc = PdfiumDocument::open(testdata("mixed-sizes.pdf"));
+  ASSERT_TRUE(doc) << doc.error().message;
+  ASSERT_TRUE(doc->move_pages({6}, 0));
+  onpdf::test::ScopedTempDir dir;
+  const auto saved_path = dir / "moved.pdf";
+  auto saved = engine::save_document_safely(*doc, saved_path, {});
+  ASSERT_TRUE(saved) << saved.error().message;
+  auto reopened = PdfiumDocument::open(saved_path);
+  ASSERT_TRUE(reopened) << reopened.error().message;
+  ASSERT_EQ(reopened->page_count(), 7);
+  RenderOptions options;
+  options.scale = 0.5f;
+  auto actual = reopened->render_page(0, options);
+  ASSERT_TRUE(actual) << actual.error().message;
+  const auto expected_path = testdata("expected") / "mixed-sizes-p0-moved-saved.png";
+  if (update_references()) {
+    ASSERT_TRUE(image::write_png(*actual, expected_path));
+    GTEST_SKIP() << "reference updated: " << expected_path;
+  }
+  onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "mixed-sizes-p0-moved-saved.png");
+}
+
 }  // namespace
 }  // namespace onpdf
