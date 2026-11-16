@@ -28,6 +28,9 @@
 | `print-flags.pdf` | ok |  | 2 | gen | Apache-2.0 | 인쇄 플래그 주석(화면 전용 /F 0·인쇄 전용 /F 36) + ViewerPreferences(PrintScaling None·NumCopies 2·PrintPageRange 2쪽·양면) |
 | `print-low-res.pdf` | ok |  | 2 | gen | Apache-2.0 | 소유자 암호만(P=-2052): 인쇄 허용, 고품질 인쇄 금지 → 저해상도만 |
 | `unicode-map-error.pdf` | ok |  | 1 | gen | Apache-2.0 | ToUnicode 없는 Type3 글꼴(AGL 밖 글리프 이름) → PDFium 매핑 오류, U+FFFD 로 추출 |
+| `signed-dummy.pdf` | ok |  | 1 | gen | Apache-2.0 | 전자서명 필드 1개(가짜 서명값) — 서명 수 1, 저장은 증분 저장으로 원본 바이트 보존 |
+| `perm-assemble-only.pdf` | ok |  | 2 | gen | Apache-2.0 | 소유자 암호만(R3, P=-12): 내용 수정 금지·쪽 조립 허용 → 쪽 회전 가능 |
+| `perm-no-assemble.pdf` | ok |  | 2 | gen | Apache-2.0 | 소유자 암호만(R3, P=-1028): 쪽 조립(비트 11)만 금지 → 쪽 회전 불가 |
 | `truncated.pdf` | invalid |  | 0 | gen | Apache-2.0 | bookmarks.pdf 뒤 40% 절단(쪽 트리 소실) → 복구 불가, 크래시 없이 invalid |
 | `bad-xref.pdf` | ok |  | 2 | gen | Apache-2.0 | xref 오프셋 전부 오류 → 복구 파서 |
 | `garbage-header.pdf` | ok |  | 2 | gen | Apache-2.0 | %PDF 앞 1KB 쓰레기 → 헤더 탐색 |

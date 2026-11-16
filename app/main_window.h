@@ -1,6 +1,7 @@
 #pragma once
 
 #include "document_session.h"
+#include "edit_controller.h"
 #include "print_job.h"
 #include "onpdf/core/engine/pdfium_worker.h"
 #include "onpdf/core/view/search.h"
@@ -9,8 +10,11 @@
 #include <QMainWindow>
 #include <QString>
 
+#include <functional>
 #include <memory>
+#include <string_view>
 
+class QCloseEvent;
 class QLabel;
 class QPrinter;
 class QProgressDialog;
@@ -46,12 +50,23 @@ class MainWindow : public QMainWindow {
   [[nodiscard]] QAction* print_action() const noexcept { return print_action_; }
   [[nodiscard]] PrintJob* print_job() const noexcept { return print_job_.get(); }
   [[nodiscard]] engine::TaskHandle outline_task() const { return outline_task_; }  // 테스트용
+  [[nodiscard]] EditController* edit_controller() const noexcept { return edit_; }
+  [[nodiscard]] QAction* save_action() const noexcept { return save_action_; }
+  [[nodiscard]] QAction* undo_action() const noexcept { return undo_action_; }
+  [[nodiscard]] QAction* redo_action() const noexcept { return redo_action_; }
+  [[nodiscard]] QAction* rotate_cw_action() const noexcept { return rotate_cw_action_; }
+  [[nodiscard]] bool saving() const noexcept { return saving_; }
+  // 현재 쪽 회전 (시계 방향 quarter_turns). 편집 메뉴와 같은 경로
+  void rotate_current_page(int quarter_turns);
+  // 이 경로로 저장한다 (대화상자 없이 — 다른 이름으로 저장의 뒷부분, 테스트용). 시작하면 true
+  bool save_to(const QString& path);
   // 대화상자 없이 이 프린터 설정으로 인쇄를 시작한다 (파일 > 인쇄 의 뒷부분, 테스트용). 시작하면 true
   bool print_with(QPrinter& printer);
   // 첫 쪽이 그려지면 창을 PNG 로 저장하고 앱을 종료한다 (QA·CI 스크린샷용, --screenshot 옵션).
   void screenshot_after_render(const QString& png_path);
 
  protected:
+  void closeEvent(QCloseEvent* event) override;
   void dragEnterEvent(QDragEnterEvent* event) override;
   void dropEvent(QDropEvent* event) override;
 
@@ -74,6 +89,18 @@ class MainWindow : public QMainWindow {
   void update_search_status();
   void on_current_page_changed(int page);
   void load_outline();
+  // ---- 편집·저장 ----
+  void update_edit_actions();
+  void update_title();
+  void on_document_changed(const onpdf::engine::ChangeSet& change);
+  void on_save();
+  void on_save_as();
+  // 저장을 시작한다. 성공하면 then 을 부른다 (실패하면 안내만)
+  bool start_save(const QString& path, std::function<void()> then);
+  // 수정된 문서면 [저장][저장 안 함][취소] 를 묻는다. 계속해도 되면 then 을 (저장 성공 뒤에) 부른다
+  void maybe_save(std::function<void()> then);
+  void continue_open(const QString& path);
+  [[nodiscard]] QString command_label(std::string_view id) const;
   void on_print();
   void on_print_finished(PrintJob::Outcome outcome);
   void cancel_print();
@@ -109,6 +136,15 @@ class MainWindow : public QMainWindow {
   OutlinePanel* outline_panel_ = nullptr;
   QAction* sidebar_action_ = nullptr;
   QAction* print_action_ = nullptr;
+  QAction* save_action_ = nullptr;
+  QAction* save_as_action_ = nullptr;
+  QAction* undo_action_ = nullptr;
+  QAction* redo_action_ = nullptr;
+  QAction* rotate_cw_action_ = nullptr;
+  QAction* rotate_ccw_action_ = nullptr;
+  EditController* edit_ = nullptr;
+  bool saving_ = false;
+  bool allow_close_ = false;  // 저장 확인을 거쳐 닫기로 했다
   QProgressDialog* print_progress_ = nullptr;
   bool print_prefs_applied_ = false;  // 문서마다 처음 인쇄할 때 문서 인쇄 기본값을 대화상자에 넣는다
   QTimer* outline_highlight_timer_ = nullptr;

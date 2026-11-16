@@ -5,7 +5,9 @@ add_library(onpdf_core STATIC
   src/engine/document_handle.cpp
   src/engine/text_page.cpp
   src/engine/dest.cpp
+  src/engine/save.cpp
   src/image/png_io.cpp
+  src/platform/fs_sync.cpp
   src/view/page_layout.cpp
   src/view/tile_cache.cpp
   src/view/tile_source.cpp

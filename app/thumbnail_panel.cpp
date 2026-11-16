@@ -194,6 +194,19 @@ void ThumbnailPanel::clear_document() {
   model_->reset_rows(0);
 }
 
+void ThumbnailPanel::invalidate_pages(const std::vector<int>& pages) {
+  for (int page : pages) {
+    cache_.remove(page);
+    failed_.erase(page);
+    if (auto it = pending_.find(page); it != pending_.end()) {
+      it->second.task.cancel();  // 늦은 결과는 serial 이 맞지 않아 버려진다
+      pending_.erase(it);
+    }
+  }
+  model_->relayout();
+  schedule_request();
+}
+
 void ThumbnailPanel::cancel_all() {
   for (auto& [page, pending] : pending_) pending.task.cancel();
   pending_.clear();

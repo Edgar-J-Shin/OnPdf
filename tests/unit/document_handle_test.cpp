@@ -79,6 +79,52 @@ TEST_F(DocumentHandleTest, OpenReturnsInfo) {
   EXPECT_TRUE(is_registered(doc.id()));
 }
 
+// 편집은 워커에서 EditableDocument 로 실행되고, 메인 스레드가 apply_change 로 문서 정보를 고친다.
+// 저장은 워커에서 안전 저장 절차를 거친다 (#31)
+TEST_F(DocumentHandleTest, ModifyApplyChangeAndSave) {
+  DocumentHandle doc = open_simple();
+  ASSERT_TRUE(doc.valid());
+  EXPECT_TRUE(doc.info().permissions.assemble);
+  EXPECT_EQ(doc.info().signature_count, 0);
+  auto changed_future = doc.modify([](EditableDocument& d) -> Result<ChangeSet> {
+    if (auto r = d.set_page_rotation(0, 1); !r) return std::unexpected(r.error());
+    ChangeSet change;
+    change.pages = {0};
+    change.new_sizes.emplace_back(0, *d.page_size(0));
+    return change;
+  });
+  auto changed = get_or_fail(changed_future);
+  ASSERT_TRUE(changed) << changed.error().message;
+  // 워커는 문서 정보를 건드리지 않는다: 메인 스레드가 apply_change 하기 전에는 그대로
+  EXPECT_DOUBLE_EQ(doc.info().page_sizes[0].width, 612.0);
+  DocumentHandle copy = doc;  // 같은 문서의 사본에도 보인다
+  copy.apply_change(*changed);
+  EXPECT_DOUBLE_EQ(doc.info().page_sizes[0].width, 792.0);
+
+  onpdf::test::ScopedTempDir dir;
+  const auto target = dir / "saved.pdf";
+  auto saved_future = doc.save(target);
+  auto saved = get_or_fail(saved_future);
+  ASSERT_TRUE(saved) << saved.error().message;
+  auto reopened_future = DocumentHandle::open(worker_, target);
+  auto reopened = get_or_fail(reopened_future);
+  ASSERT_TRUE(reopened) << reopened.error().message;
+  EXPECT_DOUBLE_EQ(reopened->info().page_sizes[0].width, 792.0);
+}
+
+// 서명 문서는 DocumentHandle::save 가 증분 저장을 강제한다
+TEST_F(DocumentHandleTest, SignedDocumentSavesIncrementally) {
+  auto opened_future = DocumentHandle::open(worker_, testdata("signed-dummy.pdf"));
+  auto opened = get_or_fail(opened_future);
+  ASSERT_TRUE(opened) << opened.error().message;
+  EXPECT_EQ(opened->info().signature_count, 1);
+  onpdf::test::ScopedTempDir dir;
+  auto saved_future = opened->save(dir / "signed.pdf");  // incremental 을 지정하지 않아도
+  auto saved = get_or_fail(saved_future);
+  ASSERT_TRUE(saved) << saved.error().message;
+  EXPECT_TRUE(saved->incremental);
+}
+
 TEST_F(DocumentHandleTest, OpenReturnsPrintPreferences) {
   auto f = DocumentHandle::open(worker_, testdata("print-flags.pdf"));
   auto r = get_or_fail(f);

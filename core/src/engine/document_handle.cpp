@@ -66,6 +66,8 @@ struct DocumentHandleAccess {
     }
     // 인쇄 정보는 부가 정보: 실패해도 열기는 성공시키고 기본값(인쇄 허용)을 쓴다
     if (auto print = doc->print_preferences()) info.print = std::move(*print);
+    info.permissions = doc->edit_permissions();
+    info.signature_count = doc->signature_count();
 
     std::shared_ptr<State> state(new State(), [](State* s) {
       s->request_close();
@@ -297,6 +299,45 @@ std::future<Result<Point>> DocumentHandle::resolve_location(int page_index, Poin
   return DocumentHandleAccess::to_future<Point>([=, this](std::function<void(Result<Point>)> cb) {
     return resolve_location(page_index, user_pt, priority, std::move(cb));
   });
+}
+
+TaskHandle DocumentHandle::modify(std::function<Result<ChangeSet>(EditableDocument&)> edit,
+                                  std::function<void(Result<ChangeSet>)> on_done) const {
+  return DocumentHandleAccess::post_document_task<ChangeSet>(
+      *this, Priority::kHigh, [edit = std::move(edit)](PdfiumDocument& doc) { return edit(doc); }, std::move(on_done));
+}
+
+std::future<Result<ChangeSet>> DocumentHandle::modify(std::function<Result<ChangeSet>(EditableDocument&)> edit) const {
+  return DocumentHandleAccess::to_future<ChangeSet>(
+      [edit = std::move(edit), this](std::function<void(Result<ChangeSet>)> cb) { return modify(edit, std::move(cb)); });
+}
+
+TaskHandle DocumentHandle::save(std::filesystem::path target, SaveOptions options,
+                                std::function<void(Result<SaveResult>)> on_done) const {
+  if (info().signature_count > 0) options.incremental = true;  // 서명 보존
+  return DocumentHandleAccess::post_document_task<SaveResult>(
+      *this, Priority::kNormal,
+      [target = std::move(target), options = std::move(options)](PdfiumDocument& doc) {
+        return save_document_safely(doc, target, options);
+      },
+      std::move(on_done));
+}
+
+std::future<Result<SaveResult>> DocumentHandle::save(std::filesystem::path target, SaveOptions options) const {
+  return DocumentHandleAccess::to_future<SaveResult>(
+      [target = std::move(target), options = std::move(options), this](std::function<void(Result<SaveResult>)> cb) {
+        return save(target, options, std::move(cb));
+      });
+}
+
+void DocumentHandle::apply_change(const ChangeSet& change) {
+  if (!state_) return;
+  DocumentInfo& info = state_->info;
+  for (const auto& [page, size] : change.new_sizes) {
+    if (page >= 0 && static_cast<std::size_t>(page) < info.page_sizes.size()) {
+      info.page_sizes[static_cast<std::size_t>(page)] = size;
+    }
+  }
 }
 
 void DocumentHandle::close() noexcept {

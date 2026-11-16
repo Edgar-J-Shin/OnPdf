@@ -64,6 +64,19 @@ void TileCache::clear() {
   stats_.count = 0;
 }
 
+void TileCache::remove_page(int page) {
+  for (auto it = map_.begin(); it != map_.end();) {
+    if (it->first.page == page) {
+      stats_.bytes -= it->second.bytes;
+      lru_.erase(it->second.lru);
+      it = map_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  stats_.count = map_.size();
+}
+
 void TileCache::set_max_bytes(std::size_t max_bytes) {
   max_bytes_ = std::max(max_bytes, kMinCacheBytes);
   evict_to(max_bytes_);

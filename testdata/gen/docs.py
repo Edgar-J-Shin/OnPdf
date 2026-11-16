@@ -555,6 +555,38 @@ def make_unicode_map_error() -> bytes:
     return w.write(root=root, info=info, file_id=g.file_id_for("unicode-map-error.pdf"))
 
 
+def make_signed_dummy() -> bytes:
+    """전자서명 필드 1개(가짜 서명값). 암호학적으로 유효하지 않지만 PDFium 의 서명 수(FPDF_GetSignatureCount)는 1.
+    뷰어는 서명 문서를 증분 저장해 원본 바이트를 보존해야 한다 (#31)."""
+    w = PdfWriter()
+    pages = w.reserve()
+    helv = g.simple_font(w)
+    page_num = w.reserve()
+    sig_value = w.add(b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached "
+                      b"/ByteRange [0 0 0 0] /Contents <" + b"00" * 64 + b"> /M (D:20260101000000Z) >>")
+    widget = w.add(b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Signature1) /V %d 0 R /F 132 "
+                   b"/Rect [0 0 0 0] /P %d 0 R >>" % (sig_value, page_num))
+    c = w.stream(b"", content(_label(72, 720, 18, "Signed document (dummy signature)"),
+                              _label(72, 690, 12, "Saving must be incremental to keep the signature bytes.")))
+    kids = [g.page(w, pages, g.LETTER, c, _helv_resources(helv), annots=[widget], num=page_num)]
+    g.pages_tree(w, pages, kids)
+    root = g.catalog(w, pages, b" /AcroForm << /Fields [%d 0 R] /SigFlags 3 >>" % widget)
+    info = g.info_dict(w, "Signed document (dummy signature)")
+    return w.write(root=root, info=info, file_id=g.file_id_for("signed-dummy.pdf"))
+
+
+def make_perm_assemble_only() -> bytes:
+    # 소유자 암호만(R3). P=-12: 내용 수정(비트 4)만 금지, 쪽 조립(비트 11)·주석(비트 6) 허용 → 쪽 회전 가능
+    return make_simple(encrypt=g.Encryption("", "owner", permissions=-12), title="Permissions: assemble only",
+                       file_id_name="perm-assemble-only.pdf")
+
+
+def make_perm_no_assemble() -> bytes:
+    # 소유자 암호만(R3). P=-1028: 쪽 조립(비트 11)만 금지 → 쪽 회전 불가 (내용 수정 비트 4 는 허용)
+    return make_simple(encrypt=g.Encryption("", "owner", permissions=-1028), title="Permissions: no assembly",
+                       file_id_name="perm-no-assemble.pdf")
+
+
 def make_outline_cycle() -> bytes:
     """악성 목차: 형제 순환(B /Next A), 자식 자기 참조(A /First A), 깊이 40 체인(B 아래).
     뷰어는 무한 루프·스택 오버플로 없이 유한한 항목만 보여야 한다."""

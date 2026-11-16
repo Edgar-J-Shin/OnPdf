@@ -86,6 +86,45 @@ void DocumentView::set_document(const engine::DocumentHandle& handle, UiDispatch
   emit_page_if_changed();
 }
 
+void DocumentView::invalidate_pages(const std::vector<int>& pages, bool sizes_changed) {
+  if (!layout_ || !source_) return;
+  // 진행 중인 텍스트 추출은 이전 모양 기준이다: 세대를 올려 늦은 결과를 버리고, 보이는 쪽은 다시 요청한다
+  ++doc_generation_;
+  for (auto& [page, task] : text_requested_) task.cancel();
+  text_requested_.clear();
+  bool selection_hit = false;
+  for (int page : pages) {
+    cache_.remove_page(page);
+    text_cache_.erase(page);
+    if (!selection_.empty() && page >= selection_.start().page && page <= selection_.end().page) selection_hit = true;
+  }
+  if (selection_hit) clear_selection();
+  pending_anchor_.reset();
+  pending_focus_.reset();
+  nav_anchor_.reset();
+  // 이전 스케줄러를 버리면 대기 요청은 취소되고, 이미 렌더 중인 결과는 weak_ptr 로 무시된다
+  scheduler_ = std::make_unique<view::TileScheduler>(*source_, cache_);
+  scheduler_->set_on_tile([this](const view::TileKey& key) { on_tile_ready(key); });
+  if (sizes_changed) {
+    // 보던 쪽과 그 안의 위치(비율)를 기억해 새 레이아웃에서 복원한다
+    const int page = std::max(0, current_page());
+    const onpdf::Rect old_rect = layout_->page_rect(page);
+    const double fraction = (viewport_doc().y - old_rect.y) / std::max(1.0, old_rect.h);
+    const int scale_q = layout_->scale_q();
+    layout_ = std::make_unique<view::PageLayout>(handle_.info().page_sizes);
+    layout_->set_scale_q(scale_q);
+    scheduler_->set_layout(layout_.get());
+    relayout();  // 맞춤 배율 재계산 (가장 넓은 쪽이 바뀌었을 수 있다)
+    const onpdf::Rect rect = layout_->page_rect(page);
+    verticalScrollBar()->setValue(static_cast<int>(std::lround((rect.y + fraction * rect.h) / dpr())));
+  } else {
+    scheduler_->set_layout(layout_.get());
+  }
+  schedule_update();
+  request_text_indexes();
+  viewport()->update();
+}
+
 void DocumentView::clear_document(const QString& placeholder) {
   scheduler_.reset();
   source_.reset();
