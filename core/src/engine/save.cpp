@@ -126,6 +126,10 @@ Result<SaveResult> save_document_safely(const PdfiumDocument& doc, const std::fi
   }
 
   TempFile temp(temp_path_in(dir));
+  // 파일은 쓸 수 있어도 폴더에 새 파일을 만들 수 없는 경우(일부 공유·클라우드 폴더)를 따로 알린다 (리뷰 I4)
+  if (std::ofstream probe(temp.path(), std::ios::binary | std::ios::trunc); !probe) {
+    return make_error(ErrorCode::kFolderNotWritable, "cannot create files in folder " + path_to_utf8(dir));
+  }
   if (auto written = doc.save_to(temp.path(), options.incremental); !written) return std::unexpected(written.error());
   if (options.after_write_for_testing) options.after_write_for_testing(temp.path());
   if (auto verified = verify_saved(doc, temp.path(), options.incremental); !verified) {

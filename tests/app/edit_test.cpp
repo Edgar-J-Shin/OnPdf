@@ -14,10 +14,12 @@
 #include <gtest/gtest.h>
 
 #include <QAbstractButton>
+#include <QStatusBar>
 #include <QAction>
 #include <QApplication>
 #include <QEventLoop>
 #include <QMessageBox>
+#include <QPrinter>
 #include <QTimer>
 
 #include <filesystem>
@@ -280,6 +282,87 @@ TEST_F(EditTest, SavingReadOnlyFileExplainsAndKeepsOriginal) {
   poll->start();
   window_.save_action()->trigger();
   ASSERT_TRUE(spin_until([&] { return !message.isEmpty() && !window_.saving(); }));
+  EXPECT_TRUE(message.contains(QStringLiteral("다른 이름으로 저장"))) << message.toStdString();
+  EXPECT_TRUE(window_.isWindowModified());
+  EXPECT_EQ(read_bytes(copy), original);
+}
+
+// 편집이 워커에서 반영되는 사이에 저장하면 조용히 멈추지 않고 상태 표시줄로 알린다 (#31 리뷰 I1)
+TEST_F(EditTest, SaveWhileEditBusyIsRefusedWithHint) {
+  const auto copy = open_copy("simple.pdf");
+  window_.rotate_current_page(1);
+  ASSERT_TRUE(window_.edit_controller()->busy());
+  EXPECT_FALSE(window_.save_to(QString::fromStdString(onpdf::path_to_utf8(copy))));
+  EXPECT_FALSE(window_.saving());
+  EXPECT_TRUE(window_.statusBar()->currentMessage().contains(QStringLiteral("잠시 후")))
+      << window_.statusBar()->currentMessage().toStdString();
+  ASSERT_TRUE(spin_until([&] { return idle(); }));
+  // 반영이 끝나면 같은 저장이 된다
+  ASSERT_TRUE(window_.save_to(QString::fromStdString(onpdf::path_to_utf8(copy))));
+  ASSERT_TRUE(spin_until([&] { return !window_.saving(); }));
+  EXPECT_FALSE(window_.isWindowModified());
+}
+
+// 편집이 반영되기 전에는 인쇄를 시작하지 않는다: 이전 쪽 크기로 배치를 계산할 수 있다 (#31 리뷰 I6)
+TEST_F(EditTest, PrintWhileEditBusyIsRefused) {
+  ASSERT_TRUE(open("simple.pdf"));
+  QPrinter printer(QPrinter::HighResolution);
+  printer.setOutputFormat(QPrinter::PdfFormat);
+  printer.setOutputFileName(QString::fromStdString(onpdf::path_to_utf8(dir_ / "out.pdf")));
+  window_.rotate_current_page(1);
+  ASSERT_TRUE(window_.edit_controller()->busy());
+  EXPECT_FALSE(window_.print_with(printer));
+  EXPECT_EQ(window_.print_job(), nullptr);
+  EXPECT_TRUE(window_.statusBar()->currentMessage().contains(QStringLiteral("잠시 후")))
+      << window_.statusBar()->currentMessage().toStdString();
+  ASSERT_TRUE(spin_until([&] { return idle(); }));
+  ASSERT_TRUE(window_.print_with(printer));
+  ASSERT_TRUE(spin_until([&] { return window_.print_job() != nullptr && !window_.print_job()->active(); }));
+  EXPECT_TRUE(std::filesystem::exists(dir_ / "out.pdf"));
+}
+
+// 폴더에 새 파일을 만들 수 없으면 "다른 폴더에" 저장하라고 안내한다 (#31 리뷰 I4). 보호가 없는 환경(Windows·root)은 건너뛴다
+TEST_F(EditTest, SavingIntoReadOnlyFolderExplains) {
+  namespace fs = std::filesystem;
+  const auto folder = dir_ / "locked";
+  fs::create_directory(folder);
+  const auto copy = folder / "simple.pdf";
+  fs::copy_file(testdata("simple.pdf"), copy);
+  ASSERT_TRUE(open_path(copy));
+  const auto original = read_bytes(copy);
+  fs::permissions(folder, fs::perms::owner_read | fs::perms::owner_exec, fs::perm_options::replace);
+  struct Restore {
+    fs::path path;
+    ~Restore() {
+      std::error_code ec;
+      fs::permissions(path, fs::perms::owner_all, fs::perm_options::add, ec);
+    }
+  } restore{folder};
+  {
+    const auto probe_path = folder / "probe.tmp";
+    std::ofstream probe(probe_path, std::ios::binary);
+    if (probe) {
+      probe.close();
+      std::error_code ec;
+      fs::remove(probe_path, ec);
+      GTEST_SKIP() << "folder write protection is not enforced here";
+    }
+  }
+  ASSERT_TRUE(rotate(1));
+  QString message;
+  auto* poll = new QTimer();
+  poll->setInterval(10);
+  QObject::connect(poll, &QTimer::timeout, poll, [poll, &message] {
+    auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+    if (box == nullptr || box->objectName() != QStringLiteral("save_failed")) return;
+    message = box->text();
+    box->accept();
+    poll->deleteLater();
+  });
+  poll->start();
+  window_.save_action()->trigger();
+  ASSERT_TRUE(spin_until([&] { return !message.isEmpty() && !window_.saving(); }));
+  EXPECT_TRUE(message.contains(QStringLiteral("폴더"))) << message.toStdString();
   EXPECT_TRUE(message.contains(QStringLiteral("다른 이름으로 저장"))) << message.toStdString();
   EXPECT_TRUE(window_.isWindowModified());
   EXPECT_EQ(read_bytes(copy), original);

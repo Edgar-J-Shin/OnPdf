@@ -9,13 +9,15 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
-#include <vector>
 #include <memory>
+#include <random>
 #include <string>
+#include <vector>
 
 namespace onpdf::test {
 
@@ -85,7 +87,8 @@ inline const auto* const kPdfiumEnvironment =
     ::testing::AddGlobalTestEnvironment(new PdfiumEnvironment);
 #endif
 
-// 테스트마다 비어 있는 임시 폴더. 소멸 시 통째로 지운다
+// 테스트마다 비어 있는 임시 폴더. 소멸 시 통째로 지운다.
+// 이름에 난수를 넣어 같은 테스트를 두 프로세스(dev·dev-app 의 ctest 등)가 동시에 돌려도 서로의 폴더를 건드리지 않는다
 class ScopedTempDir {
  public:
   ScopedTempDir() {
@@ -94,6 +97,10 @@ class ScopedTempDir {
     std::string name = "onpdf-test-";
     if (info != nullptr) name += std::string(info->test_suite_name()) + "-" + info->name();
     name += "-" + std::to_string(counter.fetch_add(1));
+    std::random_device entropy;
+    char nonce[20];
+    std::snprintf(nonce, sizeof nonce, "-%08x%08x", entropy(), entropy());
+    name += nonce;
     path_ = std::filesystem::temp_directory_path() / name;
     std::error_code ec;
     std::filesystem::remove_all(path_, ec);

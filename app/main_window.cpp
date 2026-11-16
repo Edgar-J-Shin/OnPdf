@@ -361,7 +361,11 @@ void MainWindow::on_save_as() {
 bool MainWindow::save_to(const QString& path) { return start_save(path, [] {}); }
 
 bool MainWindow::start_save(const QString& path, std::function<void()> then) {
-  if (saving_ || edit_->busy() || !session_.has_document() || path.isEmpty()) return false;
+  if (!session_.has_document() || path.isEmpty()) return false;
+  if (saving_ || edit_->busy()) {  // 몇 ms 의 창이지만 조용히 멈추지 않는다 (리뷰 I1)
+    show_transient(tr("지금은 저장할 수 없습니다. 잠시 후 다시 시도하세요"));
+    return false;
+  }
   saving_ = true;
   update_edit_actions();
   show_transient(tr("저장 중…"));
@@ -379,11 +383,14 @@ bool MainWindow::start_save(const QString& path, std::function<void()> then) {
           if (generation != window->outline_generation_) return;  // 다른 문서로 바뀌었다
           if (!*shared) {
             window->update_edit_actions();
-            const QString reason =
-                shared->error().code == ErrorCode::kNotWritable
-                    ? window->tr("파일에 쓸 수 없습니다. 읽기 전용이거나 다른 프로그램이 사용 중입니다.\n"
-                                 "다른 이름으로 저장하세요.")
-                    : QString::fromStdString(shared->error().message);
+            QString reason = QString::fromStdString(shared->error().message);
+            if (shared->error().code == ErrorCode::kNotWritable) {
+              reason = window->tr("파일에 쓸 수 없습니다. 읽기 전용이거나 다른 프로그램이 사용 중입니다.\n"
+                                  "다른 이름으로 저장하세요.");
+            } else if (shared->error().code == ErrorCode::kFolderNotWritable) {
+              reason = window->tr("이 폴더에 새 파일을 만들 수 없습니다.\n"
+                                  "다른 폴더에 다른 이름으로 저장하세요.");
+            }
             QMessageBox box(QMessageBox::Warning, window->tr("저장하지 못했습니다"),
                             window->tr("%1\n\n원본 파일은 바뀌지 않았습니다.").arg(reason), QMessageBox::Ok, window);
             box.setObjectName(QStringLiteral("save_failed"));
@@ -475,6 +482,10 @@ void MainWindow::on_print() {
 bool MainWindow::print_with(QPrinter& printer) {
   if (!session_.has_document() || !session_.handle().valid()) return false;
   if (print_job_ && print_job_->active()) return false;
+  if (edit_->busy()) {  // 편집 결과(쪽 크기)가 반영되기 전의 배치로 인쇄하지 않는다 (리뷰 I6)
+    show_transient(tr("편집을 반영하는 중입니다. 잠시 후 다시 인쇄하세요"));
+    return false;
+  }
   const engine::DocumentHandle handle = session_.handle();
   if (!handle.info().print.allowed) {
     show_transient(tr("이 문서는 인쇄가 허용되지 않습니다"));

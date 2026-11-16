@@ -176,6 +176,44 @@ TEST(SaveDocument, ReadOnlyFileIsRefused) {
   EXPECT_EQ(files_in(dir.path()), 1u);
 }
 
+// 파일은 쓸 수 있어도 폴더에 새 파일을 만들 수 없으면: 임시 파일을 만들지 못하므로 폴더 문제로 알린다 (#31 리뷰 I4).
+// Windows 는 폴더의 읽기 전용 속성이 파일 생성을 막지 않으므로 probe 가 성공해 건너뛴다
+TEST(SaveDocument, ReadOnlyFolderIsRefused) {
+  ScopedTempDir dir;
+  namespace fs = std::filesystem;
+  const auto folder = dir / "locked";
+  fs::create_directory(folder);
+  const auto target = folder / "doc.pdf";
+  fs::copy_file(testdata("simple.pdf"), target);
+  const auto original = read_bytes(target);
+  fs::permissions(folder, fs::perms::owner_read | fs::perms::owner_exec, fs::perm_options::replace);
+  struct Restore {  // 폴더 정리를 위해 쓰기 권한을 되돌린다
+    fs::path path;
+    ~Restore() {
+      std::error_code ec;
+      fs::permissions(path, fs::perms::owner_all, fs::perm_options::add, ec);
+    }
+  } restore{folder};
+  {
+    const auto probe_path = folder / "probe.tmp";
+    std::ofstream probe(probe_path, std::ios::binary);
+    if (probe) {
+      probe.close();
+      std::error_code ec;
+      fs::remove(probe_path, ec);
+      GTEST_SKIP() << "folder write protection is not enforced here";
+    }
+  }
+  auto doc = PdfiumDocument::open(target);
+  ASSERT_TRUE(doc);
+  ASSERT_TRUE(doc->set_page_rotation(0, 1));
+  auto saved = save_document_safely(*doc, target, {});
+  ASSERT_FALSE(saved);
+  EXPECT_EQ(saved.error().code, ErrorCode::kFolderNotWritable) << saved.error().message;
+  EXPECT_EQ(read_bytes(target), original);
+  EXPECT_EQ(files_in(folder), 1u);
+}
+
 // 심볼릭 링크로 연 문서: 링크는 그대로 두고 링크가 가리키는 실제 파일을 갱신한다 (#31 리뷰 C1)
 TEST(SaveDocument, SymlinkIsKeptAndRealFileUpdated) {
   ScopedTempDir dir;
