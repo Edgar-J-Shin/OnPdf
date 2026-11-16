@@ -3,6 +3,7 @@
 
 #include "document_view.h"
 #include "main_window.h"
+#include "outline_panel.h"
 #include "onpdf/core/engine/document_handle.h"
 #include "onpdf/core/engine/pdfium_worker.h"
 #include "onpdf/core/platform/path.h"
@@ -18,8 +19,14 @@
 #include <QAction>
 #include <QApplication>
 #include <QEventLoop>
+#include <QInputDialog>
 #include <QMessageBox>
+#include <QMimeData>
 #include <QPrinter>
+#include <QSpinBox>
+#include <QAbstractItemModel>
+#include <QItemSelectionModel>
+#include <QListView>
 #include <QTimer>
 
 #include <filesystem>
@@ -377,6 +384,236 @@ TEST_F(EditTest, SignedDocumentSavesIncrementally) {
   const auto after = read_bytes(copy);
   ASSERT_GT(after.size(), original.size());
   EXPECT_TRUE(std::equal(original.begin(), original.end(), after.begin())) << "signed bytes must be preserved";
+}
+
+
+// ---------------------------------------------------------------- 쪽 삭제·이동·삽입 (#33)
+
+class PageOpsTest : public EditTest {
+ protected:
+  ThumbnailPanel* thumbs() { return window_.thumbnail_panel(); }
+  QAbstractItemModel* model() { return thumbs()->list()->model(); }
+  int rows() { return model()->rowCount(); }
+  QSpinBox* spin() { return window_.findChild<QSpinBox*>(); }
+  bool wait_idle() { return spin_until([&] { return idle(); }); }
+  bool go_to(int page) {
+    window_.document_view()->go_to_page(page);
+    return spin_until([&] { return window_.document_view()->current_page() == page; });
+  }
+  // 썸네일 끌어 놓기를 모델 수준에서 흉내 낸다: mimeData → dropMimeData(row)
+  bool drop(const std::vector<int>& pages, int row) {
+    QModelIndexList indexes;
+    for (int p : pages) indexes.push_back(model()->index(p, 0));
+    std::unique_ptr<QMimeData> data(model()->mimeData(indexes));
+    const bool accepted = model()->dropMimeData(data.get(), Qt::MoveAction, row, 0, QModelIndex());
+    EXPECT_FALSE(accepted);  // 모델은 행을 직접 옮기지 않는다
+    return wait_idle();
+  }
+  bool landscape(int page) {
+    const QSize s = thumbs()->thumb_size(page);
+    return s.width() > s.height();
+  }
+};
+
+TEST_F(PageOpsTest, DeleteSelectedPagesUpdatesViewThumbsAndSpin) {
+  open_copy("bookmarks.pdf");
+  ASSERT_EQ(window_.document_view()->page_count(), 10);
+  ASSERT_TRUE(window_.delete_pages({5, 2}));
+  ASSERT_TRUE(wait_idle());
+  EXPECT_EQ(window_.document_view()->page_count(), 8);
+  EXPECT_EQ(rows(), 8);
+  ASSERT_NE(spin(), nullptr);
+  EXPECT_EQ(spin()->maximum(), 8);
+  EXPECT_TRUE(window_.isWindowModified());
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("쪽 삭제"))) << window_.undo_action()->text().toStdString();
+  ASSERT_TRUE(window_.edit_controller()->undo());
+  ASSERT_TRUE(wait_idle());
+  EXPECT_EQ(window_.document_view()->page_count(), 10);
+  EXPECT_EQ(rows(), 10);
+  EXPECT_EQ(spin()->maximum(), 10);
+  EXPECT_FALSE(window_.isWindowModified());
+  ASSERT_TRUE(window_.edit_controller()->redo());
+  ASSERT_TRUE(wait_idle());
+  EXPECT_EQ(window_.document_view()->page_count(), 8);
+  EXPECT_EQ(rows(), 8);
+}
+
+TEST_F(PageOpsTest, DeletingTheLastPageClampsCurrentPage) {
+  open_copy("bookmarks.pdf");
+  ASSERT_TRUE(go_to(9));
+  ASSERT_TRUE(window_.delete_pages({9}));
+  ASSERT_TRUE(wait_idle());
+  EXPECT_EQ(window_.document_view()->page_count(), 9);
+  EXPECT_EQ(window_.document_view()->current_page(), 8);
+  EXPECT_EQ(thumbs()->current_page(), 8);
+  EXPECT_EQ(spin()->value(), 9);
+}
+
+TEST_F(PageOpsTest, DeletingEveryPageIsRefused) {
+  open_copy("simple.pdf");
+  EXPECT_FALSE(window_.delete_pages({0, 1}));
+  EXPECT_TRUE(window_.statusBar()->currentMessage().contains(QStringLiteral("적어도 한 쪽")));
+  EXPECT_EQ(window_.document_view()->page_count(), 2);
+  EXPECT_FALSE(window_.isWindowModified());
+}
+
+TEST_F(PageOpsTest, DropMovesPagesAndUndoRestores) {
+  ASSERT_TRUE(open("mixed-sizes.pdf"));
+  ASSERT_TRUE(landscape(1));
+  ASSERT_FALSE(landscape(3));
+  // 1쪽(가로)을 4번째 행 앞에 → 블록을 뺀 자리 3 → 순서 0,2,3,1,4,5,6
+  ASSERT_TRUE(drop({1}, 4));
+  EXPECT_TRUE(landscape(3));
+  EXPECT_FALSE(landscape(1));
+  EXPECT_EQ(rows(), 7);
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("쪽 이동")));
+  ASSERT_TRUE(window_.edit_controller()->undo());
+  ASSERT_TRUE(wait_idle());
+  EXPECT_TRUE(landscape(1));
+  EXPECT_FALSE(landscape(3));
+  // 제자리 놓기는 편집이 아니다
+  EXPECT_FALSE(window_.move_pages({1}, 1));
+  EXPECT_FALSE(window_.move_pages({1}, 2));
+  EXPECT_FALSE(window_.isWindowModified());
+}
+
+TEST_F(PageOpsTest, MoveUpAndDownActionsUseCurrentPage) {
+  ASSERT_TRUE(open("mixed-sizes.pdf"));
+  ASSERT_TRUE(go_to(1));
+  window_.move_down_action()->trigger();
+  ASSERT_TRUE(wait_idle());
+  EXPECT_TRUE(landscape(2));
+  EXPECT_FALSE(landscape(1));
+  EXPECT_EQ(window_.document_view()->current_page(), 2);  // 옮긴 쪽을 따라간다
+  window_.move_up_action()->trigger();
+  ASSERT_TRUE(wait_idle());
+  EXPECT_TRUE(landscape(1));
+  ASSERT_TRUE(go_to(0));
+  window_.move_up_action()->trigger();  // 맨 위에서는 아무 일도 없다
+  EXPECT_FALSE(window_.edit_controller()->busy());
+}
+
+TEST_F(PageOpsTest, InsertFromFileAndUndo) {
+  open_copy("simple.pdf");
+  ASSERT_TRUE(window_.insert_pages_from(QString::fromStdString(onpdf::path_to_utf8(testdata("korean-embedded.pdf"))), 1));
+  ASSERT_TRUE(wait_idle());
+  EXPECT_EQ(window_.document_view()->page_count(), 3);
+  EXPECT_EQ(rows(), 3);
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("쪽 삽입")));
+  ASSERT_TRUE(window_.edit_controller()->undo());
+  ASSERT_TRUE(wait_idle());
+  EXPECT_EQ(window_.document_view()->page_count(), 2);
+  ASSERT_TRUE(window_.edit_controller()->redo());
+  ASSERT_TRUE(wait_idle());
+  EXPECT_EQ(window_.document_view()->page_count(), 3);
+}
+
+TEST_F(PageOpsTest, InsertingEncryptedSourceAsksPassword) {
+  open_copy("simple.pdf");
+  bool asked = false;
+  auto* poll = new QTimer();
+  poll->setInterval(10);
+  QObject::connect(poll, &QTimer::timeout, poll, [poll, &asked] {
+    auto* dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
+    if (dialog == nullptr || dialog->objectName() != QStringLiteral("insert_password")) return;
+    asked = true;
+    dialog->setTextValue(QStringLiteral("user"));
+    dialog->accept();
+    poll->deleteLater();
+  });
+  poll->start();
+  ASSERT_TRUE(window_.insert_pages_from(QString::fromStdString(onpdf::path_to_utf8(testdata("encrypted-aes256.pdf"))), 2));
+  ASSERT_TRUE(spin_until([&] { return asked && idle() && window_.document_view()->page_count() == 4; }));
+  EXPECT_EQ(rows(), 4);
+}
+
+TEST_F(PageOpsTest, SourceForbiddingExtractionIsExplained) {
+  open_copy("simple.pdf");
+  ASSERT_TRUE(window_.insert_pages_from(QString::fromStdString(onpdf::path_to_utf8(testdata("perm-no-extract.pdf"))), 0));
+  ASSERT_TRUE(spin_until([&] { return idle() && window_.statusBar()->currentMessage().contains(QStringLiteral("추출")); }));
+  EXPECT_EQ(window_.document_view()->page_count(), 2);
+  EXPECT_FALSE(window_.isWindowModified());
+}
+
+TEST_F(PageOpsTest, PageOpsFollowAssemblePermission) {
+  ASSERT_TRUE(open("perm-no-assemble.pdf"));
+  EXPECT_FALSE(window_.delete_pages_action()->isEnabled());
+  EXPECT_FALSE(window_.insert_pages_action()->isEnabled());
+  EXPECT_FALSE(window_.move_up_action()->isEnabled());
+  EXPECT_FALSE(thumbs()->editable());
+  EXPECT_FALSE(thumbs()->list()->dragEnabled());
+  EXPECT_FALSE(window_.delete_pages({0}));
+  ASSERT_TRUE(open("perm-assemble-only.pdf"));
+  EXPECT_TRUE(window_.delete_pages_action()->isEnabled());
+  EXPECT_TRUE(thumbs()->editable());
+  EXPECT_TRUE(thumbs()->list()->dragEnabled());
+}
+
+TEST_F(PageOpsTest, DragDisabledWhileEditBusy) {
+  open_copy("simple.pdf");
+  EXPECT_TRUE(thumbs()->list()->dragEnabled());
+  window_.rotate_current_page(1);
+  ASSERT_TRUE(window_.edit_controller()->busy());
+  EXPECT_FALSE(thumbs()->list()->dragEnabled());
+  EXPECT_FALSE(window_.move_pages({0}, 2));  // 바쁜 동안 거절
+  ASSERT_TRUE(wait_idle());
+  EXPECT_TRUE(thumbs()->list()->dragEnabled());
+}
+
+TEST_F(PageOpsTest, SelectedThumbnailsAreRotatedTogether) {
+  ASSERT_TRUE(open("bookmarks.pdf"));
+  thumbs()->list()->setFocus();
+  QItemSelectionModel* selection = thumbs()->list()->selectionModel();
+  selection->select(model()->index(1, 0), QItemSelectionModel::ClearAndSelect);
+  selection->select(model()->index(3, 0), QItemSelectionModel::Select);
+  EXPECT_EQ(thumbs()->selected_pages(), (std::vector<int>{1, 3}));
+  EXPECT_EQ(window_.target_pages(), (std::vector<int>{1, 3}));
+  const bool was_landscape = landscape(1);
+  window_.rotate_current_page(1);
+  ASSERT_TRUE(wait_idle());
+  EXPECT_NE(landscape(1), was_landscape);
+  EXPECT_NE(landscape(3), was_landscape);
+  EXPECT_EQ(landscape(2), was_landscape);
+}
+
+// 쪽을 지우면 목차를 다시 읽어 항목이 새 쪽 번호를 가리키고, 사이드바 탭은 그대로다
+TEST_F(PageOpsTest, OutlineReloadedAfterDeleteKeepsTab) {
+  open_copy("bookmarks.pdf");
+  OutlinePanel* outline = window_.outline_panel();
+  ASSERT_TRUE(spin_until([&] { return outline->outline() != nullptr && outline->row_count() > 0; }));
+  const int rows_before = outline->row_count();
+  window_.sidebar()->setCurrentWidget(thumbs());
+  ASSERT_TRUE(window_.delete_pages({0}));
+  ASSERT_TRUE(wait_idle());
+  // 재로드가 끝나면 새 스냅샷이 들어온다 (이전 스냅샷은 set_outline(nullptr) 로 비워진다)
+  ASSERT_TRUE(spin_until([&] { return outline->outline() != nullptr && outline->row_count() > 0; }));
+  EXPECT_EQ(outline->row_count(), rows_before);
+  for (const auto& item : outline->outline()->items) {
+    if (item.target && item.target->kind == view::LinkKind::kPage) EXPECT_LT(item.target->page, 9) << item.title;
+  }
+  EXPECT_EQ(window_.sidebar()->currentWidget(), thumbs());  // 편집 뒤 재로드는 탭을 바꾸지 않는다
+}
+
+TEST_F(PageOpsTest, SignatureWarningShownOnceThenProceeds) {
+  open_copy("signed-dummy.pdf");
+  bool warned = false;
+  answer_dialog("signature_warning", QMessageBox::AcceptRole, &warned);
+  ASSERT_TRUE(window_.insert_pages_from(QString::fromStdString(onpdf::path_to_utf8(testdata("simple.pdf"))), 1));
+  ASSERT_TRUE(spin_until([&] { return idle() && window_.document_view()->page_count() == 3; }));
+  EXPECT_TRUE(warned);
+  // 두 번째 구조 편집은 묻지 않는다 (대화상자가 뜨면 아래가 멈춰 시간 초과로 실패한다)
+  ASSERT_TRUE(window_.delete_pages({2}));
+  ASSERT_TRUE(spin_until([&] { return idle() && window_.document_view()->page_count() == 2; }));
+}
+
+TEST_F(PageOpsTest, SignatureWarningCancelLeavesDocument) {
+  open_copy("signed-dummy.pdf");
+  bool warned = false;
+  answer_dialog("signature_warning", QMessageBox::RejectRole, &warned);
+  EXPECT_FALSE(window_.insert_pages_from(QString::fromStdString(onpdf::path_to_utf8(testdata("simple.pdf"))), 1));
+  EXPECT_TRUE(warned);
+  EXPECT_EQ(window_.document_view()->page_count(), 1);
+  EXPECT_FALSE(window_.isWindowModified());
 }
 
 }  // namespace

@@ -3,6 +3,9 @@
 
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/core/engine/save.h"
+#include "onpdf/edit/delete_pages.h"
+#include "onpdf/edit/insert_pages.h"
+#include "onpdf/edit/move_pages.h"
 
 #include "../manifest.h"
 #include "../test_support.h"
@@ -123,6 +126,100 @@ TEST(Roundtrip, RotatedDocument) {
   auto outline = reopened->load_outline();
   ASSERT_TRUE(outline);
   EXPECT_EQ(outline->size(), 15);  // 목차 보존
+}
+
+
+// 저장 파일에 qpdf --check 를 돌린다 (qpdf 가 없으면 건너뜀)
+void expect_qpdf_ok(const ScopedTempDir& dir, const std::filesystem::path& target) {
+  const std::string qpdf = qpdf_command(dir.path());
+  if (qpdf.empty()) return;
+  const std::string cmd = qpdf + " --check \"" + onpdf::path_to_utf8(target) + "\" > \"" +
+                          onpdf::path_to_utf8(dir / "check.txt") + "\" 2>&1";
+  const int status = std::system(cmd.c_str());
+  std::ifstream log(dir / "check.txt");
+  const std::string output((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
+  EXPECT_TRUE(status == 0 || status == 3 || status == (3 << 8)) << "qpdf --check status " << status << "\n" << output;
+}
+
+std::string page_text(const PdfiumDocument& doc, int page) {
+  auto text = doc.load_text(page);
+  return text ? text->all_text() : std::string();
+}
+
+// 쪽 삭제·이동 뒤 저장: 순서가 파일에 남고, 목차가 깨지지 않는다
+TEST(Roundtrip, DeletedAndMovedDocument) {
+  auto doc = PdfiumDocument::open(testdata("bookmarks.pdf"));
+  ASSERT_TRUE(doc);
+  ASSERT_EQ(doc->page_count(), 10);
+  edit::DeletePagesCommand del({0});
+  ASSERT_TRUE(del.execute(*doc));
+  edit::MovePagesCommand mv({8}, 0);  // 이제 마지막 쪽(원래 10쪽)을 맨 앞으로
+  ASSERT_TRUE(mv.execute(*doc));
+  ScopedTempDir dir;
+  const auto target = dir / "pages.pdf";
+  ASSERT_TRUE(save_document_safely(*doc, target, {}));
+  auto reopened = PdfiumDocument::open(target);
+  ASSERT_TRUE(reopened);
+  ASSERT_EQ(reopened->page_count(), 9);
+  EXPECT_NE(page_text(*reopened, 0).find("page 10 of 10"), std::string::npos) << page_text(*reopened, 0);
+  EXPECT_NE(page_text(*reopened, 1).find("page 2 of 10"), std::string::npos) << page_text(*reopened, 1);
+  EXPECT_NE(page_text(*reopened, 8).find("page 9 of 10"), std::string::npos) << page_text(*reopened, 8);
+  auto outline = reopened->load_outline();
+  ASSERT_TRUE(outline) << outline.error().message;
+  EXPECT_GT(outline->size(), 0);
+  for (const auto& item : outline->items) {
+    if (item.target && item.target->kind == view::LinkKind::kPage) EXPECT_LT(item.target->page, 9) << item.title;
+  }
+  expect_qpdf_ok(dir, target);
+}
+
+// 다른 파일(한글·폼)의 쪽을 삽입하고 저장: 쪽 수·텍스트가 남고 qpdf 검사를 통과한다
+TEST(Roundtrip, InsertedFromAnotherFile) {
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc);
+  edit::InsertPagesCommand korean(testdata("korean-embedded.pdf"), "", {}, 2);
+  ASSERT_TRUE(korean.execute(*doc));
+  edit::InsertPagesCommand form(testdata("form-acro.pdf"), "", {}, 0);
+  ASSERT_TRUE(form.execute(*doc));
+  ASSERT_EQ(doc->page_count(), 4);
+  const std::string korean_text = page_text(*doc, 3);
+  ScopedTempDir dir;
+  const auto target = dir / "inserted.pdf";
+  ASSERT_TRUE(save_document_safely(*doc, target, {}));
+  auto reopened = PdfiumDocument::open(target);
+  ASSERT_TRUE(reopened);
+  ASSERT_EQ(reopened->page_count(), 4);
+  EXPECT_EQ(page_text(*reopened, 3), korean_text);
+  EXPECT_FALSE(korean_text.empty());
+  for (int i = 0; i < 4; ++i) {
+    RenderOptions render;
+    render.scale = 0.25f;
+    EXPECT_TRUE(reopened->render_page(i, render)) << "page " << i;
+  }
+  expect_qpdf_ok(dir, target);
+}
+
+// 서명 문서에 쪽을 삽입하고 증분 저장: 원본 바이트가 앞부분에 그대로 남는다 (서명 보존 규칙)
+TEST(Roundtrip, SignedDocumentInsertSavesIncrementally) {
+  auto doc = PdfiumDocument::open(testdata("signed-dummy.pdf"));
+  ASSERT_TRUE(doc);
+  ASSERT_GT(doc->signature_count(), 0);
+  edit::InsertPagesCommand cmd(testdata("simple.pdf"), "", {0}, 1);
+  ASSERT_TRUE(cmd.execute(*doc));
+  ScopedTempDir dir;
+  const auto target = dir / "signed-inserted.pdf";
+  SaveOptions options;
+  options.incremental = true;
+  auto saved = save_document_safely(*doc, target, options);
+  ASSERT_TRUE(saved) << saved.error().message;
+  const auto original = onpdf::test::read_bytes(testdata("signed-dummy.pdf"));
+  const auto after = onpdf::test::read_bytes(target);
+  ASSERT_GT(after.size(), original.size());
+  EXPECT_TRUE(std::equal(original.begin(), original.end(), after.begin()));
+  auto reopened = PdfiumDocument::open(target);
+  ASSERT_TRUE(reopened);
+  EXPECT_EQ(reopened->page_count(), 2);
+  expect_qpdf_ok(dir, target);
 }
 
 }  // namespace

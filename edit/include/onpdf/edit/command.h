@@ -22,6 +22,8 @@ class Command {
   [[nodiscard]] virtual std::string_view id() const noexcept = 0;
   virtual Result<engine::ChangeSet> execute(engine::EditableDocument& doc) = 0;
   virtual Result<engine::ChangeSet> undo(engine::EditableDocument& doc) = 0;
+  // 실행 취소 스택에서 밀려나 더 쓰이지 않을 때 워커에서 호출된다: 문서에 보관한 스냅샷을 해제한다. 기본은 빈 구현
+  virtual void discard(engine::EditableDocument& doc) noexcept { (void)doc; }
 };
 
 }  // namespace onpdf::edit

@@ -5,6 +5,7 @@
 
 #include <QCache>
 #include <QImage>
+#include <QString>
 #include <QWidget>
 
 #include <cstdint>
@@ -14,6 +15,7 @@
 
 class QListView;
 class QModelIndex;
+class QPoint;
 class QTimer;
 
 namespace onpdf::app {
@@ -33,6 +35,19 @@ class ThumbnailPanel : public QWidget {
   void clear_document();
   // 편집으로 쪽 모양이 바뀌었다: 그 쪽 썸네일을 버리고 다시 렌더한다 (행 높이도 새 쪽 크기로)
   void invalidate_pages(const std::vector<int>& pages);
+  // 쪽 수·순서가 바뀌었다(삭제·이동·삽입): 세대를 올려 늦은 렌더를 버리고, 캐시를 비우고, 행 수를 문서 정보에
+  // 맞춘 뒤 스크롤 위치와 현재 쪽을 되살린다
+  void reset_pages(int current_page);
+  // 편집 가능 상태(작업 중 아님·권한 있음)에서만 끌어 놓기·Delete·드롭을 받는다
+  void set_editable(bool editable);
+  [[nodiscard]] bool editable() const noexcept { return editable_; }
+  [[nodiscard]] std::vector<int> selected_pages() const;  // 오름차순
+  [[nodiscard]] bool list_has_focus() const;
+  // 내부용(모델·목록이 부른다): 요청을 신호로 바꾼다. 문서는 Command 가 바꾸고, 행은 document_changed 뒤에 갱신한다
+  void request_move(const std::vector<int>& pages, int drop_row);
+  void request_insert_file(const QString& path, int drop_row);
+  void request_delete(const std::vector<int>& pages);
+  void request_context_menu(const QPoint& global_pos, int row);
   // 현재 쪽 강조 + 목록에서 보이게 스크롤 (page_activated 를 내보내지 않는다)
   void set_current_page(int page);
   [[nodiscard]] int current_page() const noexcept { return current_page_; }
@@ -57,6 +72,11 @@ class ThumbnailPanel : public QWidget {
 
  signals:
   void page_activated(int page);
+  // drop_row: 현재 행 기준 삽입 자리 (0..rowCount). MainWindow 가 Command 의 dest/at 로 바꾼다
+  void move_requested(const std::vector<int>& pages, int drop_row);
+  void insert_file_requested(const QString& path, int drop_row);
+  void delete_requested(const std::vector<int>& pages);
+  void context_menu_requested(const QPoint& global_pos, const std::vector<int>& pages);
 
  protected:
   void resizeEvent(QResizeEvent* event) override;
@@ -95,6 +115,7 @@ class ThumbnailPanel : public QWidget {
   int thumb_width_ = 0;
   int current_page_ = -1;
   bool syncing_ = false;  // set_current_page 중에는 사용자 이동으로 보지 않는다
+  bool editable_ = false;
 };
 
 }  // namespace onpdf::app

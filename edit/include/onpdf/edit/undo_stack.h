@@ -17,8 +17,9 @@ class UndoStack {
   static constexpr std::size_t kDefaultLimit = 100;
   explicit UndoStack(std::size_t limit = kDefaultLimit);
 
-  // 실행에 성공한 Command 를 올린다. 다시 실행 기록은 지운다. 상한을 넘으면 가장 오래된 것을 버린다
-  void push(std::shared_ptr<Command> executed);
+  // 실행에 성공한 Command 를 올린다. 다시 실행 기록은 지운다. 상한을 넘으면 가장 오래된 것을 버린다.
+  // 버린 Command(다시 실행 기록·상한 초과분)를 돌려준다 — 호출자가 워커에서 discard 를 불러 스냅샷을 해제한다
+  std::vector<std::shared_ptr<Command>> push(std::shared_ptr<Command> executed);
   [[nodiscard]] std::shared_ptr<Command> undo_target() const;  // 없으면 nullptr
   [[nodiscard]] std::shared_ptr<Command> redo_target() const;
   void did_undo();  // undo_target 의 undo 가 성공했다

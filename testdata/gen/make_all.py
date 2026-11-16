@@ -45,6 +45,7 @@ GENERATED = {
     "signed-dummy.pdf": docs.make_signed_dummy,
     "perm-assemble-only.pdf": docs.make_perm_assemble_only,
     "perm-no-assemble.pdf": docs.make_perm_no_assemble,
+    "perm-no-extract.pdf": docs.make_perm_no_extract,
 }
 
 

@@ -3,6 +3,7 @@
 #include "onpdf/core/view/tile.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 
 namespace onpdf::view {
@@ -34,6 +35,7 @@ void PageLayout::rebuild() {
 }
 
 Rect PageLayout::page_rect(int page) const {
+  assert(page >= 0 && page < page_count());  // 구조 변경 뒤 옛 쪽 번호로 부르면 미정의 동작이다
   const auto i = static_cast<std::size_t>(page);
   const Size px = page_pixel_size(pages_pt_[i], scale_q_);
   const double x = options_.margin + std::floor((max_page_width_px_ - px.w) / 2.0);  // 정수 px 정렬

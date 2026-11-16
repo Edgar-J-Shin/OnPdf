@@ -69,17 +69,27 @@ void EditController::finish(Op op, std::shared_ptr<edit::Command> command, int g
   busy_ = false;
   if (!result) {
     emit state_changed();
-    emit failed(QString::fromStdString(result.error().message));
+    emit failed(result.error().code, QString::fromStdString(result.error().message));
     return;
   }
   handle_.apply_change(*result);  // 메인 스레드에서만 문서 정보를 고친다
   switch (op) {
-    case Op::kExecute: stack_.push(std::move(command)); break;
+    case Op::kExecute: discard_on_worker(stack_.push(std::move(command))); break;
     case Op::kUndo: stack_.did_undo(); break;
     case Op::kRedo: stack_.did_redo(); break;
   }
   emit document_changed(*result);
   emit state_changed();
+}
+
+void EditController::discard_on_worker(std::vector<std::shared_ptr<edit::Command>> evicted) {
+  if (evicted.empty() || !handle_.valid()) return;
+  handle_.modify(
+      [evicted = std::move(evicted)](engine::EditableDocument& doc) -> Result<engine::ChangeSet> {
+        for (const auto& command : evicted) command->discard(doc);
+        return engine::ChangeSet{};
+      },
+      [](Result<engine::ChangeSet>) {});
 }
 
 }  // namespace onpdf::app

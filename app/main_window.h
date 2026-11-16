@@ -12,7 +12,9 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string_view>
+#include <vector>
 
 class QCloseEvent;
 class QLabel;
@@ -55,9 +57,22 @@ class MainWindow : public QMainWindow {
   [[nodiscard]] QAction* undo_action() const noexcept { return undo_action_; }
   [[nodiscard]] QAction* redo_action() const noexcept { return redo_action_; }
   [[nodiscard]] QAction* rotate_cw_action() const noexcept { return rotate_cw_action_; }
+  [[nodiscard]] QAction* delete_pages_action() const noexcept { return delete_pages_action_; }
+  [[nodiscard]] QAction* move_up_action() const noexcept { return move_up_action_; }
+  [[nodiscard]] QAction* move_down_action() const noexcept { return move_down_action_; }
+  [[nodiscard]] QAction* insert_pages_action() const noexcept { return insert_pages_action_; }
   [[nodiscard]] bool saving() const noexcept { return saving_; }
-  // 현재 쪽 회전 (시계 방향 quarter_turns). 편집 메뉴와 같은 경로
+  // 현재 쪽(썸네일에 선택이 있으면 선택 쪽들) 회전 (시계 방향 quarter_turns). 쪽 메뉴와 같은 경로
   void rotate_current_page(int quarter_turns);
+  // ---- 쪽 구조 편집 (쪽 메뉴·썸네일과 같은 경로, 테스트용으로도 쓴다). 시작하면 true ----
+  bool rotate_pages(std::vector<int> pages, int quarter_turns);
+  bool delete_pages(std::vector<int> pages);
+  // pages 를 썸네일 행 drop_row(0..쪽 수) 자리로. 자리가 그대로면 아무것도 하지 않고 false
+  bool move_pages(std::vector<int> pages, int drop_row);
+  // path 의 PDF 전체를 at 자리에 삽입. 암호가 필요하면 묻고 다시 시도한다
+  bool insert_pages_from(const QString& path, int at, const QString& password = {});
+  // 쪽 메뉴·단축키의 대상: 썸네일 목록에 포커스와 선택이 있으면 선택, 아니면 현재 쪽
+  [[nodiscard]] std::vector<int> target_pages() const;
   // 이 경로로 저장한다 (대화상자 없이 — 다른 이름으로 저장의 뒷부분, 테스트용). 시작하면 true
   bool save_to(const QString& path);
   // 대화상자 없이 이 프린터 설정으로 인쇄를 시작한다 (파일 > 인쇄 의 뒷부분, 테스트용). 시작하면 true
@@ -88,7 +103,7 @@ class MainWindow : public QMainWindow {
   void on_search_closed();
   void update_search_status();
   void on_current_page_changed(int page);
-  void load_outline();
+  void load_outline(bool switch_tab);  // switch_tab: 목차가 있으면 목차 탭으로 (문서를 열 때만)
   // ---- 편집·저장 ----
   void update_edit_actions();
   void update_title();
@@ -101,6 +116,11 @@ class MainWindow : public QMainWindow {
   void maybe_save(std::function<void()> then);
   void continue_open(const QString& path);
   [[nodiscard]] QString command_label(std::string_view id) const;
+  void on_edit_failed(onpdf::ErrorCode code, const QString& message);
+  void on_insert_pages_action();
+  void move_selection(int delta);  // 위로(-1)·아래로(+1) 이동
+  bool warn_signature_once();      // 서명 문서의 첫 구조 편집: 계속하면 true
+  void on_thumbnail_context_menu(const QPoint& global_pos, const std::vector<int>& pages);
   void on_print();
   void on_print_finished(PrintJob::Outcome outcome);
   void cancel_print();
@@ -142,6 +162,16 @@ class MainWindow : public QMainWindow {
   QAction* redo_action_ = nullptr;
   QAction* rotate_cw_action_ = nullptr;
   QAction* rotate_ccw_action_ = nullptr;
+  QAction* delete_pages_action_ = nullptr;
+  QAction* move_up_action_ = nullptr;
+  QAction* move_down_action_ = nullptr;
+  QAction* insert_pages_action_ = nullptr;
+  struct PendingInsert {
+    QString path;
+    int at = 0;
+  };
+  std::optional<PendingInsert> pending_insert_;  // 암호가 필요하면 물은 뒤 같은 삽입을 다시 시도한다
+  bool signature_warned_ = false;                // 서명 문서 구조 편집 경고는 문서마다 한 번
   EditController* edit_ = nullptr;
   bool saving_ = false;
   bool allow_close_ = false;  // 저장 확인을 거쳐 닫기로 했다
@@ -150,7 +180,8 @@ class MainWindow : public QMainWindow {
   QTimer* outline_highlight_timer_ = nullptr;
   QTimer* status_timer_ = nullptr;
   engine::TaskHandle outline_task_;  // 진행 중인 목차 로드 (문서 교체 시 취소)
-  int outline_generation_ = 0;  // 문서를 열 때마다 증가. 늦게 온 목차·위치 결과를 버린다
+  int outline_generation_ = 0;   // 목차 로드마다 증가 (문서 열기·구조 편집 뒤 재로드). 늦게 온 목차를 버린다
+  int document_generation_ = 0;  // 문서를 열 때마다 증가. 늦게 온 저장·위치 변환 결과를 버린다
   std::unique_ptr<view::SearchSession> search_;
   int search_scroll_anchor_ = 0;  // 검색 시작 시 스크롤 위치. 사용자가 움직였으면 첫 결과로 끌고 가지 않는다
   QString screenshot_path_;

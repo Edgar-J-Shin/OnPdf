@@ -95,5 +95,24 @@ TEST(UndoStack, ClearResets) {
   EXPECT_TRUE(stack.is_clean());
 }
 
+
+// push 는 버려진 다시 실행 기록과 상한 초과분을 돌려준다 (호출자가 워커에서 discard 를 부른다)
+TEST(UndoStack, PushReturnsEvictedCommands) {
+  UndoStack stack(2);
+  auto a = cmd(1);
+  auto b = cmd(2);
+  EXPECT_TRUE(stack.push(a).empty());
+  EXPECT_TRUE(stack.push(b).empty());
+  auto over = stack.push(cmd(3));  // 상한 2 → a 가 밀려난다
+  ASSERT_EQ(over.size(), 1u);
+  EXPECT_EQ(over[0], a);
+  stack.did_undo();
+  stack.did_undo();  // b, 3 모두 취소 → 둘 다 다시 실행 기록
+  auto branched = stack.push(cmd(4));
+  ASSERT_EQ(branched.size(), 2u);
+  EXPECT_EQ(branched[0], b);
+  EXPECT_TRUE(stack.push(nullptr).empty());
+}
+
 }  // namespace
 }  // namespace onpdf::edit

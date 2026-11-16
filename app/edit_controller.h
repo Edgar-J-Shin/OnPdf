@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <string_view>
+#include <vector>
 
 namespace onpdf::app {
 
@@ -39,12 +40,14 @@ class EditController : public QObject {
  signals:
   void document_changed(const onpdf::engine::ChangeSet& change);  // 문서 정보는 이미 갱신된 뒤
   void state_changed();                                           // 실행 취소 가능·수정 여부·busy 변화
-  void failed(const QString& message);
+  void failed(onpdf::ErrorCode code, const QString& message);
 
  private:
   enum class Op { kExecute, kUndo, kRedo };
   bool dispatch(std::shared_ptr<edit::Command> command, Op op);
   void finish(Op op, std::shared_ptr<edit::Command> command, int generation, Result<engine::ChangeSet> result);
+  // 스택에서 밀려난 Command 의 discard 를 워커에서 부른다 (문서가 보관한 스냅샷 해제). busy 와 무관, 결과 무시
+  void discard_on_worker(std::vector<std::shared_ptr<edit::Command>> evicted);
 
   UiDispatcher& dispatcher_;
   engine::DocumentHandle handle_;

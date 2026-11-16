@@ -4,14 +4,18 @@
 #include "ui_dispatcher.h"
 
 #include <QAbstractListModel>
+#include <QApplication>
+#include <QContextMenuEvent>
 #include <QKeyEvent>
 #include <QListView>
+#include <QMimeData>
 #include <QPainter>
 #include <QPointer>
 #include <QScopedValueRollback>
 #include <QScrollBar>
 #include <QStyledItemDelegate>
 #include <QTimer>
+#include <QUrl>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -30,13 +34,14 @@ constexpr int kSideMargin = 16;  // 썸네일 좌우 여백 (목록 배경이 �
 constexpr int kMinThumb = 48;
 constexpr int kMaxThumb = 360;
 constexpr double kMaxAspect = 4.0;  // 아주 긴 쪽은 높이를 폭의 4배로 제한
+const char kPagesMime[] = "application/x-onpdf-pages";  // 내부 끌어 놓기: 쪽 번호 목록 "1,3,5"
 
 }  // namespace
 
 // 행 수만 알려 주는 모델. 그림은 델리게이트가 패널에서 직접 가져온다.
 class ThumbnailModel : public QAbstractListModel {
  public:
-  using QAbstractListModel::QAbstractListModel;
+  explicit ThumbnailModel(ThumbnailPanel* panel) : QAbstractListModel(panel), panel_(panel) {}
   void reset_rows(int rows) {
     beginResetModel();
     rows_ = rows;
@@ -59,7 +64,61 @@ class ThumbnailModel : public QAbstractListModel {
     return {};
   }
 
+  // ---- 끌어 놓기: 모델은 행을 옮기지 않는다. 패널에 요청하면 Command 가 문서를 바꾸고 그 뒤 행을 다시 세운다 ----
+  [[nodiscard]] Qt::ItemFlags flags(const QModelIndex& index) const override {
+    if (!index.isValid()) return Qt::ItemIsDropEnabled;  // 행 사이에 놓기
+    return Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled;
+  }
+  [[nodiscard]] Qt::DropActions supportedDropActions() const override { return Qt::MoveAction | Qt::CopyAction; }
+  [[nodiscard]] Qt::DropActions supportedDragActions() const override { return Qt::MoveAction; }
+  [[nodiscard]] QStringList mimeTypes() const override {
+    return {QString::fromLatin1(kPagesMime), QStringLiteral("text/uri-list")};
+  }
+  [[nodiscard]] QMimeData* mimeData(const QModelIndexList& indexes) const override {
+    std::vector<int> rows;
+    for (const QModelIndex& index : indexes) {
+      if (index.isValid()) rows.push_back(index.row());
+    }
+    std::sort(rows.begin(), rows.end());
+    rows.erase(std::unique(rows.begin(), rows.end()), rows.end());
+    QStringList parts;
+    for (int row : rows) parts.push_back(QString::number(row));
+    auto* data = new QMimeData();
+    data->setData(QString::fromLatin1(kPagesMime), parts.join(QLatin1Char(',')).toUtf8());
+    return data;
+  }
+  [[nodiscard]] bool canDropMimeData(const QMimeData* data, Qt::DropAction, int, int,
+                                     const QModelIndex&) const override {
+    return panel_->editable() && data != nullptr &&
+           (data->hasFormat(QString::fromLatin1(kPagesMime)) || data->hasUrls());
+  }
+  // 항상 false: Qt 가 원래 행을 지우거나 모델을 고치지 않게 한다 (문서 변경은 Command 만)
+  bool dropMimeData(const QMimeData* data, Qt::DropAction action, int row, int column,
+                    const QModelIndex& parent) override {
+    if (!canDropMimeData(data, action, row, column, parent)) return false;
+    // row ≥ 0: 행 사이. row < 0 이고 parent 유효: 그 행 위에 → 그 행 앞. 둘 다 아니면 맨 끝
+    const int drop_row = row >= 0 ? row : (parent.isValid() ? parent.row() : rowCount());
+    if (data->hasFormat(QString::fromLatin1(kPagesMime))) {
+      std::vector<int> pages;
+      for (const QByteArray& part : data->data(QString::fromLatin1(kPagesMime)).split(',')) {
+        bool ok = false;
+        const int page = part.toInt(&ok);
+        if (ok && page >= 0 && page < rowCount()) pages.push_back(page);
+      }
+      if (!pages.empty()) panel_->request_move(pages, drop_row);
+      return false;
+    }
+    for (const QUrl& url : data->urls()) {
+      if (url.isLocalFile()) {
+        panel_->request_insert_file(url.toLocalFile(), drop_row);
+        break;
+      }
+    }
+    return false;
+  }
+
  private:
+  ThumbnailPanel* panel_;
   int rows_ = 0;
 };
 
@@ -68,16 +127,27 @@ namespace {
 // 키보드로 현재 행을 옮길 때만 쪽 이동으로 본다. (포커스·모델 리셋 때 Qt 가 스스로 현재 행을 정하는 경우는 무시)
 class ThumbnailList : public QListView {
  public:
-  using QListView::QListView;
+  explicit ThumbnailList(ThumbnailPanel* panel) : QListView(panel), panel_(panel) {}
   [[nodiscard]] bool keyboard_navigating() const noexcept { return keyboard_; }
 
  protected:
   void keyPressEvent(QKeyEvent* event) override {
+    if (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) {
+      if (panel_->editable()) panel_->request_delete(panel_->selected_pages());
+      event->accept();
+      return;
+    }
     const QScopedValueRollback guard(keyboard_, true);
     QListView::keyPressEvent(event);
   }
+  void contextMenuEvent(QContextMenuEvent* event) override {
+    const QModelIndex index = indexAt(event->pos());
+    panel_->request_context_menu(event->globalPos(), index.isValid() ? index.row() : -1);
+    event->accept();
+  }
 
  private:
+  ThumbnailPanel* panel_;
   bool keyboard_ = false;
 };
 
@@ -104,7 +174,12 @@ class ThumbnailDelegate : public QStyledItemDelegate {
     } else {
       painter->drawImage(QRectF(box), image);  // 이전 폭의 썸네일은 늘려 그린다
     }
-    const bool current = (option.state & QStyle::State_Selected) != 0;
+    const bool current = page == panel_->current_page();
+    if ((option.state & QStyle::State_Selected) != 0) {  // 다중 선택: 연한 배경
+      QColor tint = option.palette.color(QPalette::Highlight);
+      tint.setAlpha(60);
+      painter->fillRect(area, tint);
+    }
     if (current) {
       painter->setPen(QPen(option.palette.color(QPalette::Highlight), 3));
       painter->drawRect(box.adjusted(-2, -2, 1, 1));
@@ -140,8 +215,16 @@ ThumbnailPanel::ThumbnailPanel(QWidget* parent) : QWidget(parent) {
   list_->setUniformItemSizes(false);
   list_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
   list_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-  list_->setSelectionMode(QAbstractItemView::SingleSelection);
+  list_->setSelectionMode(QAbstractItemView::ExtendedSelection);
   list_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  // 끌어 놓기: 모델이 행을 옮기지 않고 move_requested 를 낸다. 끌기 자체는 set_editable 로 켠다
+  list_->setDragDropMode(QAbstractItemView::DragDrop);
+  list_->setDefaultDropAction(Qt::MoveAction);
+  list_->setDragDropOverwriteMode(false);
+  list_->setDropIndicatorShown(true);
+  list_->setDragEnabled(false);
+  list_->setAcceptDrops(true);
+  list_->viewport()->setAcceptDrops(true);
   list_->verticalScrollBar()->setSingleStep(24);
   // 흰 쪽이 배경과 구분되도록 목록 배경을 창 색으로
   QPalette pal = list_->palette();
@@ -214,16 +297,76 @@ void ThumbnailPanel::cancel_all() {
 
 void ThumbnailPanel::set_current_page(int page) {
   if (page < 0 || page >= model_->rowCount()) return;
+  const int previous = current_page_;
   current_page_ = page;
   const QModelIndex index = model_->index(page);
   const QScopedValueRollback guard(syncing_, true);
-  list_->selectionModel()->setCurrentIndex(index, QItemSelectionModel::ClearAndSelect);
+  // 사용자가 여러 쪽을 고른 상태면 선택은 건드리지 않고 현재 쪽 강조만 옮긴다
+  const bool multi = list_->selectionModel()->selectedIndexes().size() > 1;
+  list_->selectionModel()->setCurrentIndex(index, multi ? QItemSelectionModel::NoUpdate
+                                                        : QItemSelectionModel::ClearAndSelect);
   list_->scrollTo(index, QAbstractItemView::EnsureVisible);
+  if (previous >= 0 && previous < model_->rowCount() && previous != page) model_->page_changed(previous);
+  model_->page_changed(page);
 }
 
 void ThumbnailPanel::on_user_activated(const QModelIndex& index) {
   if (!index.isValid()) return;
+  // Ctrl/Shift 클릭은 선택만 바꾼다 (여러 쪽 고르는 중에 화면이 튀지 않게)
+  if (QApplication::keyboardModifiers() & (Qt::ControlModifier | Qt::ShiftModifier)) return;
   emit page_activated(index.row());
+}
+
+void ThumbnailPanel::reset_pages(int current_page) {
+  if (!handle_.valid()) return;
+  cancel_all();
+  ++generation_;  // 밀린 쪽 번호로 오는 늦은 렌더를 버린다
+  cache_.clear();
+  failed_.clear();
+  const int scroll = list_->verticalScrollBar()->value();
+  {
+    const QScopedValueRollback guard(syncing_, true);
+    model_->reset_rows(handle_.info().page_count);
+  }
+  list_->verticalScrollBar()->setValue(scroll);
+  current_page_ = -1;
+  set_current_page(current_page);
+  schedule_request();
+}
+
+void ThumbnailPanel::set_editable(bool editable) {
+  editable_ = editable;
+  list_->setDragEnabled(editable);
+}
+
+std::vector<int> ThumbnailPanel::selected_pages() const {
+  std::vector<int> pages;
+  for (const QModelIndex& index : list_->selectionModel()->selectedIndexes()) pages.push_back(index.row());
+  std::sort(pages.begin(), pages.end());
+  pages.erase(std::unique(pages.begin(), pages.end()), pages.end());
+  return pages;
+}
+
+bool ThumbnailPanel::list_has_focus() const { return list_->hasFocus(); }
+
+void ThumbnailPanel::request_move(const std::vector<int>& pages, int drop_row) {
+  if (editable_) emit move_requested(pages, drop_row);
+}
+
+void ThumbnailPanel::request_insert_file(const QString& path, int drop_row) {
+  if (editable_) emit insert_file_requested(path, drop_row);
+}
+
+void ThumbnailPanel::request_delete(const std::vector<int>& pages) {
+  if (editable_ && !pages.empty()) emit delete_requested(pages);
+}
+
+void ThumbnailPanel::request_context_menu(const QPoint& global_pos, int row) {
+  // 우클릭한 행이 선택 안에 있으면 선택 전체, 아니면 그 행만 대상
+  std::vector<int> pages = selected_pages();
+  if (row >= 0 && std::find(pages.begin(), pages.end(), row) == pages.end()) pages = {row};
+  if (row < 0 && pages.empty()) return;
+  emit context_menu_requested(global_pos, pages);
 }
 
 QImage ThumbnailPanel::thumbnail(int page) const {

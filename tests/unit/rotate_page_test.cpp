@@ -1,6 +1,7 @@
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/edit/rotate_page.h"
 
+#include "../fake_document.h"
 #include "../test_support.h"
 
 #include <gtest/gtest.h>
@@ -12,33 +13,8 @@ namespace onpdf::edit {
 namespace {
 
 using engine::PageSize;
+using onpdf::test::FakeDocument;
 using onpdf::test::testdata;
-
-// 회전하면 가로·세로가 바뀌는 가짜 문서
-class FakeDocument final : public engine::EditableDocument {
- public:
-  explicit FakeDocument(std::vector<PageSize> sizes) : base_(std::move(sizes)), rotation_(base_.size(), 0) {}
-  [[nodiscard]] int page_count() const noexcept override { return static_cast<int>(base_.size()); }
-  [[nodiscard]] Result<PageSize> page_size(int page) const override {
-    if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
-    const PageSize b = base_[static_cast<std::size_t>(page)];
-    return rotation_[static_cast<std::size_t>(page)] % 2 ? PageSize{b.height, b.width} : b;
-  }
-  [[nodiscard]] Result<int> page_rotation(int page) const override {
-    if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
-    return rotation_[static_cast<std::size_t>(page)];
-  }
-  [[nodiscard]] Result<void> set_page_rotation(int page, int q) override {
-    if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
-    rotation_[static_cast<std::size_t>(page)] = q;
-    return {};
-  }
-
- private:
-  [[nodiscard]] bool valid(int page) const { return page >= 0 && page < page_count(); }
-  std::vector<PageSize> base_;
-  std::vector<int> rotation_;
-};
 
 TEST(RotatePageCommand, ExecuteUndoRedoOnFake) {
   FakeDocument doc({{612, 792}, {612, 792}});
@@ -62,6 +38,26 @@ TEST(RotatePageCommand, ExecuteUndoRedoOnFake) {
   RotatePageCommand four(1, 3);
   ASSERT_TRUE(four.execute(doc));
   EXPECT_EQ(*doc.page_rotation(1), 3);  // 0 + 3
+}
+
+// 여러 쪽을 한 실행 취소 단위로 돌린다
+TEST(RotatePageCommand, MultiplePagesExecuteUndoRedo) {
+  FakeDocument doc({{612, 792}, {612, 792}, {612, 792}});
+  ASSERT_TRUE(doc.set_page_rotation(2, 3));
+  RotatePageCommand cmd({2, 0, 2}, 1);  // 정렬·중복 제거 → {0, 2}
+  EXPECT_EQ(cmd.pages(), (std::vector<int>{0, 2}));
+  auto change = cmd.execute(doc);
+  ASSERT_TRUE(change) << change.error().message;
+  EXPECT_EQ(change->pages, (std::vector<int>{0, 2}));
+  EXPECT_EQ(change->new_sizes.size(), 2u);
+  EXPECT_EQ(doc.rotations(), (std::vector<int>{1, 0, 0}));  // 2쪽: 3 + 1 = 0
+  ASSERT_TRUE(cmd.undo(doc));
+  EXPECT_EQ(doc.rotations(), (std::vector<int>{0, 0, 3}));
+  ASSERT_TRUE(cmd.execute(doc));
+  EXPECT_EQ(doc.rotations(), (std::vector<int>{1, 0, 0}));
+  RotatePageCommand bad({0, 7}, 1);  // 한 쪽이 잘못되면 아무것도 바꾸지 않는다
+  EXPECT_FALSE(bad.execute(doc));
+  EXPECT_EQ(doc.rotations(), (std::vector<int>{1, 0, 0}));
 }
 
 TEST(RotatePageCommand, InvalidPageFailsWithoutChange) {
