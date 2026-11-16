@@ -76,10 +76,14 @@ Result<void> apply_order(engine::EditableDocument& doc, const std::vector<int>& 
   return {};
 }
 
-Result<engine::ChangeSet> structural_change(const engine::EditableDocument& doc, int focus_page) {
+Result<engine::ChangeSet> structural_change(const engine::EditableDocument& doc, int focus_page,
+                                            std::vector<int> selected_pages) {
   engine::ChangeSet change;
   change.structural = true;
   const int count = doc.page_count();
+  for (int p : selected_pages) {
+    if (p >= 0 && p < count) change.selected_pages.push_back(p);
+  }
   change.focus_page = count > 0 && focus_page >= 0 ? std::min(focus_page, count - 1) : -1;
   change.all_sizes.reserve(static_cast<std::size_t>(count));
   for (int i = 0; i < count; ++i) {

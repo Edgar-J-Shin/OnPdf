@@ -32,7 +32,8 @@ class UndoStack {
   void set_clean() noexcept { clean_index_ = index_; }
   // 저장 지점과 같은 위치면 깨끗하다. 저장 지점이 버려졌으면(분기·상한) 다시는 깨끗해지지 않는다
   [[nodiscard]] bool is_clean() const noexcept { return clean_index_ && *clean_index_ == index_; }
-  void clear();  // 새 문서: 비우고 깨끗한 상태
+  void clear();       // 새 문서: 비우고 깨끗한 상태
+  void invalidate();  // 기록을 믿을 수 없다(실패한 명령이 문서를 반쯤 바꿈): 비우고, 저장할 때까지 수정됨으로 둔다
 
  private:
   std::vector<std::shared_ptr<Command>> items_;

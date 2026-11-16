@@ -505,10 +505,11 @@ void MainWindow::on_document_changed(const onpdf::engine::ChangeSet& change) {
   if (change.structural) {
     // 쪽 수·순서가 바뀌었다: 뷰·썸네일을 새 쪽 목록으로 다시 세우고(현재 쪽은 새 범위로 클램프), 쪽 번호·목차를 갱신한다
     const int n = session_.handle().info().page_count;
+    page_spin_->setRange(1, std::max(1, n));  // 뷰 재구성이 current_page_changed 로 값을 넣기 전에 범위를 넓힌다
+    page_total_label_->setText(tr("/ %1 쪽").arg(n));
     view_->rebuild_pages(change.focus_page >= 0 ? change.focus_page : std::max(0, view_->current_page()));
     thumbnail_panel_->reset_pages(std::max(0, view_->current_page()));
-    page_spin_->setRange(1, std::max(1, n));
-    page_total_label_->setText(tr("/ %1 쪽").arg(n));
+    thumbnail_panel_->select_pages(change.selected_pages);  // 옮긴·넣은·되살린 쪽을 다시 선택해 연속 조작이 이어진다
     print_prefs_applied_ = false;  // 인쇄 기본값의 쪽 범위는 이전 쪽 수 기준이었다
     load_outline(false);          // 목차 항목의 쪽 번호가 밀렸다 (탭은 바꾸지 않는다)
   } else {

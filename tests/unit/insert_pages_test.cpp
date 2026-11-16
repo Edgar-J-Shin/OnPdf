@@ -27,6 +27,8 @@ TEST(InsertPagesCommand, ExecuteUndoRedoOnFake) {
   EXPECT_TRUE(change->structural);
   EXPECT_EQ(doc.labels(), (std::vector<int>{0, 100, 102, 1}));
   EXPECT_EQ(cmd.inserted_count(), 2);
+  EXPECT_EQ(change->selected_pages, (std::vector<int>{1, 2}));
+  EXPECT_EQ(change->focus_page, 1);
   EXPECT_EQ(doc.snapshot_count(), 1);
   ASSERT_TRUE(cmd.undo(doc));
   EXPECT_EQ(doc.labels(), (std::vector<int>{0, 1}));
@@ -59,14 +61,17 @@ TEST(InsertPagesCommand, WholeSourceAtEndAndErrors) {
   InsertPagesCommand right_pw("locked.pdf", "pw", {}, 0);
   EXPECT_TRUE(right_pw.execute(doc));
   ASSERT_TRUE(right_pw.undo(doc));
+  const int held = doc.snapshot_count();  // right_pw 가 재실행용으로 쥔 소스
   InsertPagesCommand forbidden("noextract.pdf", "", {}, 0);
   auto r3 = forbidden.execute(doc);
   ASSERT_FALSE(r3);
   EXPECT_EQ(r3.error().code, ErrorCode::kPermissionDenied);
+  EXPECT_EQ(doc.snapshot_count(), held);  // 실패한 실행은 열어 둔 소스를 버린다 (리뷰 W2)
   InsertPagesCommand bad_page("src.pdf", "", {5}, 0);
   EXPECT_FALSE(bad_page.execute(doc));
   InsertPagesCommand bad_at("src.pdf", "", {}, 9);
   EXPECT_FALSE(bad_at.execute(doc));
+  EXPECT_EQ(doc.snapshot_count(), held);
   EXPECT_FALSE(bad_at.undo(doc));  // 실행 전 undo
   EXPECT_EQ(doc.labels(), (std::vector<int>{0}));
 }

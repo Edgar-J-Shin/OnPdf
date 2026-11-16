@@ -20,6 +20,7 @@ struct ChangeSet {
   bool structural = false;                          // 쪽 수·순서가 바뀌었다. all_sizes 가 새 문서 전체의 쪽 크기
   std::vector<PageSize> all_sizes;
   int focus_page = -1;                              // 구조 변경 뒤 보여 줄 쪽 (옮긴 블록·삽입 자리·지운 자리). -1 = 현재 쪽 유지
+  std::vector<int> selected_pages;                  // 구조 변경 뒤 썸네일에서 선택할 쪽 (옮긴·넣은·되살린 쪽). 비면 선택 없음
 };
 
 struct EditPermissions {

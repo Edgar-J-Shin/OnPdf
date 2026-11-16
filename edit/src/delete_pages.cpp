@@ -19,7 +19,10 @@ Result<engine::ChangeSet> DeletePagesCommand::execute(engine::EditableDocument& 
   auto snapshot = doc.copy_pages_to_snapshot(pages_);
   if (!snapshot) return std::unexpected(snapshot.error());
   snapshot_ = *snapshot;
-  if (auto deleted = doc.delete_pages(pages_); !deleted) return std::unexpected(deleted.error());
+  if (auto deleted = doc.delete_pages(pages_); !deleted) {
+    discard(doc);  // 실패한 실행은 스택에 오르지 않으므로 여기서 해제한다
+    return std::unexpected(deleted.error());
+  }
   return structural_change(doc, pages_.front());
 }
 
@@ -30,7 +33,7 @@ Result<engine::ChangeSet> DeletePagesCommand::undo(engine::EditableDocument& doc
     auto inserted = doc.insert_from_snapshot(snapshot_, {static_cast<int>(k)}, pages_[k]);
     if (!inserted) return std::unexpected(inserted.error());
   }
-  return structural_change(doc, pages_.front());
+  return structural_change(doc, pages_.front(), pages_);
 }
 
 void DeletePagesCommand::discard(engine::EditableDocument& doc) noexcept {

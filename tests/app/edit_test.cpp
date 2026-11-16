@@ -5,6 +5,7 @@
 #include "main_window.h"
 #include "outline_panel.h"
 #include "onpdf/core/engine/document_handle.h"
+#include "onpdf/edit/command.h"
 #include "onpdf/core/engine/pdfium_worker.h"
 #include "onpdf/core/platform/path.h"
 #include "thumbnail_panel.h"
@@ -405,9 +406,11 @@ class PageOpsTest : public EditTest {
     QModelIndexList indexes;
     for (int p : pages) indexes.push_back(model()->index(p, 0));
     std::unique_ptr<QMimeData> data(model()->mimeData(indexes));
+    const int generation = thumbs()->generation();
     const bool accepted = model()->dropMimeData(data.get(), Qt::MoveAction, row, 0, QModelIndex());
     EXPECT_FALSE(accepted);  // 모델은 행을 직접 옮기지 않는다
-    return wait_idle();
+    // 신호는 드롭 이벤트 밖(다음 턴)에서 나간다 (#27 규칙): 행이 다시 세워질 때까지 기다린다
+    return spin_until([&] { return thumbs()->generation() != generation && idle(); });
   }
   bool landscape(int page) {
     const QSize s = thumbs()->thumb_size(page);
@@ -493,6 +496,49 @@ TEST_F(PageOpsTest, MoveUpAndDownActionsUseCurrentPage) {
   EXPECT_FALSE(window_.edit_controller()->busy());
 }
 
+// 구조 편집 뒤에도 옮긴 블록이 선택으로 남아 "아래로 이동" 을 연속으로 눌러도 블록이 쪼개지지 않는다 (리뷰 W4)
+TEST_F(PageOpsTest, SelectionFollowsMovedBlock) {
+  ASSERT_TRUE(open("mixed-sizes.pdf"));
+  window_.activateWindow();
+  thumbs()->list()->setFocus();
+  QItemSelectionModel* selection = thumbs()->list()->selectionModel();
+  selection->select(model()->index(1, 0), QItemSelectionModel::ClearAndSelect);
+  selection->select(model()->index(2, 0), QItemSelectionModel::Select);
+  ASSERT_EQ(window_.target_pages(), (std::vector<int>{1, 2}));
+  window_.move_down_action()->trigger();
+  ASSERT_TRUE(wait_idle());
+  EXPECT_EQ(thumbs()->selected_pages(), (std::vector<int>{2, 3}));
+  window_.move_down_action()->trigger();
+  ASSERT_TRUE(wait_idle());
+  EXPECT_EQ(thumbs()->selected_pages(), (std::vector<int>{3, 4}));
+  EXPECT_TRUE(landscape(3));  // 원래 1쪽(가로)이 블록 첫 자리에
+  ASSERT_TRUE(window_.edit_controller()->undo());
+  ASSERT_TRUE(wait_idle());
+  EXPECT_EQ(thumbs()->selected_pages(), (std::vector<int>{2, 3}));  // 취소도 원래 자리를 선택
+}
+
+// 명령이 문서를 바꾼 뒤 실패하면(PDFium 은 롤백이 없다) 실제 문서 상태로 화면을 맞추고 수정됨으로 둔다 (리뷰 W5)
+class HalfFailingDelete final : public edit::Command {
+ public:
+  [[nodiscard]] std::string_view id() const noexcept override { return "half_failing"; }
+  Result<engine::ChangeSet> execute(engine::EditableDocument& doc) override {
+    if (auto r = doc.delete_pages({0}); !r) return std::unexpected(r.error());
+    return make_error(ErrorCode::kInvalidState, "simulated failure after change");
+  }
+  Result<engine::ChangeSet> undo(engine::EditableDocument&) override { return make_error(ErrorCode::kInvalidState, "n/a"); }
+};
+
+TEST_F(PageOpsTest, FailedCommandResyncsDocumentState) {
+  open_copy("bookmarks.pdf");
+  ASSERT_TRUE(window_.edit_controller()->run(std::make_shared<HalfFailingDelete>()));
+  ASSERT_TRUE(spin_until([&] { return idle() && window_.document_view()->page_count() == 9; }));
+  EXPECT_EQ(rows(), 9);
+  EXPECT_EQ(spin()->maximum(), 9);
+  EXPECT_TRUE(window_.isWindowModified());               // 문서는 바뀌었다
+  EXPECT_FALSE(window_.edit_controller()->can_undo());   // 기록은 믿을 수 없어 버렸다
+  EXPECT_TRUE(window_.save_action()->isEnabled());
+}
+
 TEST_F(PageOpsTest, InsertFromFileAndUndo) {
   open_copy("simple.pdf");
   ASSERT_TRUE(window_.insert_pages_from(QString::fromStdString(onpdf::path_to_utf8(testdata("korean-embedded.pdf"))), 1));
@@ -525,6 +571,10 @@ TEST_F(PageOpsTest, InsertingEncryptedSourceAsksPassword) {
   ASSERT_TRUE(window_.insert_pages_from(QString::fromStdString(onpdf::path_to_utf8(testdata("encrypted-aes256.pdf"))), 2));
   ASSERT_TRUE(spin_until([&] { return asked && idle() && window_.document_view()->page_count() == 4; }));
   EXPECT_EQ(rows(), 4);
+  // 끝에 넣었으니 화면은 3번째 쪽(첫 삽입 쪽), 스핀도 같은 값이어야 한다 (리뷰 W3: 범위보다 값이 먼저 들어가면 2 에 묶인다)
+  EXPECT_EQ(window_.document_view()->current_page(), 2);
+  EXPECT_EQ(spin()->maximum(), 4);
+  EXPECT_EQ(spin()->value(), 3);
 }
 
 TEST_F(PageOpsTest, SourceForbiddingExtractionIsExplained) {

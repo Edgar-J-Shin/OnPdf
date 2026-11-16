@@ -48,6 +48,9 @@ class EditController : public QObject {
   void finish(Op op, std::shared_ptr<edit::Command> command, int generation, Result<engine::ChangeSet> result);
   // 스택에서 밀려난 Command 의 discard 를 워커에서 부른다 (문서가 보관한 스냅샷 해제). busy 와 무관, 결과 무시
   void discard_on_worker(std::vector<std::shared_ptr<edit::Command>> evicted);
+  // 실패한 명령 뒤: 워커에서 실제 쪽 수·크기를 읽어 문서 정보와 다르면 맞추고(document_changed) 스택을 무효화한다.
+  // 쪽 단위로 진행되는 실행 취소가 중간에 실패하면 문서가 반쯤 바뀐 채 남을 수 있다 (PDFium 은 롤백이 없다)
+  void resync_after_failure();
 
   UiDispatcher& dispatcher_;
   engine::DocumentHandle handle_;

@@ -25,6 +25,7 @@ namespace onpdf::edit {
 [[nodiscard]] Result<void> apply_order(engine::EditableDocument& doc, const std::vector<int>& target);
 
 // 쪽 수·순서가 바뀐 뒤의 ChangeSet (all_sizes 에 전체 쪽 크기). focus_page 는 새 범위로 클램프한다
-[[nodiscard]] Result<engine::ChangeSet> structural_change(const engine::EditableDocument& doc, int focus_page = -1);
+[[nodiscard]] Result<engine::ChangeSet> structural_change(const engine::EditableDocument& doc, int focus_page = -1,
+                                                        std::vector<int> selected_pages = {});
 
 }  // namespace onpdf::edit

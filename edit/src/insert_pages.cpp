@@ -19,23 +19,28 @@ Result<engine::ChangeSet> InsertPagesCommand::execute(engine::EditableDocument& 
     if (!opened) return std::unexpected(opened.error());
     snapshot_ = *opened;
   }
+  // 아래 실패는 다시 실행해도 같으므로(권한·범위) 소스를 바로 버린다. 실패한 실행은 스택에 오르지 않는다
+  const auto fail = [&](Error error) -> Result<engine::ChangeSet> {
+    discard(doc);
+    return std::unexpected(std::move(error));
+  };
   auto info = doc.snapshot_info(snapshot_);
-  if (!info) return std::unexpected(info.error());
-  if (!info->permissions.extract) return make_error(ErrorCode::kPermissionDenied, "source document forbids extraction");
-  if (info->page_count <= 0) return make_error(ErrorCode::kInvalidArgument, "source document has no pages");
+  if (!info) return fail(info.error());
+  if (!info->permissions.extract) return fail(Error{ErrorCode::kPermissionDenied, "source document forbids extraction"});
+  if (info->page_count <= 0) return fail(Error{ErrorCode::kInvalidArgument, "source document has no pages"});
   for (int p : source_pages_) {
     if (p < 0 || p >= info->page_count) {
-      return make_error(ErrorCode::kInvalidArgument, "source page out of range: " + std::to_string(p));
+      return fail(Error{ErrorCode::kInvalidArgument, "source page out of range: " + std::to_string(p)});
     }
   }
   if (at_ < 0 || at_ > doc.page_count()) {
-    return make_error(ErrorCode::kInvalidArgument, "insert position out of range: " + std::to_string(at_));
+    return fail(Error{ErrorCode::kInvalidArgument, "insert position out of range: " + std::to_string(at_)});
   }
-  if (auto inserted = doc.insert_from_snapshot(snapshot_, source_pages_, at_); !inserted) {
-    return std::unexpected(inserted.error());
-  }
+  if (auto inserted = doc.insert_from_snapshot(snapshot_, source_pages_, at_); !inserted) return fail(inserted.error());
   inserted_ = source_pages_.empty() ? info->page_count : static_cast<int>(source_pages_.size());
-  return structural_change(doc, at_);
+  std::vector<int> block;
+  for (int i = 0; i < inserted_; ++i) block.push_back(at_ + i);
+  return structural_change(doc, at_, std::move(block));
 }
 
 Result<engine::ChangeSet> InsertPagesCommand::undo(engine::EditableDocument& doc) {

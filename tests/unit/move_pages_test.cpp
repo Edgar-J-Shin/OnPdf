@@ -43,7 +43,11 @@ TEST(MovePagesCommand, ExecuteUndoRedoOnFake) {
   ASSERT_TRUE(change) << change.error().message;
   EXPECT_TRUE(change->structural);
   EXPECT_EQ(doc.labels(), (std::vector<int>{1, 4, 0, 2, 3}));
-  ASSERT_TRUE(cmd.undo(doc));
+  EXPECT_EQ(change->selected_pages, (std::vector<int>{0, 1}));  // 옮긴 블록
+  EXPECT_EQ(change->focus_page, 0);
+  auto undone = cmd.undo(doc);
+  ASSERT_TRUE(undone);
+  EXPECT_EQ(undone->selected_pages, (std::vector<int>{1, 4}));  // 원래 자리
   EXPECT_EQ(doc.labels(), (std::vector<int>{0, 1, 2, 3, 4}));
   ASSERT_TRUE(cmd.execute(doc));
   EXPECT_EQ(doc.labels(), (std::vector<int>{1, 4, 0, 2, 3}));

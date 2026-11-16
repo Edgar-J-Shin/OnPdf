@@ -114,5 +114,18 @@ TEST(UndoStack, PushReturnsEvictedCommands) {
   EXPECT_TRUE(stack.push(nullptr).empty());
 }
 
+// invalidate: 기록을 버리고 저장할 때까지 수정됨 (clear 와 달리 깨끗해지지 않는다)
+TEST(UndoStack, InvalidateDropsHistoryAndStaysDirty) {
+  UndoStack stack;
+  stack.push(cmd(1));
+  stack.set_clean();
+  stack.invalidate();
+  EXPECT_FALSE(stack.can_undo());
+  EXPECT_FALSE(stack.can_redo());
+  EXPECT_FALSE(stack.is_clean());
+  stack.set_clean();
+  EXPECT_TRUE(stack.is_clean());
+}
+
 }  // namespace
 }  // namespace onpdf::edit

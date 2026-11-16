@@ -52,4 +52,10 @@ void UndoStack::clear() {
   clean_index_ = 0;
 }
 
+void UndoStack::invalidate() {
+  items_.clear();
+  index_ = 0;
+  clean_index_.reset();
+}
+
 }  // namespace onpdf::edit

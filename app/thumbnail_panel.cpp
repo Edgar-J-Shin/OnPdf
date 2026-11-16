@@ -6,6 +6,7 @@
 #include <QAbstractListModel>
 #include <QApplication>
 #include <QContextMenuEvent>
+#include <QItemSelection>
 #include <QKeyEvent>
 #include <QListView>
 #include <QMimeData>
@@ -349,12 +350,32 @@ std::vector<int> ThumbnailPanel::selected_pages() const {
 
 bool ThumbnailPanel::list_has_focus() const { return list_->hasFocus(); }
 
+void ThumbnailPanel::select_pages(const std::vector<int>& pages) {
+  if (pages.empty()) return;
+  const QScopedValueRollback guard(syncing_, true);
+  QItemSelection selection;
+  for (int page : pages) {
+    if (page < 0 || page >= model_->rowCount()) continue;
+    const QModelIndex index = model_->index(page);
+    selection.select(index, index);
+  }
+  list_->selectionModel()->select(selection, QItemSelectionModel::ClearAndSelect);
+}
+
+// 드롭 이벤트 안에서 바로 신호를 내면 수신자의 대화상자(서명 경고 등)가 드롭 안의 중첩 모달이 되어 Finder/OLE 를
+// 멈춘다 (#27 과 같은 이유) → 다음 이벤트 턴에 낸다
 void ThumbnailPanel::request_move(const std::vector<int>& pages, int drop_row) {
-  if (editable_) emit move_requested(pages, drop_row);
+  if (!editable_) return;
+  QTimer::singleShot(0, this, [this, pages, drop_row] {
+    if (editable_) emit move_requested(pages, drop_row);
+  });
 }
 
 void ThumbnailPanel::request_insert_file(const QString& path, int drop_row) {
-  if (editable_) emit insert_file_requested(path, drop_row);
+  if (!editable_) return;
+  QTimer::singleShot(0, this, [this, path, drop_row] {
+    if (editable_) emit insert_file_requested(path, drop_row);
+  });
 }
 
 void ThumbnailPanel::request_delete(const std::vector<int>& pages) {

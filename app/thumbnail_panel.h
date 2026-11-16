@@ -42,6 +42,7 @@ class ThumbnailPanel : public QWidget {
   void set_editable(bool editable);
   [[nodiscard]] bool editable() const noexcept { return editable_; }
   [[nodiscard]] std::vector<int> selected_pages() const;  // 오름차순
+  void select_pages(const std::vector<int>& pages);       // 선택을 이 쪽들로 바꾼다 (비면 그대로)
   [[nodiscard]] bool list_has_focus() const;
   // 내부용(모델·목록이 부른다): 요청을 신호로 바꾼다. 문서는 Command 가 바꾸고, 행은 document_changed 뒤에 갱신한다
   void request_move(const std::vector<int>& pages, int drop_row);
