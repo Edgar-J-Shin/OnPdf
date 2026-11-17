@@ -1,12 +1,14 @@
 #pragma once
 
 #include "document_session.h"
+#include "document_view.h"
 #include "edit_controller.h"
 #include "print_job.h"
 #include "onpdf/core/engine/pdfium_worker.h"
 #include "onpdf/core/view/search.h"
 #include "onpdf/core/view/text_index.h"
 
+#include <QColor>
 #include <QMainWindow>
 #include <QString>
 
@@ -19,6 +21,9 @@
 class QCloseEvent;
 class QLabel;
 class QPrinter;
+class QToolBar;
+class QActionGroup;
+class QToolButton;
 class QProgressDialog;
 class QSpinBox;
 class QSplitter;
@@ -58,6 +63,10 @@ class MainWindow : public QMainWindow {
   [[nodiscard]] QAction* redo_action() const noexcept { return redo_action_; }
   [[nodiscard]] QAction* rotate_cw_action() const noexcept { return rotate_cw_action_; }
   [[nodiscard]] QAction* delete_pages_action() const noexcept { return delete_pages_action_; }
+  [[nodiscard]] QAction* tool_action(AnnotationTool tool) const;
+  [[nodiscard]] QAction* delete_annotation_action() const noexcept { return delete_annotation_action_; }
+  [[nodiscard]] QToolBar* annotation_toolbar() const noexcept { return annotation_toolbar_; }
+  [[nodiscard]] engine::Color annotation_color() const noexcept { return annotation_color_; }
   [[nodiscard]] QAction* move_up_action() const noexcept { return move_up_action_; }
   [[nodiscard]] QAction* move_down_action() const noexcept { return move_down_action_; }
   [[nodiscard]] QAction* insert_pages_action() const noexcept { return insert_pages_action_; }
@@ -73,6 +82,12 @@ class MainWindow : public QMainWindow {
   bool insert_pages_from(const QString& path, int at, const QString& password = {});
   // 쪽 메뉴·단축키의 대상: 썸네일 목록에 포커스와 선택이 있으면 선택, 아니면 현재 쪽
   [[nodiscard]] std::vector<int> target_pages() const;
+  // ---- 주석 (툴바·메뉴·뷰 신호와 같은 경로, 테스트용으로도 쓴다). 시작하면 true ----
+  void set_annotation_color(engine::Color color);  // 새 주석 색. 주석이 선택돼 있으면 그 주석의 색을 바꾼다
+  bool add_markup_from_selection(engine::AnnotationKind kind);
+  bool delete_selected_annotation();
+  // 메모 생성: contents 가 주어지면 대화상자 없이 만든다 (테스트용)
+  bool add_note(int page, onpdf::Point pt, const QString& contents);
   // 이 경로로 저장한다 (대화상자 없이 — 다른 이름으로 저장의 뒷부분, 테스트용). 시작하면 true
   bool save_to(const QString& path);
   // 대화상자 없이 이 프린터 설정으로 인쇄를 시작한다 (파일 > 인쇄 의 뒷부분, 테스트용). 시작하면 true
@@ -117,6 +132,14 @@ class MainWindow : public QMainWindow {
   void continue_open(const QString& path);
   [[nodiscard]] QString command_label(std::string_view id) const;
   void on_edit_failed(onpdf::ErrorCode code, const QString& message);
+  void build_annotation_ui();
+  void on_markup_requested(onpdf::engine::AnnotationKind kind, const MarkupItems& items);
+  void on_note_requested(int page, onpdf::Point pt);
+  void on_ink_requested(int page, const std::vector<onpdf::Point>& points, onpdf::Rect bbox);
+  void on_annotation_selected(bool has, const onpdf::engine::AnnotationInfo& info);
+  void on_annotation_edit_requested(int page, const onpdf::engine::AnnotationInfo& info);
+  [[nodiscard]] std::string annotation_author() const;
+  void update_color_icon();
   void on_insert_pages_action();
   void move_selection(int delta);  // 위로(-1)·아래로(+1) 이동
   bool warn_signature_once();      // 서명 문서의 첫 구조 편집: 계속하면 true
@@ -166,6 +189,13 @@ class MainWindow : public QMainWindow {
   QAction* move_up_action_ = nullptr;
   QAction* move_down_action_ = nullptr;
   QAction* insert_pages_action_ = nullptr;
+  QToolBar* annotation_toolbar_ = nullptr;
+  QActionGroup* tool_group_ = nullptr;
+  QAction* tool_actions_[6] = {};  // AnnotationTool 순서
+  QToolButton* color_button_ = nullptr;
+  QAction* delete_annotation_action_ = nullptr;
+  QAction* markup_selection_actions_[3] = {};  // 하이라이트·밑줄·취소선 (선택 영역)
+  engine::Color annotation_color_{255, 255, 0, 255};
   struct PendingInsert {
     QString path;
     int at = 0;

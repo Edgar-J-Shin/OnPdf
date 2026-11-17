@@ -51,6 +51,16 @@ class PdfiumDocument final : public EditableDocument {
   [[nodiscard]] Result<void> insert_from_snapshot(SnapshotId id, const std::vector<int>& src_pages,
                                                   int at) override;
   void drop_snapshot(SnapshotId id) noexcept override;
+  // ---- 주석 (EditableDocument) ----
+  [[nodiscard]] Result<std::vector<AnnotationInfo>> annotations(int page_index) const override;
+  [[nodiscard]] Result<std::string> add_annotation(int page_index, const AnnotationSpec& spec) override;
+  [[nodiscard]] Result<AnnotationSnapshot> snapshot_annotation(int page_index, std::string_view id) override;
+  [[nodiscard]] Result<void> remove_annotation(int page_index, std::string_view id) override;
+  [[nodiscard]] Result<void> restore_annotation(int page_index, const AnnotationSnapshot& snapshot) override;
+  [[nodiscard]] Result<void> set_annotation_color(int page_index, std::string_view id, Color color,
+                                                  const std::vector<unsigned short>& ap_normal) override;
+  [[nodiscard]] Result<void> set_annotation_contents(int page_index, std::string_view id,
+                                                     std::string_view utf8) override;
   [[nodiscard]] int snapshot_count() const noexcept { return static_cast<int>(snapshots_.size()); }  // 테스트용
 
   // ---- 저장 ----

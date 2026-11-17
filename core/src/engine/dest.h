@@ -10,6 +10,7 @@
 #include <fpdf_doc.h>
 #include <fpdfview.h>
 
+#include <array>
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -27,6 +28,12 @@ struct PageSpace {
   [[nodiscard]] Point to_pt(double x, double y) const;
   // 사용자 좌표 사각형 → 쪽 포인트 bbox (회전되면 꼭짓점이 뒤바뀌므로 4점 변환)
   [[nodiscard]] Rect to_rect(double left, double right, double bottom, double top) const;
+  // 쪽 포인트 → 사용자 좌표 (FPDF_DeviceToPage, 같은 ×1000 장치 공간이라 to_pt 와 정확히 왕복한다)
+  [[nodiscard]] Point to_user(Point pt) const;
+  // 쪽 포인트 사각형 → 사용자 좌표 {left, bottom, right, top} (4 꼭짓점 변환 뒤 bbox)
+  [[nodiscard]] std::array<double, 4> user_rect_of(const Rect& pt) const;
+  // 쪽 포인트 사각형 → QuadPoints (Acrobat 순서: 좌상·우상·좌하·우하, 사용자 좌표)
+  [[nodiscard]] std::array<float, 8> quad_of(const Rect& pt) const;
 };
 
 // 대상 → link.page + link.location(쪽 포인트). 위치 변환을 위해 대상 쪽을 연다 (링크: 쪽당 수가 적다)

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <map>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -46,6 +47,19 @@ class FakeDocument final : public engine::EditableDocument {
   void add_file(const std::filesystem::path& path, FakeFile file) { files_[path_to_utf8(path)] = std::move(file); }
   [[nodiscard]] int snapshot_count() const noexcept { return static_cast<int>(snapshots_.size()); }
   int move_calls = 0;  // move_pages 호출 수 (apply_order 효율 확인용)
+  // ---- 주석 (가짜: 쪽 포인트 == 사용자 좌표로 둔다) ----
+  struct FakeAnnot {
+    engine::AnnotationSnapshot snap;
+    onpdf::Rect rect;  // 쪽 포인트
+  };
+  int fail_add_on_page = -1;  // 이 쪽에 add_annotation 을 하면 실패 (보상 삭제 테스트)
+  [[nodiscard]] int annotation_count(int page) const { const auto it = annots_.find(page); return it == annots_.end() ? 0 : static_cast<int>(it->second.size()); }
+  [[nodiscard]] const FakeAnnot* annotation(int page, std::string_view id) const {
+    const auto it = annots_.find(page);
+    if (it == annots_.end()) return nullptr;
+    for (const auto& a : it->second) if (a.snap.id == id) return &a;
+    return nullptr;
+  }
 
   // ---- EditableDocument ----
   [[nodiscard]] int page_count() const noexcept override { return static_cast<int>(pages_.size()); }
@@ -128,8 +142,108 @@ class FakeDocument final : public engine::EditableDocument {
   }
   void drop_snapshot(engine::SnapshotId id) noexcept override { snapshots_.erase(id); }
 
+  [[nodiscard]] Result<std::vector<engine::AnnotationInfo>> annotations(int page) const override {
+    if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
+    std::vector<engine::AnnotationInfo> out;
+    const auto it = annots_.find(page);
+    if (it == annots_.end()) return out;
+    for (std::size_t i = 0; i < it->second.size(); ++i) {
+      const FakeAnnot& a = it->second[i];
+      engine::AnnotationInfo info;
+      info.id = a.snap.id.empty() ? "#" + std::to_string(i) : a.snap.id;
+      info.kind = a.snap.kind;
+      info.rect = a.rect;
+      info.color = a.snap.color;
+      info.has_color = a.snap.ap_normal.empty();
+      info.contents = a.snap.contents;
+      info.author = a.snap.author;
+      info.flags = a.snap.flags;
+      info.editable = a.snap.kind != engine::AnnotationKind::kLink && a.snap.kind != engine::AnnotationKind::kOther;
+      out.push_back(std::move(info));
+    }
+    return out;
+  }
+  [[nodiscard]] Result<std::string> add_annotation(int page, const engine::AnnotationSpec& spec) override {
+    if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
+    if (page == fail_add_on_page) return make_error(ErrorCode::kInvalidState, "injected failure");
+    FakeAnnot a;
+    a.snap.kind = spec.kind;
+    a.snap.id = spec.id.empty() ? "fake-" + std::to_string(next_nm_++) : spec.id;
+    a.snap.color = spec.color;
+    a.snap.has_color = true;
+    a.snap.flags = spec.flags;
+    a.snap.contents = spec.contents;
+    a.snap.author = spec.author;
+    a.rect = spec.rect;
+    for (const auto& q : spec.quads) {
+      if (a.rect.empty()) { a.rect = q; continue; }
+      const double x0 = std::min(a.rect.x, q.x), y0 = std::min(a.rect.y, q.y);
+      const double x1 = std::max(a.rect.right(), q.right()), y1 = std::max(a.rect.bottom(), q.bottom());
+      a.rect = {x0, y0, x1 - x0, y1 - y0};
+    }
+    a.snap.rect = {a.rect.x, a.rect.y, a.rect.right(), a.rect.bottom()};
+    annots_[page].push_back(std::move(a));
+    return annots_[page].back().snap.id;
+  }
+  [[nodiscard]] Result<engine::AnnotationSnapshot> snapshot_annotation(int page, std::string_view id) override {
+    FakeAnnot* a = find_mutable(page, id);
+    if (a == nullptr) return make_error(ErrorCode::kInvalidArgument, "annotation not found");
+    if (a->snap.id.empty()) a->snap.id = "fake-" + std::to_string(next_nm_++);
+    return a->snap;
+  }
+  [[nodiscard]] Result<void> remove_annotation(int page, std::string_view id) override {
+    auto& list = annots_[page];
+    for (auto it = list.begin(); it != list.end(); ++it) {
+      if (matches(*it, static_cast<int>(it - list.begin()), id)) {
+        list.erase(it);
+        return {};
+      }
+    }
+    return make_error(ErrorCode::kInvalidArgument, "annotation not found");
+  }
+  [[nodiscard]] Result<void> restore_annotation(int page, const engine::AnnotationSnapshot& snap) override {
+    if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
+    FakeAnnot a;
+    a.snap = snap;
+    a.rect = {snap.rect[0], snap.rect[1], snap.rect[2] - snap.rect[0], snap.rect[3] - snap.rect[1]};
+    annots_[page].push_back(std::move(a));
+    return {};
+  }
+  [[nodiscard]] Result<void> set_annotation_color(int page, std::string_view id, engine::Color color,
+                                                  const std::vector<unsigned short>& ap_normal) override {
+    FakeAnnot* a = find_mutable(page, id);
+    if (a == nullptr) return make_error(ErrorCode::kInvalidArgument, "annotation not found");
+    if (!ap_normal.empty()) {
+      a->snap.ap_normal = ap_normal;  // 모양 복원 (색은 AP 가 결정)
+      return {};
+    }
+    a->snap.ap_normal.clear();
+    a->snap.color = color;
+    return {};
+  }
+  [[nodiscard]] Result<void> set_annotation_contents(int page, std::string_view id, std::string_view utf8) override {
+    FakeAnnot* a = find_mutable(page, id);
+    if (a == nullptr) return make_error(ErrorCode::kInvalidArgument, "annotation not found");
+    a->snap.contents = std::string(utf8);
+    return {};
+  }
+  // 테스트용: 렌더를 흉내 내 AP 를 만든다 (색 변경이 AP 를 지우는지 확인)
+  void fake_render(int page) {
+    for (auto& a : annots_[page]) if (a.snap.ap_normal.empty()) a.snap.ap_normal = {'A', 'P'};
+  }
+
  private:
   [[nodiscard]] bool valid(int page) const { return page >= 0 && page < page_count(); }
+  static bool matches(const FakeAnnot& a, int index, std::string_view id) {
+    if (!id.empty() && id.front() == '#') return std::to_string(index) == id.substr(1);
+    return a.snap.id == id;
+  }
+  FakeAnnot* find_mutable(int page, std::string_view id) {
+    auto it = annots_.find(page);
+    if (it == annots_.end()) return nullptr;
+    for (std::size_t i = 0; i < it->second.size(); ++i) if (matches(it->second[i], static_cast<int>(i), id)) return &it->second[i];
+    return nullptr;
+  }
   static Result<void> check_list(const std::vector<int>& pages, int count) {
     if (pages.empty()) return make_error(ErrorCode::kInvalidArgument, "empty");
     for (std::size_t i = 0; i < pages.size(); ++i) {
@@ -142,6 +256,8 @@ class FakeDocument final : public engine::EditableDocument {
   std::map<engine::SnapshotId, FakeFile> snapshots_;
   std::map<std::string, FakeFile> files_;
   engine::SnapshotId next_ = 1;
+  std::map<int, std::vector<FakeAnnot>> annots_;
+  int next_nm_ = 1;
 };
 
 }  // namespace onpdf::test

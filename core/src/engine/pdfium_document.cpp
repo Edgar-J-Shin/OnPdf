@@ -5,6 +5,7 @@
 #include "onpdf/core/engine/text_page.h"
 #include "onpdf/core/platform/path.h"
 
+#include <fpdf_annot.h>
 #include <fpdf_doc.h>
 #include <fpdf_signature.h>
 #include <fpdf_save.h>
@@ -14,10 +15,13 @@
 
 #include <algorithm>
 #include <cassert>
+#include <charconv>
 #include <cmath>
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <ctime>
+#include <random>
 #include <string>
 #include <unordered_set>
 
@@ -230,6 +234,372 @@ Result<void> PdfiumDocument::insert_from_snapshot(SnapshotId id, const std::vect
 void PdfiumDocument::drop_snapshot(SnapshotId id) noexcept {
   PdfiumLibrary::assert_current_thread();
   snapshots_.erase(id);
+}
+
+// ---------------------------------------------------------------- 주석
+
+namespace {
+
+FPDF_ANNOTATION_SUBTYPE subtype_of(AnnotationKind kind) {
+  switch (kind) {
+    case AnnotationKind::kHighlight: return FPDF_ANNOT_HIGHLIGHT;
+    case AnnotationKind::kUnderline: return FPDF_ANNOT_UNDERLINE;
+    case AnnotationKind::kStrikeOut: return FPDF_ANNOT_STRIKEOUT;
+    case AnnotationKind::kSquiggly: return FPDF_ANNOT_SQUIGGLY;
+    case AnnotationKind::kText: return FPDF_ANNOT_TEXT;
+    case AnnotationKind::kInk: return FPDF_ANNOT_INK;
+    case AnnotationKind::kSquare: return FPDF_ANNOT_SQUARE;
+    case AnnotationKind::kCircle: return FPDF_ANNOT_CIRCLE;
+    case AnnotationKind::kLink: return FPDF_ANNOT_LINK;
+    case AnnotationKind::kOther: break;
+  }
+  return FPDF_ANNOT_UNKNOWN;
+}
+
+AnnotationKind kind_of(FPDF_ANNOTATION_SUBTYPE subtype) {
+  switch (subtype) {
+    case FPDF_ANNOT_HIGHLIGHT: return AnnotationKind::kHighlight;
+    case FPDF_ANNOT_UNDERLINE: return AnnotationKind::kUnderline;
+    case FPDF_ANNOT_STRIKEOUT: return AnnotationKind::kStrikeOut;
+    case FPDF_ANNOT_SQUIGGLY: return AnnotationKind::kSquiggly;
+    case FPDF_ANNOT_TEXT: return AnnotationKind::kText;
+    case FPDF_ANNOT_INK: return AnnotationKind::kInk;
+    case FPDF_ANNOT_SQUARE: return AnnotationKind::kSquare;
+    case FPDF_ANNOT_CIRCLE: return AnnotationKind::kCircle;
+    case FPDF_ANNOT_LINK: return AnnotationKind::kLink;
+    default: return AnnotationKind::kOther;
+  }
+}
+
+bool is_markup(AnnotationKind kind) {
+  return kind == AnnotationKind::kHighlight || kind == AnnotationKind::kUnderline ||
+         kind == AnnotationKind::kStrikeOut || kind == AnnotationKind::kSquiggly;
+}
+
+bool is_editable_kind(AnnotationKind kind) {
+  return is_markup(kind) || kind == AnnotationKind::kText || kind == AnnotationKind::kInk ||
+         kind == AnnotationKind::kSquare || kind == AnnotationKind::kCircle;
+}
+
+// 문자열 키 읽기 (UTF-16LE → UTF-8). 없으면 빈 문자열
+std::string annot_string(FPDF_ANNOTATION annot, const char* key) {
+  const unsigned long bytes = FPDFAnnot_GetStringValue(annot, key, nullptr, 0);
+  if (bytes <= 2) return {};
+  std::vector<unsigned char> buf(bytes);
+  FPDFAnnot_GetStringValue(annot, key, reinterpret_cast<FPDF_WCHAR*>(buf.data()), bytes);
+  return detail::utf16le_to_utf8(buf.data(), buf.size());
+}
+
+bool set_annot_string(FPDF_ANNOTATION annot, const char* key, const std::string& utf8) {
+  const std::vector<unsigned short> wide = detail::to_wide(utf8);
+  return FPDFAnnot_SetStringValue(annot, key, wide.data()) != 0;
+}
+
+// Normal 모양 스트림 내용 (UTF-16 코드 단위 그대로). 없으면 빈 벡터
+std::vector<unsigned short> annot_ap(FPDF_ANNOTATION annot) {
+  const unsigned long bytes = FPDFAnnot_GetAP(annot, FPDF_ANNOT_APPEARANCEMODE_NORMAL, nullptr, 0);
+  if (bytes <= 2) return {};
+  std::vector<unsigned short> buf(bytes / 2);
+  FPDFAnnot_GetAP(annot, FPDF_ANNOT_APPEARANCEMODE_NORMAL, buf.data(), bytes);
+  while (!buf.empty() && buf.back() == 0) buf.pop_back();
+  return buf;
+}
+
+// PDF 날짜 문자열 (UTC, "D:YYYYMMDDHHmmSSZ"). std::gmtime 은 재진입 불가지만 워커 스레드에서만 부른다
+std::string pdf_date_now() {
+  const std::time_t now = std::time(nullptr);
+  const std::tm* utc = std::gmtime(&now);
+  if (utc == nullptr) return {};
+  char buf[32];
+  std::strftime(buf, sizeof buf, "D:%Y%m%d%H%M%SZ", utc);
+  return buf;
+}
+
+std::string new_nm() {
+  std::random_device rd;
+  const std::uint64_t v = (static_cast<std::uint64_t>(rd()) << 32) ^ rd();
+  char buf[32];
+  std::snprintf(buf, sizeof buf, "onpdf-%016llx", static_cast<unsigned long long>(v));
+  return buf;
+}
+
+struct FoundAnnot {
+  ScopedAnnotation annot;
+  int index = -1;
+};
+
+// id 로 주석 찾기: "#<index>" 또는 /NM
+Result<FoundAnnot> find_annot(FPDF_PAGE page, std::string_view id) {
+  const int count = FPDFPage_GetAnnotCount(page);
+  if (!id.empty() && id.front() == '#') {
+    int index = -1;
+    const auto digits = id.substr(1);
+    if (std::from_chars(digits.data(), digits.data() + digits.size(), index).ec == std::errc{} && index >= 0 &&
+        index < count) {
+      ScopedAnnotation annot(FPDFPage_GetAnnot(page, index));
+      if (annot) return FoundAnnot{std::move(annot), index};
+    }
+    return make_error(ErrorCode::kInvalidArgument, "annotation not found: " + std::string(id));
+  }
+  for (int i = 0; i < count; ++i) {
+    ScopedAnnotation annot(FPDFPage_GetAnnot(page, i));
+    if (annot && annot_string(annot.get(), "NM") == id) return FoundAnnot{std::move(annot), i};
+  }
+  return make_error(ErrorCode::kInvalidArgument, "annotation not found: " + std::string(id));
+}
+
+// NM 이 없으면 부여한다. 돌려주는 값이 그 뒤의 id
+Result<std::string> ensure_nm(FPDF_ANNOTATION annot) {
+  std::string nm = annot_string(annot, "NM");
+  if (!nm.empty()) return nm;
+  nm = new_nm();
+  if (!set_annot_string(annot, "NM", nm)) return make_error(ErrorCode::kInvalidState, "cannot set /NM");
+  return nm;
+}
+
+bool fill_color(FPDF_ANNOTATION annot, Color& color) {
+  unsigned r = 0, g = 0, b = 0, a = 255;
+  if (!FPDFAnnot_GetColor(annot, FPDFANNOT_COLORTYPE_Color, &r, &g, &b, &a)) return false;
+  color = {static_cast<std::uint8_t>(r), static_cast<std::uint8_t>(g), static_cast<std::uint8_t>(b),
+           static_cast<std::uint8_t>(a)};
+  return true;
+}
+
+}  // namespace
+
+Result<std::vector<AnnotationInfo>> PdfiumDocument::annotations(int page_index) const {
+  PdfiumLibrary::assert_current_thread();
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  const detail::PageSpace space = detail::PageSpace::of(page->get());
+  std::vector<AnnotationInfo> out;
+  const int count = std::max(0, FPDFPage_GetAnnotCount(page->get()));
+  out.reserve(static_cast<std::size_t>(count));
+  for (int i = 0; i < count; ++i) {
+    ScopedAnnotation annot(FPDFPage_GetAnnot(page->get(), i));
+    if (!annot) continue;
+    AnnotationInfo info;
+    info.kind = kind_of(FPDFAnnot_GetSubtype(annot.get()));
+    info.id = annot_string(annot.get(), "NM");
+    if (info.id.empty()) info.id = "#" + std::to_string(i);
+    FS_RECTF rect{};
+    if (FPDFAnnot_GetRect(annot.get(), &rect)) info.rect = space.to_rect(rect.left, rect.right, rect.bottom, rect.top);
+    info.has_color = fill_color(annot.get(), info.color);
+    info.contents = annot_string(annot.get(), "Contents");
+    info.author = annot_string(annot.get(), "T");
+    info.modified = annot_string(annot.get(), "M");
+    info.flags = FPDFAnnot_GetFlags(annot.get());
+    info.editable = is_editable_kind(info.kind);
+    out.push_back(std::move(info));
+  }
+  return out;
+}
+
+Result<std::string> PdfiumDocument::add_annotation(int page_index, const AnnotationSpec& spec) {
+  PdfiumLibrary::assert_current_thread();
+  if (!is_editable_kind(spec.kind)) return make_error(ErrorCode::kInvalidArgument, "unsupported annotation kind");
+  if (is_markup(spec.kind) && spec.quads.empty()) return make_error(ErrorCode::kInvalidArgument, "markup needs quads");
+  if (spec.kind == AnnotationKind::kInk && spec.ink.empty()) return make_error(ErrorCode::kInvalidArgument, "ink needs strokes");
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  const detail::PageSpace space = detail::PageSpace::of(page->get());
+  ScopedAnnotation annot(FPDFPage_CreateAnnot(page->get(), subtype_of(spec.kind)));
+  if (!annot) return make_error(ErrorCode::kInvalidState, "FPDFPage_CreateAnnot failed");
+  FS_RECTF rect{};
+  if (is_markup(spec.kind)) {
+    bool first = true;
+    for (const Rect& quad_pt : spec.quads) {
+      const std::array<float, 8> q = space.quad_of(quad_pt);
+      FS_QUADPOINTSF quad{q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7]};
+      if (!FPDFAnnot_AppendAttachmentPoints(annot.get(), &quad)) {
+        return make_error(ErrorCode::kInvalidState, "FPDFAnnot_AppendAttachmentPoints failed");
+      }
+      const auto u = space.user_rect_of(quad_pt);
+      if (first) {
+        rect = {static_cast<float>(u[0]), static_cast<float>(u[3]), static_cast<float>(u[2]), static_cast<float>(u[1])};
+        first = false;
+      } else {
+        rect.left = std::min(rect.left, static_cast<float>(u[0]));
+        rect.bottom = std::min(rect.bottom, static_cast<float>(u[1]));
+        rect.right = std::max(rect.right, static_cast<float>(u[2]));
+        rect.top = std::max(rect.top, static_cast<float>(u[3]));
+      }
+    }
+  } else {
+    const auto u = space.user_rect_of(spec.rect);
+    rect = {static_cast<float>(u[0]), static_cast<float>(u[3]), static_cast<float>(u[2]), static_cast<float>(u[1])};
+  }
+  if (spec.kind == AnnotationKind::kInk) {
+    for (const auto& stroke : spec.ink) {
+      std::vector<FS_POINTF> pts;
+      pts.reserve(stroke.size());
+      for (const Point& p : stroke) {
+        const Point u = space.to_user(p);
+        pts.push_back({static_cast<float>(u.x), static_cast<float>(u.y)});
+      }
+      if (pts.empty() || FPDFAnnot_AddInkStroke(annot.get(), pts.data(), pts.size()) < 0) {
+        return make_error(ErrorCode::kInvalidState, "FPDFAnnot_AddInkStroke failed");
+      }
+    }
+    if (spec.border_width > 0 && !FPDFAnnot_SetBorder(annot.get(), 0, 0, static_cast<float>(spec.border_width))) {
+      return make_error(ErrorCode::kInvalidState, "FPDFAnnot_SetBorder failed");
+    }
+  }
+  if (!FPDFAnnot_SetRect(annot.get(), &rect)) return make_error(ErrorCode::kInvalidState, "FPDFAnnot_SetRect failed");
+  if (!FPDFAnnot_SetColor(annot.get(), FPDFANNOT_COLORTYPE_Color, spec.color.r, spec.color.g, spec.color.b, spec.color.a)) {
+    return make_error(ErrorCode::kInvalidState, "FPDFAnnot_SetColor failed");
+  }
+  if (!FPDFAnnot_SetFlags(annot.get(), spec.flags)) return make_error(ErrorCode::kInvalidState, "FPDFAnnot_SetFlags failed");
+  const std::string nm = spec.id.empty() ? new_nm() : spec.id;
+  if (!set_annot_string(annot.get(), "NM", nm)) return make_error(ErrorCode::kInvalidState, "cannot set /NM");
+  if (!spec.contents.empty() && !set_annot_string(annot.get(), "Contents", spec.contents)) {
+    return make_error(ErrorCode::kInvalidState, "cannot set /Contents");
+  }
+  if (!spec.author.empty()) (void)set_annot_string(annot.get(), "T", spec.author);
+  (void)set_annot_string(annot.get(), "M", pdf_date_now());
+  return nm;
+}
+
+Result<AnnotationSnapshot> PdfiumDocument::snapshot_annotation(int page_index, std::string_view id) {
+  PdfiumLibrary::assert_current_thread();
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  auto found = find_annot(page->get(), id);
+  if (!found) return std::unexpected(found.error());
+  FPDF_ANNOTATION annot = found->annot.get();
+  auto nm = ensure_nm(annot);
+  if (!nm) return std::unexpected(nm.error());
+  AnnotationSnapshot snap;
+  snap.kind = kind_of(FPDFAnnot_GetSubtype(annot));
+  snap.id = *nm;
+  FS_RECTF rect{};
+  if (FPDFAnnot_GetRect(annot, &rect)) snap.rect = {rect.left, rect.bottom, rect.right, rect.top};
+  const std::size_t quads = FPDFAnnot_CountAttachmentPoints(annot);
+  for (std::size_t i = 0; i < quads; ++i) {
+    FS_QUADPOINTSF q{};
+    if (FPDFAnnot_GetAttachmentPoints(annot, i, &q)) snap.quads.push_back({q.x1, q.y1, q.x2, q.y2, q.x3, q.y3, q.x4, q.y4});
+  }
+  const unsigned long strokes = FPDFAnnot_GetInkListCount(annot);
+  for (unsigned long s = 0; s < strokes; ++s) {
+    const unsigned long n = FPDFAnnot_GetInkListPath(annot, s, nullptr, 0);
+    std::vector<FS_POINTF> pts(n);
+    if (n > 0) FPDFAnnot_GetInkListPath(annot, s, pts.data(), n);
+    std::vector<Point> stroke;
+    stroke.reserve(pts.size());
+    for (const auto& p : pts) stroke.push_back({p.x, p.y});
+    snap.ink.push_back(std::move(stroke));
+  }
+  snap.has_color = fill_color(annot, snap.color);
+  float hr = 0, vr = 0, bw = 0;
+  snap.has_border = FPDFAnnot_GetBorder(annot, &hr, &vr, &bw) != 0;
+  snap.border_width = bw;
+  snap.flags = FPDFAnnot_GetFlags(annot);
+  snap.contents = annot_string(annot, "Contents");
+  snap.author = annot_string(annot, "T");
+  snap.modified = annot_string(annot, "M");
+  snap.subject = annot_string(annot, "Subj");
+  snap.ap_normal = annot_ap(annot);
+  return snap;
+}
+
+Result<void> PdfiumDocument::remove_annotation(int page_index, std::string_view id) {
+  PdfiumLibrary::assert_current_thread();
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  auto found = find_annot(page->get(), id);
+  if (!found) return std::unexpected(found.error());
+  const int index = found->index;
+  found->annot.reset();  // 지우기 전에 핸들을 닫는다
+  const int before = FPDFPage_GetAnnotCount(page->get());
+  if (!FPDFPage_RemoveAnnot(page->get(), index)) return make_error(ErrorCode::kInvalidState, "FPDFPage_RemoveAnnot failed");
+  if (FPDFPage_GetAnnotCount(page->get()) != before - 1) {
+    return make_error(ErrorCode::kInvalidState, "annotation count mismatch after remove");
+  }
+  return {};
+}
+
+Result<void> PdfiumDocument::restore_annotation(int page_index, const AnnotationSnapshot& snap) {
+  PdfiumLibrary::assert_current_thread();
+  if (snap.id.empty()) return make_error(ErrorCode::kInvalidArgument, "snapshot without id");
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  ScopedAnnotation annot(FPDFPage_CreateAnnot(page->get(), subtype_of(snap.kind)));
+  if (!annot) return make_error(ErrorCode::kInvalidState, "FPDFPage_CreateAnnot failed");
+  for (const auto& q : snap.quads) {
+    FS_QUADPOINTSF quad{q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7]};
+    if (!FPDFAnnot_AppendAttachmentPoints(annot.get(), &quad)) {
+      return make_error(ErrorCode::kInvalidState, "FPDFAnnot_AppendAttachmentPoints failed");
+    }
+  }
+  for (const auto& stroke : snap.ink) {
+    std::vector<FS_POINTF> pts;
+    for (const Point& p : stroke) pts.push_back({static_cast<float>(p.x), static_cast<float>(p.y)});
+    if (!pts.empty() && FPDFAnnot_AddInkStroke(annot.get(), pts.data(), pts.size()) < 0) {
+      return make_error(ErrorCode::kInvalidState, "FPDFAnnot_AddInkStroke failed");
+    }
+  }
+  FS_RECTF rect{static_cast<float>(snap.rect[0]), static_cast<float>(snap.rect[3]), static_cast<float>(snap.rect[2]),
+                static_cast<float>(snap.rect[1])};
+  if (!FPDFAnnot_SetRect(annot.get(), &rect)) return make_error(ErrorCode::kInvalidState, "FPDFAnnot_SetRect failed");
+  if (snap.has_border) (void)FPDFAnnot_SetBorder(annot.get(), 0, 0, snap.border_width);
+  if (snap.has_color) {
+    (void)FPDFAnnot_SetColor(annot.get(), FPDFANNOT_COLORTYPE_Color, snap.color.r, snap.color.g, snap.color.b, snap.color.a);
+  }
+  (void)FPDFAnnot_SetFlags(annot.get(), snap.flags);
+  if (!set_annot_string(annot.get(), "NM", snap.id)) return make_error(ErrorCode::kInvalidState, "cannot set /NM");
+  if (!snap.contents.empty()) (void)set_annot_string(annot.get(), "Contents", snap.contents);
+  if (!snap.author.empty()) (void)set_annot_string(annot.get(), "T", snap.author);
+  if (!snap.modified.empty()) (void)set_annot_string(annot.get(), "M", snap.modified);
+  if (!snap.subject.empty()) (void)set_annot_string(annot.get(), "Subj", snap.subject);
+  if (!snap.ap_normal.empty()) {
+    std::vector<unsigned short> ap = snap.ap_normal;
+    ap.push_back(0);
+    if (!FPDFAnnot_SetAP(annot.get(), FPDF_ANNOT_APPEARANCEMODE_NORMAL, ap.data())) {
+      return make_error(ErrorCode::kInvalidState, "FPDFAnnot_SetAP failed");
+    }
+  }
+  return {};
+}
+
+Result<void> PdfiumDocument::set_annotation_color(int page_index, std::string_view id, Color color,
+                                                  const std::vector<unsigned short>& ap_normal) {
+  PdfiumLibrary::assert_current_thread();
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  auto found = find_annot(page->get(), id);
+  if (!found) return std::unexpected(found.error());
+  FPDF_ANNOTATION annot = found->annot.get();
+  if (auto nm = ensure_nm(annot); !nm) return std::unexpected(nm.error());
+  if (!ap_normal.empty()) {  // 이전 모양 그대로 되돌리기 (색은 AP 가 결정)
+    std::vector<unsigned short> ap = ap_normal;
+    ap.push_back(0);
+    if (!FPDFAnnot_SetAP(annot, FPDF_ANNOT_APPEARANCEMODE_NORMAL, ap.data())) {
+      return make_error(ErrorCode::kInvalidState, "FPDFAnnot_SetAP failed");
+    }
+    return {};
+  }
+  // AP 가 있으면 SetColor 가 실패한다: 지우고 색을 쓰면 다음 렌더가 새 AP 를 만든다
+  if (!FPDFAnnot_SetAP(annot, FPDF_ANNOT_APPEARANCEMODE_NORMAL, nullptr)) {
+    return make_error(ErrorCode::kInvalidState, "cannot clear appearance stream");
+  }
+  if (!FPDFAnnot_SetColor(annot, FPDFANNOT_COLORTYPE_Color, color.r, color.g, color.b, color.a)) {
+    return make_error(ErrorCode::kInvalidState, "FPDFAnnot_SetColor failed");
+  }
+  (void)set_annot_string(annot, "M", pdf_date_now());
+  return {};
+}
+
+Result<void> PdfiumDocument::set_annotation_contents(int page_index, std::string_view id, std::string_view utf8) {
+  PdfiumLibrary::assert_current_thread();
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  auto found = find_annot(page->get(), id);
+  if (!found) return std::unexpected(found.error());
+  FPDF_ANNOTATION annot = found->annot.get();
+  if (auto nm = ensure_nm(annot); !nm) return std::unexpected(nm.error());
+  if (!set_annot_string(annot, "Contents", std::string(utf8))) return make_error(ErrorCode::kInvalidState, "cannot set /Contents");
+  (void)set_annot_string(annot, "M", pdf_date_now());
+  return {};
 }
 
 namespace {

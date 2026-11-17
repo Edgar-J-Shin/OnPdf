@@ -66,14 +66,16 @@ ctest --preset dev-app                                         # app 테스트(o
 # Architecture
 
 ```text
-app/          Qt UI (Qt 의존). onpdf_app_lib(UiDispatcher·DocumentSession·qt_image·DocumentTileSource·DocumentView·SearchBar·ThumbnailPanel·OutlinePanel·PrintJob·EditController·MainWindow) + onpdf_app(main 만)
+app/          Qt UI (Qt 의존). onpdf_app_lib(UiDispatcher·DocumentSession·qt_image·DocumentTileSource·DocumentView·SearchBar·ThumbnailPanel·OutlinePanel·PrintJob·EditController·AnnotationDialog·MainWindow) + onpdf_app(main 만)
 edit/         Command(execute/undo/discard, EditableDocument 로만 문서 변경)·UndoStack(저장 지점, push 가 밀려난 명령 반환)
               RotatePageCommand(여러 쪽)·DeletePagesCommand(스냅샷으로 취소)·MovePagesCommand(역순열 취소)·InsertPagesCommand(파일 스냅샷)
+              annotation_commands(AddAnnotations·RemoveAnnotation·SetAnnotationColor·SetAnnotationContents — /NM 과 값만 보관)
               page_ops(normalize·validate_move·simulate_move·apply_order·structural_change). 선택·텍스트 블록·폰트(M3)
 core/         Document, Page, 렌더 캐시(타일 LRU), 텍스트 인덱스       (Qt 의존 금지)
 core/engine/  PdfiumLibrary(init RAII) · PdfiumDocument(열기·크기·렌더·load_text·load_outline·resolve_location·print_preferences·회전·save_to — EditableDocument 구현) · TextPage(FPDFText/FPDFLink 추출, 좌표 변환) · dest(목적지·URI·UTF-16 변환 공용, 내부) · pdfium_handles
               PdfiumWorker(전용 스레드 + High/Normal/Low 큐 + 취소) · DocumentHandle(워커 쪽 문서의 스레드 안전 핸들), QpdfTools(M2)
-core/engine/  EditableDocument(PDFium 없는 편집 인터페이스 — edit/ 가 씀: 회전·삭제·이동·스냅샷(SnapshotId)·삽입)·ChangeSet(structural+all_sizes)
+core/engine/  EditableDocument(PDFium 없는 편집 인터페이스 — edit/ 가 씀: 회전·삭제·이동·스냅샷(SnapshotId)·삽입·주석)·ChangeSet(structural+all_sizes)
+              annotation.h(AnnotationInfo·AnnotationSpec(쪽 포인트)·AnnotationSnapshot(사용자 좌표 원시값+AP) — PDFium 없음)
               save(save_document_safely: 임시→검증→rename)
 core/platform/ fs_sync(flush_file_to_disk·replace_file·flush_directory — 저장의 플랫폼 분기는 여기만)
 core/image/   png_io (stb 기반 PNG 읽기/쓰기, BGRA↔RGBA)
@@ -119,6 +121,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 - 모든 Command 는 실행 → 취소 → 재실행 후 문서 상태 비교 테스트(가짜 `EditableDocument`(`tests/fake_document.h`) + 실제 PDFium) 필수. 원래 경로로 저장하는 테스트는 testdata 사본(`ScopedTempDir`)을 연다
 - **쪽 구조 편집(삭제·이동·삽입, #33):** 결과는 `ChangeSet::structural` + `all_sizes` → `apply_change` 가 쪽 수·크기 목록을 통째로 교체 → `DocumentView::rebuild_pages`(캐시·텍스트·선택 전부 폐기, 레이아웃 재구성, 현재 쪽 클램프)·`ThumbnailPanel::reset_pages`(세대↑, 행 재설정)·쪽 번호 스핀·목차 재로드(`load_outline(false)`, 탭 유지)·검색 재실행. 저장·이동 결과 폐기는 `document_generation_`(열 때만 증가), 목차는 `outline_generation_`
 - **스냅샷은 문서가 소유한다.** 삭제 취소용 쪽 사본·삽입 소스는 `PdfiumDocument::snapshots_`(워커 전용 PDFium 문서)에 있고 Command 는 `SnapshotId` 만 쥔다 — Command 는 메인 스레드(실행 취소 스택)에서 소멸하므로 PDFium 핸들을 직접 쥐면 안 된다. 스택에서 밀려난 Command 는 `EditController` 가 워커에서 `discard` 를 불러 해제한다. `FPDF_MovePages` 는 실패 시 문서가 불확정이므로 `validate_move` 로 호출 전에 전부 검증한다. 전체 삭제는 금지(쪽 ≥ 1)
+- **주석(#35):** 좌표는 뷰·Command 는 쪽 포인트, PDF 는 사용자 좌표 — 변환은 `detail::PageSpace::to_user/quad_of/user_rect_of`(engine 안)에서만. 마크업 QuadPoints 는 선택 사각형(`selection_rects`) 꼭짓점을 변환해 좌상·우상·좌하·우하 순서. **새 주석은 AP 없이 만든다**(PDFium 이 렌더 때 AP 를 만들어 사전에 저장한다). AP 가 있으면 `FPDFAnnot_SetColor` 가 실패하므로 색 변경은 `SetAP(Normal, nullptr)` → `SetColor`, 취소는 보관한 이전 AP 로 `SetAP`. 정체성은 /NM(없는 기존 주석은 `"#<index>"` 로 가리키고 편집 때 `onpdf-<16진 16자>` 를 부여). `FPDFPage_RemoveAnnot` 는 되돌릴 수 없어 삭제 취소는 `AnnotationSnapshot` 으로 재생성(같은 NM, /Annots 끝). Print 플래그 필수(없으면 인쇄 안 됨), 메모는 NoZoom|NoRotate. Popup 은 만들지 않고(FPDF_ANNOT 가 그리지 않음) 메모 내용은 툴팁·`AnnotationDialog`. 링크·위젯·팝업은 `editable=false`. 뷰는 보이는 쪽 ±1 의 `load_annotations`(kLow) 스냅샷으로 hit-test 하고 `invalidate_pages` 가 캐시를 버린다. 도구 모드는 `DocumentView::set_tool`, 도구·단축키는 `permissions.annotate` 로 게이트
 - **썸네일:** 다중 선택(`ExtendedSelection`), 현재 쪽 강조는 선택과 분리. 끌어 놓기는 모델이 행을 옮기지 않고 `move_requested(pages, drop_row)` 만 내며(`dropMimeData` 는 항상 false), `MainWindow::move_pages` 가 `dest = drop_row − |{p < drop_row}|` 로 바꿔 Command 를 실행한다. 파일 URL 드롭은 삽입. Delete 키·우클릭 메뉴. 편집 불가 상태면 `set_editable(false)` 로 끌기 자체를 막는다. 삽입 소스 암호는 `failed(kPasswordRequired)` 뒤 `insert_password` 대화상자로 다시 시도, 추출 금지(권한 비트 5)는 `kPermissionDenied`. 서명 문서의 첫 구조 편집은 `signature_warning` 으로 한 번 묻는다
 
 ### 렌더링 (구현: core/view + app/DocumentView)

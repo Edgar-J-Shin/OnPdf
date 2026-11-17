@@ -17,6 +17,7 @@ add_library(onpdf_app_lib STATIC
   thumbnail_panel.h thumbnail_panel.cpp
   print_job.h print_job.cpp
   edit_controller.h edit_controller.cpp
+  annotation_dialog.h annotation_dialog.cpp
   main_window.h main_window.cpp
 )
 target_include_directories(onpdf_app_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

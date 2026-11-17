@@ -246,6 +246,20 @@ std::future<Result<Bitmap>> DocumentHandle::render_region(int page_index, const 
   });
 }
 
+TaskHandle DocumentHandle::load_annotations(int page_index, Priority priority,
+                                            std::function<void(Result<std::vector<AnnotationInfo>>)> on_done) const {
+  return DocumentHandleAccess::post_document_task<std::vector<AnnotationInfo>>(
+      *this, priority, [page_index](PdfiumDocument& doc) { return doc.annotations(page_index); }, std::move(on_done));
+}
+
+std::future<Result<std::vector<AnnotationInfo>>> DocumentHandle::load_annotations(int page_index,
+                                                                                Priority priority) const {
+  return DocumentHandleAccess::to_future<std::vector<AnnotationInfo>>(
+      [=, this](std::function<void(Result<std::vector<AnnotationInfo>>)> cb) {
+        return load_annotations(page_index, priority, std::move(cb));
+      });
+}
+
 TaskHandle DocumentHandle::load_text(int page_index, Priority priority,
                                      std::function<void(Result<view::PageTextIndex>)> on_done) const {
   return DocumentHandleAccess::post_document_task<view::PageTextIndex>(

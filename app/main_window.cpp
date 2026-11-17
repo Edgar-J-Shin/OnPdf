@@ -2,6 +2,8 @@
 
 #include "document_view.h"
 #include "onpdf/core/platform/path.h"
+#include "annotation_dialog.h"
+#include "onpdf/edit/annotation_commands.h"
 #include "onpdf/edit/delete_pages.h"
 #include "onpdf/edit/insert_pages.h"
 #include "onpdf/edit/move_pages.h"
@@ -12,6 +14,11 @@
 #include "thumbnail_panel.h"
 
 #include <QAction>
+#include <QActionGroup>
+#include <QPainter>
+#include <QPixmap>
+#include <QToolBar>
+#include <QToolButton>
 #include <QApplication>
 #include <QClipboard>
 #include <QCloseEvent>
@@ -103,7 +110,14 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
 
   edit_ = new EditController(dispatcher_, this);
   build_menus();
+  build_annotation_ui();
   connect(edit_, &EditController::document_changed, this, &MainWindow::on_document_changed);
+  connect(view_, &DocumentView::markup_requested, this, &MainWindow::on_markup_requested);
+  connect(view_, &DocumentView::note_requested, this, &MainWindow::on_note_requested);
+  connect(view_, &DocumentView::ink_requested, this, &MainWindow::on_ink_requested);
+  connect(view_, &DocumentView::annotation_selected, this, &MainWindow::on_annotation_selected);
+  connect(view_, &DocumentView::annotation_edit_requested, this, &MainWindow::on_annotation_edit_requested);
+  connect(view_, &DocumentView::annotation_delete_requested, this, [this](int, const QString&) { delete_selected_annotation(); });
   connect(edit_, &EditController::state_changed, this, [this] {
     update_edit_actions();
     update_title();
@@ -125,7 +139,10 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(view_, &DocumentView::tiles_changed, this, [this] {
     if (!status_timer_->isActive()) status_timer_->start();
   });
-  connect(view_, &DocumentView::selection_changed, this, [this](bool has) { copy_action_->setEnabled(has); });
+  connect(view_, &DocumentView::selection_changed, this, [this](bool has) {
+    copy_action_->setEnabled(has);
+    update_edit_actions();
+  });
   connect(view_, &DocumentView::link_activated, this, &MainWindow::on_link_activated);
   connect(view_, &DocumentView::link_hovered, this, &MainWindow::on_link_hovered);
   connect(search_bar_, &SearchBar::query_changed, this, &MainWindow::on_search_query);
@@ -320,6 +337,14 @@ QString MainWindow::command_label(std::string_view id) const {
   if (id == "delete_pages") return tr("쪽 삭제");
   if (id == "move_pages") return tr("쪽 이동");
   if (id == "insert_pages") return tr("쪽 삽입");
+  if (id == "add_highlight") return tr("하이라이트 추가");
+  if (id == "add_underline") return tr("밑줄 추가");
+  if (id == "add_strikeout") return tr("취소선 추가");
+  if (id == "add_note") return tr("메모 추가");
+  if (id == "add_ink") return tr("펜 추가");
+  if (id == "remove_annotation") return tr("주석 삭제");
+  if (id == "set_annotation_color") return tr("주석 색 변경");
+  if (id == "set_annotation_contents") return tr("메모 수정");
   return QString::fromUtf8(id.data(), static_cast<qsizetype>(id.size()));
 }
 
@@ -351,6 +376,20 @@ void MainWindow::update_edit_actions() {
     action->setStatusTip(assemble_tip);
   }
   thumbnail_panel_->set_editable(idle && can_assemble);
+  const bool can_annotate = has_pages && session_.handle().info().permissions.annotate;
+  const QString annotate_tip = has_pages && !can_annotate ? tr("이 문서는 주석이 허용되지 않습니다") : QString();
+  for (QAction* action : tool_actions_) {
+    if (action == nullptr) continue;
+    const bool select = action == tool_actions_[0];
+    action->setEnabled(select || (idle && can_annotate));
+    action->setStatusTip(select ? QString() : annotate_tip);
+  }
+  if (!(idle && can_annotate) && view_->tool() != AnnotationTool::kSelect) tool_actions_[0]->trigger();
+  for (QAction* action : markup_selection_actions_) {
+    if (action != nullptr) action->setEnabled(idle && can_annotate && view_->has_selection());
+  }
+  delete_annotation_action_->setEnabled(idle && can_annotate && view_->selected_annotation().has_value());
+  color_button_->setEnabled(idle && can_annotate);
   // 실행 취소 대상은 이미 허용된 편집이므로 작업 중이 아니면 된다
   undo_action_->setEnabled(idle && edit_->can_undo());
   redo_action_->setEnabled(idle && edit_->can_redo());
@@ -381,7 +420,7 @@ bool MainWindow::rotate_pages(std::vector<int> pages, int quarter_turns) {
 bool MainWindow::warn_signature_once() {
   if (signature_warned_ || session_.handle().info().signature_count <= 0) return true;
   QMessageBox box(QMessageBox::Warning, tr("서명된 문서"),
-                  tr("이 문서에는 전자서명이 있습니다. 쪽을 지우거나 옮기거나 넣으면 서명이 무효화될 수 있습니다.\n계속할까요?"),
+                  tr("이 문서에는 전자서명이 있습니다. 쪽이나 주석을 바꾸면 서명이 무효화될 수 있습니다.\n계속할까요?"),
                   QMessageBox::NoButton, this);
   box.setObjectName(QStringLiteral("signature_warning"));
   QPushButton* go = box.addButton(tr("계속"), QMessageBox::AcceptRole);
@@ -475,6 +514,226 @@ void MainWindow::on_edit_failed(onpdf::ErrorCode code, const QString& message) {
     return;
   }
   show_transient(tr("편집하지 못했습니다: %1").arg(message));
+}
+
+// ---------------------------------------------------------------- 주석
+
+namespace {
+
+constexpr engine::Color kPalette[] = {
+    {255, 255, 0, 255}, {0, 200, 0, 255}, {0, 150, 255, 255}, {255, 105, 180, 255}, {255, 0, 0, 255}, {255, 140, 0, 255},
+};
+const char* const kPaletteNames[] = {"노랑", "초록", "파랑", "분홍", "빨강", "주황"};
+
+QIcon color_icon(engine::Color c) {
+  QPixmap pm(16, 16);
+  pm.fill(Qt::transparent);
+  QPainter p(&pm);
+  p.setPen(QPen(Qt::darkGray, 1));
+  p.setBrush(QColor(c.r, c.g, c.b));
+  p.drawRect(1, 1, 13, 13);
+  return QIcon(pm);
+}
+
+QString kind_name(engine::AnnotationKind kind) {
+  switch (kind) {
+    case engine::AnnotationKind::kHighlight: return MainWindow::tr("하이라이트");
+    case engine::AnnotationKind::kUnderline: return MainWindow::tr("밑줄");
+    case engine::AnnotationKind::kStrikeOut: return MainWindow::tr("취소선");
+    case engine::AnnotationKind::kSquiggly: return MainWindow::tr("물결선");
+    case engine::AnnotationKind::kText: return MainWindow::tr("메모");
+    case engine::AnnotationKind::kInk: return MainWindow::tr("펜");
+    case engine::AnnotationKind::kSquare: return MainWindow::tr("사각형");
+    case engine::AnnotationKind::kCircle: return MainWindow::tr("원");
+    case engine::AnnotationKind::kLink: return MainWindow::tr("링크");
+    case engine::AnnotationKind::kOther: break;
+  }
+  return MainWindow::tr("주석");
+}
+
+// PDF 날짜 "D:YYYYMMDDHHmmSS…" → "YYYY-MM-DD"
+QString short_date(const std::string& pdf_date) {
+  if (pdf_date.size() < 10 || pdf_date.rfind("D:", 0) != 0) return QString::fromStdString(pdf_date);
+  const QString d = QString::fromStdString(pdf_date.substr(2, 8));
+  return d.left(4) + QLatin1Char('-') + d.mid(4, 2) + QLatin1Char('-') + d.mid(6, 2);
+}
+
+}  // namespace
+
+void MainWindow::build_annotation_ui() {
+  annotation_toolbar_ = addToolBar(tr("주석"));
+  annotation_toolbar_->setObjectName(QStringLiteral("annotation_toolbar"));
+  annotation_toolbar_->setMovable(false);
+  annotation_toolbar_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+  QMenu* menu = menuBar()->addMenu(tr("주석(&N)"));
+  tool_group_ = new QActionGroup(this);
+  tool_group_->setExclusive(true);
+  const QString names[6] = {tr("선택(&S)"), tr("하이라이트(&H)"), tr("밑줄(&U)"), tr("취소선(&K)"), tr("메모(&N)"), tr("펜(&P)")};
+  const QString tips[6] = {tr("텍스트를 선택하거나 주석을 고른다"), tr("드래그한 글에 하이라이트"), tr("드래그한 글에 밑줄"),
+                           tr("드래그한 글에 취소선"), tr("클릭한 자리에 메모"), tr("드래그로 자유 선")};
+  for (int i = 0; i < 6; ++i) {
+    QAction* action = tool_group_->addAction(names[i]);
+    action->setCheckable(true);
+    action->setStatusTip(tips[i]);
+    action->setChecked(i == 0);
+    connect(action, &QAction::triggered, this, [this, i](bool checked) {
+      if (checked) view_->set_tool(static_cast<AnnotationTool>(i));
+    });
+    tool_actions_[i] = action;
+    annotation_toolbar_->addAction(action);
+    menu->addAction(action);
+  }
+  annotation_toolbar_->addSeparator();
+  menu->addSeparator();
+  color_button_ = new QToolButton(annotation_toolbar_);
+  color_button_->setObjectName(QStringLiteral("annotation_color"));
+  color_button_->setToolTip(tr("주석 색"));
+  color_button_->setPopupMode(QToolButton::InstantPopup);
+  auto* palette = new QMenu(color_button_);
+  QMenu* color_menu = menu->addMenu(tr("색(&C)"));
+  for (int i = 0; i < 6; ++i) {
+    const engine::Color c = kPalette[i];
+    for (QMenu* m : {palette, color_menu}) {
+      QAction* a = m->addAction(color_icon(c), tr(kPaletteNames[i]));
+      connect(a, &QAction::triggered, this, [this, c] { set_annotation_color(c); });
+    }
+  }
+  color_button_->setMenu(palette);
+  update_color_icon();
+  annotation_toolbar_->addWidget(color_button_);
+  annotation_toolbar_->addSeparator();
+  delete_annotation_action_ = annotation_toolbar_->addAction(tr("주석 삭제"), this, [this] { delete_selected_annotation(); });
+  delete_annotation_action_->setStatusTip(tr("선택한 주석을 지운다 (Delete)"));
+  delete_annotation_action_->setEnabled(false);
+  menu->addAction(delete_annotation_action_);
+  menu->addSeparator();
+  const engine::AnnotationKind kinds[3] = {engine::AnnotationKind::kHighlight, engine::AnnotationKind::kUnderline,
+                                           engine::AnnotationKind::kStrikeOut};
+  const QString sel_names[3] = {tr("선택 영역 하이라이트"), tr("선택 영역 밑줄"), tr("선택 영역 취소선")};
+  const QKeySequence keys[3] = {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_H), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_U),
+                                QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_K)};
+  for (int i = 0; i < 3; ++i) {
+    const engine::AnnotationKind kind = kinds[i];
+    markup_selection_actions_[i] = menu->addAction(sel_names[i], keys[i], this, [this, kind] { add_markup_from_selection(kind); });
+    markup_selection_actions_[i]->setEnabled(false);
+  }
+}
+
+QAction* MainWindow::tool_action(AnnotationTool tool) const { return tool_actions_[static_cast<int>(tool)]; }
+
+void MainWindow::update_color_icon() {
+  color_button_->setIcon(color_icon(annotation_color_));
+  color_button_->setText(tr("색"));
+}
+
+std::string MainWindow::annotation_author() const {
+  QString user = qEnvironmentVariable("USER");
+  if (user.isEmpty()) user = qEnvironmentVariable("USERNAME");
+  return user.toStdString();
+}
+
+void MainWindow::set_annotation_color(engine::Color color) {
+  annotation_color_ = color;
+  update_color_icon();
+  // 주석이 선택돼 있으면 그 주석의 색을 바꾼다
+  if (auto selected = view_->selected_annotation(); selected && delete_annotation_action_->isEnabled()) {
+    if (!warn_signature_once()) return;
+    edit_->run(std::make_shared<edit::SetAnnotationColorCommand>(view_->selected_annotation_page(), selected->id, color));
+  }
+}
+
+bool MainWindow::add_markup_from_selection(engine::AnnotationKind kind) {
+  if (!tool_actions_[1]->isEnabled() || !view_->has_document()) return false;
+  const MarkupItems items = view_->selection_markup_items();
+  if (items.empty()) return false;
+  on_markup_requested(kind, items);
+  return true;
+}
+
+void MainWindow::on_markup_requested(engine::AnnotationKind kind, const MarkupItems& items) {
+  if (!tool_actions_[1]->isEnabled() || items.empty()) return;
+  if (!warn_signature_once()) return;
+  std::vector<std::pair<int, engine::AnnotationSpec>> specs;
+  for (const auto& [page, rects] : items) {
+    engine::AnnotationSpec spec;
+    spec.kind = kind;
+    spec.quads = rects;
+    spec.color = annotation_color_;
+    spec.flags = engine::kAnnotFlagPrint;
+    spec.author = annotation_author();
+    specs.emplace_back(page, std::move(spec));
+  }
+  edit_->run(std::make_shared<edit::AddAnnotationsCommand>(std::move(specs)));
+}
+
+void MainWindow::on_note_requested(int page, onpdf::Point pt) {
+  if (!tool_actions_[4]->isEnabled()) return;
+  AnnotationDialog dialog(tr("메모"), QString(), this);
+  if (dialog.exec() != QDialog::Accepted) return;
+  const QString text = dialog.text().trimmed();
+  if (text.isEmpty()) return;  // 빈 메모는 만들지 않는다
+  add_note(page, pt, text);
+}
+
+bool MainWindow::add_note(int page, onpdf::Point pt, const QString& contents) {
+  if (!tool_actions_[4]->isEnabled() || !view_->has_document()) return false;
+  if (!warn_signature_once()) return false;
+  engine::AnnotationSpec spec;
+  spec.kind = engine::AnnotationKind::kText;
+  spec.rect = {pt.x - 10, pt.y - 10, 20, 20};
+  spec.flags = engine::kAnnotFlagPrint | engine::kAnnotFlagNoZoom | engine::kAnnotFlagNoRotate;
+  spec.color = annotation_color_;
+  spec.contents = contents.toStdString();
+  spec.author = annotation_author();
+  return edit_->run(std::make_shared<edit::AddAnnotationsCommand>(
+      std::vector<std::pair<int, engine::AnnotationSpec>>{{page, std::move(spec)}}));
+}
+
+void MainWindow::on_ink_requested(int page, const std::vector<onpdf::Point>& points, onpdf::Rect bbox) {
+  if (!tool_actions_[5]->isEnabled() || points.size() < 2) return;
+  if (!warn_signature_once()) return;
+  engine::AnnotationSpec spec;
+  spec.kind = engine::AnnotationKind::kInk;
+  spec.ink = {points};
+  spec.rect = bbox;
+  spec.border_width = 2.0;
+  spec.color = annotation_color_;
+  spec.flags = engine::kAnnotFlagPrint;
+  spec.author = annotation_author();
+  edit_->run(std::make_shared<edit::AddAnnotationsCommand>(
+      std::vector<std::pair<int, engine::AnnotationSpec>>{{page, std::move(spec)}}));
+}
+
+void MainWindow::on_annotation_selected(bool has, const engine::AnnotationInfo& info) {
+  update_edit_actions();
+  if (!has) {
+    show_transient(QString());
+    return;
+  }
+  QStringList parts{kind_name(info.kind)};
+  if (!info.author.empty()) parts << QString::fromStdString(info.author);
+  if (!info.modified.empty()) parts << short_date(info.modified);
+  if (!info.contents.empty()) parts << QString::fromStdString(info.contents).left(60);
+  statusBar()->showMessage(parts.join(QStringLiteral(" · ")));
+}
+
+bool MainWindow::delete_selected_annotation() {
+  auto selected = view_->selected_annotation();
+  if (!selected || !delete_annotation_action_->isEnabled()) return false;
+  if (!warn_signature_once()) return false;
+  const int page = view_->selected_annotation_page();
+  view_->clear_annotation_selection();
+  return edit_->run(std::make_shared<edit::RemoveAnnotationCommand>(page, selected->id));
+}
+
+void MainWindow::on_annotation_edit_requested(int page, const engine::AnnotationInfo& info) {
+  if (!delete_annotation_action_->isEnabled() || info.kind != engine::AnnotationKind::kText) return;
+  AnnotationDialog dialog(tr("메모 수정"), QString::fromStdString(info.contents), this);
+  if (dialog.exec() != QDialog::Accepted) return;
+  const QString text = dialog.text();
+  if (text.toStdString() == info.contents) return;
+  if (!warn_signature_once()) return;
+  edit_->run(std::make_shared<edit::SetAnnotationContentsCommand>(page, info.id, text.toStdString()));
 }
 
 void MainWindow::on_thumbnail_context_menu(const QPoint& global_pos, const std::vector<int>& pages) {

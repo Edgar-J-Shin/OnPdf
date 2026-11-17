@@ -1,0 +1,317 @@
+// 주석 UI (#35): 도구 모드, 드래그 → 마크업, 메모 대화상자, 펜, 선택·삭제·색 변경, 권한, 서명 경고, 인쇄 포함
+#include "annotation_dialog.h"
+#include "document_view.h"
+#include "main_window.h"
+#include "onpdf/core/engine/document_handle.h"
+#include "onpdf/core/engine/pdfium_worker.h"
+#include "onpdf/core/platform/path.h"
+#include "ui_dispatcher.h"
+
+#include "../test_support.h"
+
+#include <gtest/gtest.h>
+
+#include <QAbstractButton>
+#include <QAction>
+#include <QApplication>
+#include <QEventLoop>
+#include <QMessageBox>
+#include <QMouseEvent>
+#include <QPlainTextEdit>
+#include <QPrinter>
+#include <QStatusBar>
+#include <QTimer>
+
+#include <filesystem>
+#include <memory>
+
+namespace onpdf::app {
+namespace {
+
+using onpdf::test::ScopedTempDir;
+using onpdf::test::testdata;
+
+template <class Pred>
+bool spin_until(Pred pred, int timeout_ms = 10000) {
+  QEventLoop loop;
+  QTimer poll;
+  bool timed_out = false;
+  QObject::connect(&poll, &QTimer::timeout, &loop, [&] {
+    if (pred()) loop.quit();
+  });
+  poll.start(5);
+  QTimer::singleShot(timeout_ms, &loop, [&] {
+    timed_out = true;
+    loop.quit();
+  });
+  if (pred()) return true;
+  loop.exec();
+  return !timed_out;
+}
+
+// 이름이 object_name 인 모달 대화상자가 뜨면 처리한다
+template <class Fn>
+void when_dialog(const char* object_name, Fn fn) {
+  auto* poll = new QTimer();
+  poll->setInterval(10);
+  QObject::connect(poll, &QTimer::timeout, poll, [poll, object_name, fn] {
+    QWidget* w = QApplication::activeModalWidget();
+    if (w == nullptr || w->objectName() != QString::fromLatin1(object_name)) return;
+    fn(w);
+    poll->deleteLater();
+  });
+  poll->start();
+}
+
+class AnnotationTest : public ::testing::Test {
+ protected:
+  AnnotationTest() : worker_(options()), window_(worker_, dispatcher_) {
+    window_.resize(900, 900);
+    window_.show();
+  }
+  static engine::PdfiumWorker::Options options() {
+    engine::PdfiumWorker::Options o;
+    o.use_system_fonts = false;
+    return o;
+  }
+  DocumentView* view() { return window_.document_view(); }
+  bool open_path(const std::filesystem::path& path) {
+    const QString file = QString::fromStdString(onpdf::path_to_utf8(path.filename()));
+    window_.open_file(QString::fromStdString(onpdf::path_to_utf8(path)));
+    return spin_until([&] { return window_.windowTitle().contains(file) && view()->has_document(); });
+  }
+  bool open(const char* name) { return open_path(testdata(name)); }
+  std::filesystem::path open_copy(const char* name) {
+    const auto copy = dir_ / name;
+    std::filesystem::copy_file(testdata(name), copy);
+    EXPECT_TRUE(open_path(copy));
+    return copy;
+  }
+  bool idle() { return !window_.edit_controller()->busy() && !window_.saving(); }
+  bool wait_idle() { return spin_until([&] { return idle(); }); }
+  bool wait_text(int page) { return spin_until([&] { return view()->text_index(page) != nullptr; }); }
+  // 쪽의 주석 목록이 n 개로 갱신될 때까지
+  bool wait_annotations(int page, std::size_t n) {
+    return spin_until([&] { return idle() && view()->annotations(page) != nullptr && view()->annotations(page)->size() == n; });
+  }
+  void send_mouse(QEvent::Type type, QPointF pos, Qt::MouseButton button, Qt::MouseButtons buttons) {
+    QMouseEvent ev(type, pos, view()->viewport()->mapToGlobal(pos.toPoint()), button, buttons, Qt::NoModifier);
+    QApplication::sendEvent(view()->viewport(), &ev);
+  }
+  void drag(QPointF from, QPointF to) {
+    send_mouse(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+    send_mouse(QEvent::MouseMove, (from + to) / 2, Qt::NoButton, Qt::LeftButton);
+    send_mouse(QEvent::MouseMove, to, Qt::NoButton, Qt::LeftButton);
+    send_mouse(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
+  }
+  void click(QPointF at) {
+    send_mouse(QEvent::MouseButtonPress, at, Qt::LeftButton, Qt::LeftButton);
+    send_mouse(QEvent::MouseButtonRelease, at, Qt::LeftButton, Qt::NoButton);
+  }
+  QPointF char_center(int page, int ch) {
+    const auto& box = view()->text_index(page)->chars[static_cast<std::size_t>(ch)].box;
+    return view()->page_point_to_viewport(page, {box.x + box.w / 2, box.y + box.h / 2});
+  }
+  // 첫 쪽 글자 0~9 를 드래그
+  void drag_first_word(int page = 0) { drag(char_center(page, 0), char_center(page, 9)); }
+  void use_tool(AnnotationTool tool) { window_.tool_action(tool)->trigger(); }
+
+  ScopedTempDir dir_;
+  UiDispatcher dispatcher_;
+  engine::PdfiumWorker worker_;
+  MainWindow window_;
+};
+
+TEST_F(AnnotationTest, ToolSwitchChangesCursor) {
+  ASSERT_TRUE(open("simple.pdf"));
+  EXPECT_EQ(view()->tool(), AnnotationTool::kSelect);
+  EXPECT_TRUE(window_.tool_action(AnnotationTool::kSelect)->isChecked());
+  use_tool(AnnotationTool::kNote);
+  EXPECT_EQ(view()->tool(), AnnotationTool::kNote);
+  send_mouse(QEvent::MouseMove, QPointF(300, 300), Qt::NoButton, Qt::NoButton);
+  EXPECT_EQ(view()->viewport()->cursor().shape(), Qt::CrossCursor);
+  use_tool(AnnotationTool::kSelect);
+  send_mouse(QEvent::MouseMove, QPointF(300, 300), Qt::NoButton, Qt::NoButton);
+  EXPECT_NE(view()->viewport()->cursor().shape(), Qt::CrossCursor);
+}
+
+TEST_F(AnnotationTest, HighlightDragCreatesAnnotationAndUndoRemovesIt) {
+  open_copy("simple.pdf");
+  ASSERT_TRUE(wait_text(0));
+  ASSERT_TRUE(wait_annotations(0, 0));
+  use_tool(AnnotationTool::kHighlight);
+  drag_first_word();
+  ASSERT_TRUE(wait_annotations(0, 1));
+  const auto& a = (*view()->annotations(0))[0];
+  EXPECT_EQ(a.kind, engine::AnnotationKind::kHighlight);
+  EXPECT_EQ(a.flags & engine::kAnnotFlagPrint, engine::kAnnotFlagPrint);
+  EXPECT_FALSE(view()->has_selection()) << "주석이 선택 역할을 이어받는다";
+  EXPECT_TRUE(window_.isWindowModified());
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("하이라이트 추가")));
+  ASSERT_TRUE(window_.edit_controller()->undo());
+  ASSERT_TRUE(wait_annotations(0, 0));
+  EXPECT_FALSE(window_.isWindowModified());
+  ASSERT_TRUE(window_.edit_controller()->redo());
+  ASSERT_TRUE(wait_annotations(0, 1));
+}
+
+TEST_F(AnnotationTest, MarkupShortcutUsesCurrentSelection) {
+  open_copy("simple.pdf");
+  ASSERT_TRUE(wait_text(0));
+  drag_first_word();  // 선택 도구: 텍스트 선택
+  ASSERT_TRUE(view()->has_selection());
+  ASSERT_TRUE(window_.add_markup_from_selection(engine::AnnotationKind::kUnderline));
+  ASSERT_TRUE(wait_annotations(0, 1));
+  EXPECT_EQ((*view()->annotations(0))[0].kind, engine::AnnotationKind::kUnderline);
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("밑줄 추가")));
+  EXPECT_FALSE(window_.add_markup_from_selection(engine::AnnotationKind::kStrikeOut)) << "선택이 지워졌다";
+}
+
+TEST_F(AnnotationTest, NoteToolOpensEditorAndCreatesNote) {
+  open_copy("simple.pdf");
+  ASSERT_TRUE(wait_annotations(0, 0));
+  use_tool(AnnotationTool::kNote);
+  bool asked = false;
+  when_dialog("note_editor", [&](QWidget* w) {
+    asked = true;
+    w->findChild<QPlainTextEdit*>(QStringLiteral("note_text"))->setPlainText(QStringLiteral("검토 필요"));
+    qobject_cast<QDialog*>(w)->accept();
+  });
+  click(view()->page_point_to_viewport(0, {300, 300}));
+  ASSERT_TRUE(spin_until([&] { return asked; }));
+  ASSERT_TRUE(wait_annotations(0, 1));
+  const auto& a = (*view()->annotations(0))[0];
+  EXPECT_EQ(a.kind, engine::AnnotationKind::kText);
+  EXPECT_EQ(a.contents, "검토 필요");
+  EXPECT_NEAR(a.rect.x + a.rect.w / 2, 300, 0.1);
+  EXPECT_NEAR(a.rect.y + a.rect.h / 2, 300, 0.1);
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("메모 추가")));
+  // 빈 내용으로 확인하면 만들지 않는다
+  when_dialog("note_editor", [&](QWidget* w) { qobject_cast<QDialog*>(w)->accept(); });
+  click(view()->page_point_to_viewport(0, {200, 500}));
+  ASSERT_TRUE(wait_idle());
+  EXPECT_EQ(view()->annotations(0)->size(), 1u);
+}
+
+TEST_F(AnnotationTest, PenDragCreatesInk) {
+  open_copy("simple.pdf");
+  ASSERT_TRUE(wait_annotations(0, 0));
+  use_tool(AnnotationTool::kPen);
+  drag(view()->page_point_to_viewport(0, {100, 400}), view()->page_point_to_viewport(0, {200, 420}));
+  ASSERT_TRUE(wait_annotations(0, 1));
+  const auto& a = (*view()->annotations(0))[0];
+  EXPECT_EQ(a.kind, engine::AnnotationKind::kInk);
+  EXPECT_LE(a.rect.x, 100);
+  EXPECT_GE(a.rect.right(), 200);
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("펜 추가")));
+}
+
+TEST_F(AnnotationTest, SelectDeleteAndRecolorAnnotation) {
+  open_copy("simple.pdf");
+  ASSERT_TRUE(wait_annotations(0, 0));
+  ASSERT_TRUE(window_.add_note(0, {300, 300}, QStringLiteral("메모")));
+  ASSERT_TRUE(wait_annotations(0, 1));
+  use_tool(AnnotationTool::kSelect);
+  click(view()->page_point_to_viewport(0, {300, 300}));
+  ASSERT_TRUE(view()->selected_annotation().has_value());
+  EXPECT_EQ(view()->selected_annotation()->kind, engine::AnnotationKind::kText);
+  EXPECT_TRUE(window_.delete_annotation_action()->isEnabled());
+  EXPECT_TRUE(window_.statusBar()->currentMessage().contains(QStringLiteral("메모")));
+  // 색 변경 → 명령
+  window_.set_annotation_color({0, 200, 0, 255});
+  ASSERT_TRUE(wait_idle());
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("주석 색 변경")));
+  ASSERT_TRUE(wait_annotations(0, 1));
+  // 다시 선택 후 Delete
+  click(view()->page_point_to_viewport(0, {300, 300}));
+  ASSERT_TRUE(view()->selected_annotation().has_value());
+  QKeyEvent del(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+  QApplication::sendEvent(view(), &del);
+  ASSERT_TRUE(wait_annotations(0, 0));
+  EXPECT_FALSE(view()->selected_annotation().has_value());
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("주석 삭제")));
+  ASSERT_TRUE(window_.edit_controller()->undo());
+  ASSERT_TRUE(wait_annotations(0, 1));
+  EXPECT_EQ((*view()->annotations(0))[0].contents, "메모");
+  // 빈 곳 클릭 → 선택 해제, Escape 도 해제
+  click(view()->page_point_to_viewport(0, {300, 300}));
+  ASSERT_TRUE(view()->selected_annotation().has_value());
+  QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+  QApplication::sendEvent(view(), &esc);
+  EXPECT_FALSE(view()->selected_annotation().has_value());
+}
+
+TEST_F(AnnotationTest, ExistingLinksAreNotSelectable) {
+  ASSERT_TRUE(open("annotations.pdf"));
+  ASSERT_TRUE(wait_annotations(0, 6));
+  // 세 번째 링크 사각형(사용자 좌표 72..300 × 320..340 → 쪽 포인트 y = 792-340..792-320) 가운데 클릭
+  click(view()->page_point_to_viewport(0, {186, 462}));
+  EXPECT_FALSE(view()->selected_annotation().has_value());
+  // Square(사용자 72..300 × 480..620 → 쪽 포인트 y 172..312) 는 선택된다
+  click(view()->page_point_to_viewport(0, {186, 242}));
+  ASSERT_TRUE(view()->selected_annotation().has_value());
+  EXPECT_EQ(view()->selected_annotation()->kind, engine::AnnotationKind::kSquare);
+}
+
+TEST_F(AnnotationTest, PermissionDisablesAnnotationTools) {
+  ASSERT_TRUE(open("encrypted-owner-only.pdf"));  // 주석 금지(비트 6)
+  EXPECT_TRUE(window_.tool_action(AnnotationTool::kSelect)->isEnabled());
+  EXPECT_FALSE(window_.tool_action(AnnotationTool::kHighlight)->isEnabled());
+  EXPECT_FALSE(window_.tool_action(AnnotationTool::kNote)->isEnabled());
+  EXPECT_FALSE(window_.add_note(0, {100, 100}, QStringLiteral("x")));
+  ASSERT_TRUE(open("simple.pdf"));
+  EXPECT_TRUE(window_.tool_action(AnnotationTool::kHighlight)->isEnabled());
+  use_tool(AnnotationTool::kHighlight);
+  ASSERT_TRUE(open("encrypted-owner-only.pdf"));
+  EXPECT_EQ(view()->tool(), AnnotationTool::kSelect) << "권한이 없어지면 선택 도구로 돌아간다";
+}
+
+TEST_F(AnnotationTest, SignatureWarningBeforeFirstAnnotation) {
+  open_copy("signed-dummy.pdf");
+  ASSERT_TRUE(spin_until([&] { return view()->annotations(0) != nullptr; }));
+  const std::size_t before = view()->annotations(0)->size();
+  bool warned = false;
+  when_dialog("signature_warning", [&](QWidget* w) {
+    warned = true;
+    auto* box = qobject_cast<QMessageBox*>(w);
+    for (QAbstractButton* b : box->buttons()) {
+      if (box->buttonRole(b) == QMessageBox::AcceptRole) b->click();
+    }
+  });
+  ASSERT_TRUE(window_.add_note(0, {100, 100}, QStringLiteral("서명 메모")));
+  ASSERT_TRUE(wait_annotations(0, before + 1));
+  EXPECT_TRUE(warned);
+}
+
+TEST_F(AnnotationTest, PrintedOutputContainsHighlight) {
+  open_copy("simple.pdf");
+  ASSERT_TRUE(wait_text(0));
+  use_tool(AnnotationTool::kHighlight);
+  drag_first_word();
+  ASSERT_TRUE(wait_annotations(0, 1));
+  QPrinter printer(QPrinter::HighResolution);
+  printer.setOutputFormat(QPrinter::PdfFormat);
+  const auto out = dir_ / "printed.pdf";
+  printer.setOutputFileName(QString::fromStdString(onpdf::path_to_utf8(out)));
+  ASSERT_TRUE(window_.print_with(printer));
+  ASSERT_TRUE(spin_until([&] { return window_.print_job() != nullptr && !window_.print_job()->active(); }));
+  auto future = engine::DocumentHandle::open(worker_, out);
+  auto doc = future.get();
+  ASSERT_TRUE(doc) << doc.error().message;
+  engine::RenderOptions o;
+  o.scale = 0.5f;
+  auto bmp = doc->render_page(0, o).get();
+  ASSERT_TRUE(bmp);
+  int yellow = 0;
+  for (int y = 0; y < bmp->height; ++y) {
+    for (int x = 0; x < bmp->width; ++x) {
+      const auto* p = bmp->pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(bmp->stride) +
+                      static_cast<std::size_t>(x) * 4;
+      if (p[2] > 200 && p[1] > 200 && p[0] < 80) ++yellow;
+    }
+  }
+  EXPECT_GT(yellow, 50) << "하이라이트(Print 플래그)가 인쇄 출력에 있어야 한다";
+}
+
+}  // namespace
+}  // namespace onpdf::app

@@ -6,6 +6,7 @@ add_library(onpdf_edit STATIC
   src/delete_pages.cpp
   src/move_pages.cpp
   src/insert_pages.cpp
+  src/annotation_commands.cpp
 )
 add_library(onpdf::edit ALIAS onpdf_edit)
 target_include_directories(onpdf_edit PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
