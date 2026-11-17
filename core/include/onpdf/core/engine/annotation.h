@@ -24,6 +24,7 @@ constexpr int kAnnotFlagHidden = 1 << 1;
 constexpr int kAnnotFlagPrint = 1 << 2;
 constexpr int kAnnotFlagNoZoom = 1 << 3;
 constexpr int kAnnotFlagNoRotate = 1 << 4;
+constexpr int kAnnotFlagNoView = 1 << 5;
 
 // 조회용 스냅샷 한 항목 (뷰 hit-test·상태 표시). 워커에서 만들고 메인에서 읽는다
 struct AnnotationInfo {
@@ -50,20 +51,23 @@ struct AnnotationSpec {
   std::string id;                                 // /NM. 비어 있으면 엔진이 만든다 (재실행 때 같은 NM 을 쓰도록 Command 가 채운다)
 };
 
-// 삭제·색·내용 취소용 원시값 (PDF 사용자 좌표, 좌하단 원점). 같은 NM 으로 다시 만들 수 있다
+// 삭제·색·내용 취소용 원시값 (PDF 사용자 좌표, 좌하단 원점). 같은 NM 으로 다시 만들 수 있다.
+// 모양 스트림(AP)은 보관하지 않는다: 스냅샷을 뜰 때 AP 를 지우고 색·내부색·불투명도를 읽어 두며,
+// 복원 뒤 PDFium 이 같은 모양을 다시 만든다 (AP 텍스트만 되돌리면 /Resources 가 빠져 하이라이트가 글자를 덮는다)
 struct AnnotationSnapshot {
   AnnotationKind kind = AnnotationKind::kOther;
   std::string id;                                 // /NM (스냅샷을 뜰 때 없으면 부여한다)
   std::array<double, 4> rect{};                   // left, bottom, right, top
   std::vector<std::array<float, 8>> quads;        // FS_QUADPOINTSF 순서 (x1 y1 … x4 y4)
   std::vector<std::vector<Point>> ink;            // 사용자 좌표
-  Color color;
+  Color color;                                    // /C + /CA(a)
   bool has_color = false;
-  float border_width = 0.0f;
+  Color interior;                                 // /IC (Square·Circle 채움)
+  bool has_interior = false;
+  float border_width = 0.0f;                      // /Border 만 읽힌다 (/BS /W 는 PDFium API 로 못 읽는다 — 한계)
   bool has_border = false;
   int flags = 0;
   std::string contents, author, modified, subject;  // UTF-8
-  std::vector<unsigned short> ap_normal;          // Normal 모양 스트림 내용 (UTF-16 코드 단위 그대로, 비면 없음)
 };
 
 }  // namespace onpdf::engine

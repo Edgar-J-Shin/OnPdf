@@ -177,6 +177,7 @@ class DocumentView : public QAbstractScrollArea {
                       bool cancelled);
   [[nodiscard]] const engine::AnnotationInfo* annotation_at(int page, onpdf::Point pt) const;  // 위에 그려진 것 먼저
   [[nodiscard]] onpdf::Point clamp_to_page(int page, onpdf::Point pt) const;
+  [[nodiscard]] onpdf::Point page_point_on(int page, QPointF viewport_pos) const;  // 특정 쪽 좌표로 투영 (쪽 밖도 음수·초과로)
   void update_page(int page);  // 그 쪽 영역만 다시 그린다
   [[nodiscard]] view::TextPos position_at(QPointF viewport_pos) const;  // 가장 가까운 선택 위치 (쪽 밖은 clamp)
   void update_hover(QPointF viewport_pos);

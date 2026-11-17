@@ -80,14 +80,14 @@ class EditableDocument {
   [[nodiscard]] virtual Result<std::vector<AnnotationInfo>> annotations(int page_index) const = 0;
   // 새 주석을 만든다 (AP 없음 — PDFium 이 렌더 때 만든다). 돌려주는 값은 /NM
   [[nodiscard]] virtual Result<std::string> add_annotation(int page_index, const AnnotationSpec& spec) = 0;
-  // 되살리기용 원시값. NM 이 없으면 부여한다 (돌려준 snapshot.id 가 그 뒤의 id)
+  // 되살리기용 원시값. NM 이 없으면 부여한다 (돌려준 snapshot.id 가 그 뒤의 id).
+  // 주석의 AP 를 지운다 (색을 읽기 위해) — 삭제·색 변경 직전에만 부르고, 지워진 AP 는 다음 렌더가 다시 만든다
   [[nodiscard]] virtual Result<AnnotationSnapshot> snapshot_annotation(int page_index, std::string_view id) = 0;
   [[nodiscard]] virtual Result<void> remove_annotation(int page_index, std::string_view id) = 0;
-  // 같은 NM 으로 다시 만든다 (ap_normal 이 있으면 그 모양 그대로). /Annots 끝에 붙는다
+  // 같은 NM 으로 다시 만든다 (모양은 PDFium 이 다시 그린다). /Annots 끝에 붙는다
   [[nodiscard]] virtual Result<void> restore_annotation(int page_index, const AnnotationSnapshot& snapshot) = 0;
-  // ap_normal 이 비어 있으면 AP 를 지우고 색을 쓴다(다음 렌더가 새 AP 를 만든다). 비어 있지 않으면 그 AP 를 되돌린다
-  [[nodiscard]] virtual Result<void> set_annotation_color(int page_index, std::string_view id, Color color,
-                                                          const std::vector<unsigned short>& ap_normal) = 0;
+  // AP 를 지우고 /C(+/CA) 를 쓴다. 다음 렌더가 새 AP 를 만든다
+  [[nodiscard]] virtual Result<void> set_annotation_color(int page_index, std::string_view id, Color color) = 0;
   [[nodiscard]] virtual Result<void> set_annotation_contents(int page_index, std::string_view id,
                                                              std::string_view utf8) = 0;
 };

@@ -20,6 +20,7 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <cstdio>
 #include <ctime>
 #include <random>
 #include <string>
@@ -295,16 +296,6 @@ bool set_annot_string(FPDF_ANNOTATION annot, const char* key, const std::string&
   return FPDFAnnot_SetStringValue(annot, key, wide.data()) != 0;
 }
 
-// Normal 모양 스트림 내용 (UTF-16 코드 단위 그대로). 없으면 빈 벡터
-std::vector<unsigned short> annot_ap(FPDF_ANNOTATION annot) {
-  const unsigned long bytes = FPDFAnnot_GetAP(annot, FPDF_ANNOT_APPEARANCEMODE_NORMAL, nullptr, 0);
-  if (bytes <= 2) return {};
-  std::vector<unsigned short> buf(bytes / 2);
-  FPDFAnnot_GetAP(annot, FPDF_ANNOT_APPEARANCEMODE_NORMAL, buf.data(), bytes);
-  while (!buf.empty() && buf.back() == 0) buf.pop_back();
-  return buf;
-}
-
 // PDF 날짜 문자열 (UTC, "D:YYYYMMDDHHmmSSZ"). std::gmtime 은 재진입 불가지만 워커 스레드에서만 부른다
 std::string pdf_date_now() {
   const std::time_t now = std::time(nullptr);
@@ -357,9 +348,9 @@ Result<std::string> ensure_nm(FPDF_ANNOTATION annot) {
   return nm;
 }
 
-bool fill_color(FPDF_ANNOTATION annot, Color& color) {
+bool fill_color(FPDF_ANNOTATION annot, Color& color, FPDFANNOT_COLORTYPE type = FPDFANNOT_COLORTYPE_Color) {
   unsigned r = 0, g = 0, b = 0, a = 255;
-  if (!FPDFAnnot_GetColor(annot, FPDFANNOT_COLORTYPE_Color, &r, &g, &b, &a)) return false;
+  if (!FPDFAnnot_GetColor(annot, type, &r, &g, &b, &a)) return false;
   color = {static_cast<std::uint8_t>(r), static_cast<std::uint8_t>(g), static_cast<std::uint8_t>(b),
            static_cast<std::uint8_t>(a)};
   return true;
@@ -489,7 +480,12 @@ Result<AnnotationSnapshot> PdfiumDocument::snapshot_annotation(int page_index, s
     for (const auto& p : pts) stroke.push_back({p.x, p.y});
     snap.ink.push_back(std::move(stroke));
   }
+  // AP 가 있으면 색을 읽지 못한다: 스냅샷은 삭제·색 변경 직전에만 뜨므로 여기서 AP 를 지우고 읽는다 (다음 렌더가 다시 만든다)
+  if (!FPDFAnnot_SetAP(annot, FPDF_ANNOT_APPEARANCEMODE_NORMAL, nullptr)) {
+    return make_error(ErrorCode::kInvalidState, "cannot clear appearance stream");
+  }
   snap.has_color = fill_color(annot, snap.color);
+  snap.has_interior = fill_color(annot, snap.interior, FPDFANNOT_COLORTYPE_InteriorColor);
   float hr = 0, vr = 0, bw = 0;
   snap.has_border = FPDFAnnot_GetBorder(annot, &hr, &vr, &bw) != 0;
   snap.border_width = bw;
@@ -498,7 +494,6 @@ Result<AnnotationSnapshot> PdfiumDocument::snapshot_annotation(int page_index, s
   snap.author = annot_string(annot, "T");
   snap.modified = annot_string(annot, "M");
   snap.subject = annot_string(annot, "Subj");
-  snap.ap_normal = annot_ap(annot);
   return snap;
 }
 
@@ -523,46 +518,45 @@ Result<void> PdfiumDocument::restore_annotation(int page_index, const Annotation
   if (snap.id.empty()) return make_error(ErrorCode::kInvalidArgument, "snapshot without id");
   auto page = load_page(page_index);
   if (!page) return std::unexpected(page.error());
+  const int before = FPDFPage_GetAnnotCount(page->get());
   ScopedAnnotation annot(FPDFPage_CreateAnnot(page->get(), subtype_of(snap.kind)));
   if (!annot) return make_error(ErrorCode::kInvalidState, "FPDFPage_CreateAnnot failed");
+  // 중간에 실패하면 반만 만든 주석을 남기지 않는다
+  const auto fail = [&](const char* what) -> Result<void> {
+    annot.reset();
+    FPDFPage_RemoveAnnot(page->get(), before);
+    return make_error(ErrorCode::kInvalidState, what);
+  };
   for (const auto& q : snap.quads) {
     FS_QUADPOINTSF quad{q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7]};
-    if (!FPDFAnnot_AppendAttachmentPoints(annot.get(), &quad)) {
-      return make_error(ErrorCode::kInvalidState, "FPDFAnnot_AppendAttachmentPoints failed");
-    }
+    if (!FPDFAnnot_AppendAttachmentPoints(annot.get(), &quad)) return fail("FPDFAnnot_AppendAttachmentPoints failed");
   }
   for (const auto& stroke : snap.ink) {
     std::vector<FS_POINTF> pts;
     for (const Point& p : stroke) pts.push_back({static_cast<float>(p.x), static_cast<float>(p.y)});
-    if (!pts.empty() && FPDFAnnot_AddInkStroke(annot.get(), pts.data(), pts.size()) < 0) {
-      return make_error(ErrorCode::kInvalidState, "FPDFAnnot_AddInkStroke failed");
-    }
+    if (!pts.empty() && FPDFAnnot_AddInkStroke(annot.get(), pts.data(), pts.size()) < 0) return fail("FPDFAnnot_AddInkStroke failed");
   }
   FS_RECTF rect{static_cast<float>(snap.rect[0]), static_cast<float>(snap.rect[3]), static_cast<float>(snap.rect[2]),
                 static_cast<float>(snap.rect[1])};
-  if (!FPDFAnnot_SetRect(annot.get(), &rect)) return make_error(ErrorCode::kInvalidState, "FPDFAnnot_SetRect failed");
+  if (!FPDFAnnot_SetRect(annot.get(), &rect)) return fail("FPDFAnnot_SetRect failed");
   if (snap.has_border) (void)FPDFAnnot_SetBorder(annot.get(), 0, 0, snap.border_width);
   if (snap.has_color) {
     (void)FPDFAnnot_SetColor(annot.get(), FPDFANNOT_COLORTYPE_Color, snap.color.r, snap.color.g, snap.color.b, snap.color.a);
   }
+  if (snap.has_interior) {
+    (void)FPDFAnnot_SetColor(annot.get(), FPDFANNOT_COLORTYPE_InteriorColor, snap.interior.r, snap.interior.g,
+                             snap.interior.b, snap.interior.a);
+  }
   (void)FPDFAnnot_SetFlags(annot.get(), snap.flags);
-  if (!set_annot_string(annot.get(), "NM", snap.id)) return make_error(ErrorCode::kInvalidState, "cannot set /NM");
+  if (!set_annot_string(annot.get(), "NM", snap.id)) return fail("cannot set /NM");
   if (!snap.contents.empty()) (void)set_annot_string(annot.get(), "Contents", snap.contents);
   if (!snap.author.empty()) (void)set_annot_string(annot.get(), "T", snap.author);
   if (!snap.modified.empty()) (void)set_annot_string(annot.get(), "M", snap.modified);
   if (!snap.subject.empty()) (void)set_annot_string(annot.get(), "Subj", snap.subject);
-  if (!snap.ap_normal.empty()) {
-    std::vector<unsigned short> ap = snap.ap_normal;
-    ap.push_back(0);
-    if (!FPDFAnnot_SetAP(annot.get(), FPDF_ANNOT_APPEARANCEMODE_NORMAL, ap.data())) {
-      return make_error(ErrorCode::kInvalidState, "FPDFAnnot_SetAP failed");
-    }
-  }
-  return {};
+  return {};  // AP 는 두지 않는다: 다음 렌더가 PDFium 모양으로 다시 만든다
 }
 
-Result<void> PdfiumDocument::set_annotation_color(int page_index, std::string_view id, Color color,
-                                                  const std::vector<unsigned short>& ap_normal) {
+Result<void> PdfiumDocument::set_annotation_color(int page_index, std::string_view id, Color color) {
   PdfiumLibrary::assert_current_thread();
   auto page = load_page(page_index);
   if (!page) return std::unexpected(page.error());
@@ -570,14 +564,6 @@ Result<void> PdfiumDocument::set_annotation_color(int page_index, std::string_vi
   if (!found) return std::unexpected(found.error());
   FPDF_ANNOTATION annot = found->annot.get();
   if (auto nm = ensure_nm(annot); !nm) return std::unexpected(nm.error());
-  if (!ap_normal.empty()) {  // 이전 모양 그대로 되돌리기 (색은 AP 가 결정)
-    std::vector<unsigned short> ap = ap_normal;
-    ap.push_back(0);
-    if (!FPDFAnnot_SetAP(annot, FPDF_ANNOT_APPEARANCEMODE_NORMAL, ap.data())) {
-      return make_error(ErrorCode::kInvalidState, "FPDFAnnot_SetAP failed");
-    }
-    return {};
-  }
   // AP 가 있으면 SetColor 가 실패한다: 지우고 색을 쓰면 다음 렌더가 새 AP 를 만든다
   if (!FPDFAnnot_SetAP(annot, FPDF_ANNOT_APPEARANCEMODE_NORMAL, nullptr)) {
     return make_error(ErrorCode::kInvalidState, "cannot clear appearance stream");

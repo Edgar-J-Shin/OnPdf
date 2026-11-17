@@ -91,17 +91,15 @@ Result<engine::ChangeSet> SetAnnotationColorCommand::execute(engine::EditableDoc
   if (!before) return std::unexpected(before.error());
   before_ = std::move(*before);
   annotation_id_ = before_.id;
-  if (auto set = doc.set_annotation_color(page_, annotation_id_, color_, {}); !set) return std::unexpected(set.error());
+  if (auto set = doc.set_annotation_color(page_, annotation_id_, color_); !set) return std::unexpected(set.error());
   executed_ = true;
   return page_change({page_});
 }
 
 Result<engine::ChangeSet> SetAnnotationColorCommand::undo(engine::EditableDocument& doc) {
   if (!executed_) return make_error(ErrorCode::kInvalidState, "undo before execute");
-  // 이전에 AP 가 있었으면 그 모양을 그대로, 없었으면 이전 색으로
-  if (auto set = doc.set_annotation_color(page_, annotation_id_, before_.color, before_.ap_normal); !set) {
-    return std::unexpected(set.error());
-  }
+  // 이전 색으로 (모양은 PDFium 이 다시 그린다)
+  if (auto set = doc.set_annotation_color(page_, annotation_id_, before_.color); !set) return std::unexpected(set.error());
   return page_change({page_});
 }
 

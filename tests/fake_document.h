@@ -51,6 +51,7 @@ class FakeDocument final : public engine::EditableDocument {
   struct FakeAnnot {
     engine::AnnotationSnapshot snap;
     onpdf::Rect rect;  // 쪽 포인트
+    bool has_ap = false;  // 렌더로 생긴 AP (색 변경·스냅샷이 지운다)
   };
   int fail_add_on_page = -1;  // 이 쪽에 add_annotation 을 하면 실패 (보상 삭제 테스트)
   [[nodiscard]] int annotation_count(int page) const { const auto it = annots_.find(page); return it == annots_.end() ? 0 : static_cast<int>(it->second.size()); }
@@ -154,7 +155,7 @@ class FakeDocument final : public engine::EditableDocument {
       info.kind = a.snap.kind;
       info.rect = a.rect;
       info.color = a.snap.color;
-      info.has_color = a.snap.ap_normal.empty();
+      info.has_color = !a.has_ap;
       info.contents = a.snap.contents;
       info.author = a.snap.author;
       info.flags = a.snap.flags;
@@ -189,6 +190,7 @@ class FakeDocument final : public engine::EditableDocument {
     FakeAnnot* a = find_mutable(page, id);
     if (a == nullptr) return make_error(ErrorCode::kInvalidArgument, "annotation not found");
     if (a->snap.id.empty()) a->snap.id = "fake-" + std::to_string(next_nm_++);
+    a->has_ap = false;  // 실제 엔진처럼 AP 를 지우고 읽는다
     return a->snap;
   }
   [[nodiscard]] Result<void> remove_annotation(int page, std::string_view id) override {
@@ -209,15 +211,10 @@ class FakeDocument final : public engine::EditableDocument {
     annots_[page].push_back(std::move(a));
     return {};
   }
-  [[nodiscard]] Result<void> set_annotation_color(int page, std::string_view id, engine::Color color,
-                                                  const std::vector<unsigned short>& ap_normal) override {
+  [[nodiscard]] Result<void> set_annotation_color(int page, std::string_view id, engine::Color color) override {
     FakeAnnot* a = find_mutable(page, id);
     if (a == nullptr) return make_error(ErrorCode::kInvalidArgument, "annotation not found");
-    if (!ap_normal.empty()) {
-      a->snap.ap_normal = ap_normal;  // 모양 복원 (색은 AP 가 결정)
-      return {};
-    }
-    a->snap.ap_normal.clear();
+    a->has_ap = false;
     a->snap.color = color;
     return {};
   }
@@ -229,7 +226,7 @@ class FakeDocument final : public engine::EditableDocument {
   }
   // 테스트용: 렌더를 흉내 내 AP 를 만든다 (색 변경이 AP 를 지우는지 확인)
   void fake_render(int page) {
-    for (auto& a : annots_[page]) if (a.snap.ap_normal.empty()) a.snap.ap_normal = {'A', 'P'};
+    for (auto& a : annots_[page]) a.has_ap = true;
   }
 
  private:

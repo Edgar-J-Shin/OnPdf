@@ -37,6 +37,7 @@ double fraction_in(const Bitmap& bmp, const Rect& rect_pt, double scale, bool (*
 }
 bool yellowish(int r, int g, int b) { return r > 200 && g > 200 && b < 80; }
 bool greenish(int r, int g, int b) { return g > 200 && r < 80 && b < 80; }
+bool dark(int r, int g, int b) { return r < 90 && g < 90 && b < 90; }  // 글자
 
 // 메모 아이콘 사각형이 회전된 쪽에서도 입력한 쪽 포인트 자리로 돌아온다 (to_user ↔ to_rect 왕복)
 TEST(Annotations, RectRoundTripsOnRotatedPages) {
@@ -94,21 +95,25 @@ TEST(Annotations, HighlightFromSelectionAndRecolorAfterRender) {
   auto before = doc->render_page(0, options);
   ASSERT_TRUE(before);
   EXPECT_GT(fraction_in(*before, quads.front(), 2.0, yellowish), 0.3);
-  auto snap = doc->snapshot_annotation(0, *id);
+  const double text_before = fraction_in(*before, quads.front(), 2.0, dark);
+  ASSERT_GT(text_before, 0.02) << "글자가 하이라이트를 통해 보여야 한다 (Multiply)";
+  auto snap = doc->snapshot_annotation(0, *id);  // AP 를 지우고 색을 읽는다
   ASSERT_TRUE(snap);
-  EXPECT_FALSE(snap->ap_normal.empty()) << "PDFium generates an AP on render";
+  EXPECT_TRUE(snap->has_color);
+  EXPECT_EQ(snap->color, (Color{255, 255, 0, 255}));
   EXPECT_EQ(snap->quads.size(), quads.size());
   // AP 가 있어도 색 변경이 되고 다음 렌더가 초록으로 그린다
-  ASSERT_TRUE(doc->set_annotation_color(0, *id, {0, 255, 0, 255}, {}));
+  ASSERT_TRUE(doc->set_annotation_color(0, *id, {0, 255, 0, 255}));
   auto after = doc->render_page(0, options);
   ASSERT_TRUE(after);
   EXPECT_GT(fraction_in(*after, quads.front(), 2.0, greenish), 0.3);
   EXPECT_LT(fraction_in(*after, quads.front(), 2.0, yellowish), 0.05);
-  // 이전 AP 로 되돌리면 다시 노랑
-  ASSERT_TRUE(doc->set_annotation_color(0, *id, {0, 0, 0, 255}, snap->ap_normal));
+  // 이전 색으로 되돌리면 다시 노랑이고 글자도 그대로 보인다 (리뷰 C1: AP 텍스트 복원은 /Resources 를 잃어 글자를 덮었다)
+  ASSERT_TRUE(doc->set_annotation_color(0, *id, snap->color));
   auto restored = doc->render_page(0, options);
   ASSERT_TRUE(restored);
   EXPECT_GT(fraction_in(*restored, quads.front(), 2.0, yellowish), 0.3);
+  EXPECT_NEAR(fraction_in(*restored, quads.front(), 2.0, dark), text_before, 0.01);
 }
 
 TEST(Annotations, ExistingAnnotationsAreListedWithKindsAndEditability) {
@@ -137,13 +142,20 @@ TEST(Annotations, ExistingAnnotationsAreListedWithKindsAndEditability) {
   EXPECT_EQ((*again)[1].id, snap->id);
 }
 
-// 기존(AP 있는) 하이라이트를 지우고 되살리면 모양·내용이 그대로다
-TEST(Annotations, RemoveAndRestoreKeepsAppearance) {
+// 기존(AP 있는) 하이라이트를 지우고 되살리면 색·Quad·내용이 그대로고 글자가 여전히 보인다 (리뷰 C1)
+TEST(Annotations, RemoveAndRestoreKeepsTextVisible) {
   auto doc = PdfiumDocument::open(testdata("annotations.pdf"));
   ASSERT_TRUE(doc);
+  RenderOptions options;
+  options.scale = 2.0f;
+  const Rect hl = (*doc->annotations(0))[0].rect;
+  auto before = doc->render_page(0, options);
+  ASSERT_TRUE(before);
+  const double text_before = fraction_in(*before, hl, 2.0, dark);
+  ASSERT_GT(text_before, 0.02);
   auto snap = doc->snapshot_annotation(0, "#0");
   ASSERT_TRUE(snap);
-  ASSERT_FALSE(snap->ap_normal.empty());
+  EXPECT_TRUE(snap->has_color);
   ASSERT_EQ(snap->quads.size(), 1u);
   ASSERT_TRUE(doc->remove_annotation(0, snap->id));
   EXPECT_EQ(doc->annotations(0)->size(), 5u);
@@ -154,11 +166,28 @@ TEST(Annotations, RemoveAndRestoreKeepsAppearance) {
   ASSERT_NE(back, nullptr);
   EXPECT_EQ(back->kind, AnnotationKind::kHighlight);
   EXPECT_EQ(back->contents, snap->contents);
+  auto after = doc->render_page(0, options);
+  ASSERT_TRUE(after);
+  EXPECT_GT(fraction_in(*after, hl, 2.0, yellowish), 0.3);
+  EXPECT_NEAR(fraction_in(*after, hl, 2.0, dark), text_before, 0.01) << "복원된 하이라이트가 글자를 덮으면 안 된다";
   auto snap2 = doc->snapshot_annotation(0, snap->id);
   ASSERT_TRUE(snap2);
-  EXPECT_EQ(snap2->ap_normal, snap->ap_normal);
+  EXPECT_EQ(snap2->color, snap->color);
   EXPECT_EQ(snap2->quads, snap->quads);
   EXPECT_EQ(snap2->flags, snap->flags);
+  // Square: 내부색(/IC)과 불투명도(/CA) 도 왕복한다 (리뷰 W3). 복원된 하이라이트가 끝으로 갔으니 Square 는 이제 #0
+  auto sq = doc->snapshot_annotation(0, "#0");
+  ASSERT_TRUE(sq);
+  EXPECT_EQ(sq->kind, AnnotationKind::kSquare);
+  EXPECT_TRUE(sq->has_interior);
+  EXPECT_EQ(sq->interior.r, 255);
+  EXPECT_EQ(sq->color.a, 204);  // CA 0.8
+  ASSERT_TRUE(doc->remove_annotation(0, sq->id));
+  ASSERT_TRUE(doc->restore_annotation(0, *sq));
+  auto sq2 = doc->snapshot_annotation(0, sq->id);
+  ASSERT_TRUE(sq2);
+  EXPECT_EQ(sq2->interior, sq->interior);
+  EXPECT_EQ(sq2->color, sq->color);
   // 없는 id
   EXPECT_FALSE(doc->remove_annotation(0, "nope"));
   EXPECT_FALSE(doc->snapshot_annotation(0, "#99"));

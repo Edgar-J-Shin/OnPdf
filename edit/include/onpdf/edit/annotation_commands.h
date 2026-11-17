@@ -45,7 +45,7 @@ class RemoveAnnotationCommand final : public Command {
   bool executed_ = false;
 };
 
-// 색 변경: 이전 AP(있으면)와 색을 보관해 취소 때 모양 그대로 되돌린다
+// 색 변경: 이전 색을 보관해 취소 때 되돌린다 (모양은 PDFium 이 다시 그린다)
 class SetAnnotationColorCommand final : public Command {
  public:
   SetAnnotationColorCommand(int page, std::string id, engine::Color color);

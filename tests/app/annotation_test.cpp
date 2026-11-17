@@ -146,13 +146,21 @@ TEST_F(AnnotationTest, HighlightDragCreatesAnnotationAndUndoRemovesIt) {
   EXPECT_EQ(a.kind, engine::AnnotationKind::kHighlight);
   EXPECT_EQ(a.flags & engine::kAnnotFlagPrint, engine::kAnnotFlagPrint);
   EXPECT_FALSE(view()->has_selection()) << "주석이 선택 역할을 이어받는다";
+  EXPECT_EQ(view()->tool(), AnnotationTool::kHighlight) << "명령을 실행해도 도구는 유지된다 (리뷰 W1)";
   EXPECT_TRUE(window_.isWindowModified());
   EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("하이라이트 추가")));
   ASSERT_TRUE(window_.edit_controller()->undo());
   ASSERT_TRUE(wait_annotations(0, 0));
   EXPECT_FALSE(window_.isWindowModified());
+  EXPECT_EQ(view()->tool(), AnnotationTool::kHighlight);
   ASSERT_TRUE(window_.edit_controller()->redo());
   ASSERT_TRUE(wait_annotations(0, 1));
+  // 바쁜 동안의 요청은 거절되지만 도구는 남는다
+  window_.rotate_current_page(1);
+  ASSERT_TRUE(window_.edit_controller()->busy());
+  EXPECT_FALSE(window_.add_note(0, {100, 100}, QStringLiteral("x")));
+  EXPECT_EQ(view()->tool(), AnnotationTool::kHighlight);
+  ASSERT_TRUE(wait_idle());
 }
 
 TEST_F(AnnotationTest, MarkupShortcutUsesCurrentSelection) {
@@ -191,6 +199,45 @@ TEST_F(AnnotationTest, NoteToolOpensEditorAndCreatesNote) {
   click(view()->page_point_to_viewport(0, {200, 500}));
   ASSERT_TRUE(wait_idle());
   EXPECT_EQ(view()->annotations(0)->size(), 1u);
+}
+
+// 펜이 쪽 아래로 나가도 점이 쪽 맨 위로 튀지 않는다 (리뷰 W2): 시작 쪽 좌표로 투영한 뒤 클램프
+TEST_F(AnnotationTest, PenDragBeyondPageEdgeStaysAtEdge) {
+  open_copy("simple.pdf");
+  ASSERT_TRUE(wait_annotations(0, 0));
+  view()->set_zoom(0.5);  // 1쪽 아래 2쪽이 보이게
+  use_tool(AnnotationTool::kPen);
+  const QPointF start = view()->page_point_to_viewport(0, {300, 700});
+  const QPointF beyond = view()->page_point_to_viewport(0, {300, 900});  // 1쪽(792pt) 아래 = 2쪽 위
+  send_mouse(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+  send_mouse(QEvent::MouseMove, view()->page_point_to_viewport(0, {300, 780}), Qt::NoButton, Qt::LeftButton);
+  send_mouse(QEvent::MouseMove, beyond, Qt::NoButton, Qt::LeftButton);
+  send_mouse(QEvent::MouseButtonRelease, beyond, Qt::LeftButton, Qt::NoButton);
+  ASSERT_TRUE(wait_annotations(0, 1));
+  const auto& a = (*view()->annotations(0))[0];
+  EXPECT_EQ(a.kind, engine::AnnotationKind::kInk);
+  EXPECT_GT(a.rect.y, 600) << "쪽 맨 위(y≈0)로 튄 점이 없어야 한다";
+  EXPECT_GE(a.rect.bottom(), 790) << "쪽 아래 가장자리에서 멈춘다";
+  EXPECT_EQ(view()->annotations(1) == nullptr ? 0u : view()->annotations(1)->size(), 0u);
+}
+
+// 화면에 없는(NoView) 주석은 고를 수 없다 (리뷰 W4)
+TEST_F(AnnotationTest, HiddenAnnotationsAreNotSelectable) {
+  ASSERT_TRUE(open("print-flags.pdf"));
+  ASSERT_TRUE(wait_annotations(0, 2));
+  const engine::AnnotationInfo* hidden = nullptr;
+  const engine::AnnotationInfo* visible = nullptr;
+  for (const auto& a : *view()->annotations(0)) {
+    if (a.flags & engine::kAnnotFlagNoView) hidden = &a; else visible = &a;
+  }
+  ASSERT_NE(hidden, nullptr);
+  ASSERT_NE(visible, nullptr);
+  const auto center = [](const onpdf::Rect& r) { return onpdf::Point{r.x + r.w / 2, r.y + r.h / 2}; };
+  click(view()->page_point_to_viewport(0, center(hidden->rect)));
+  EXPECT_FALSE(view()->selected_annotation().has_value());
+  click(view()->page_point_to_viewport(0, center(visible->rect)));
+  ASSERT_TRUE(view()->selected_annotation().has_value());
+  EXPECT_EQ(view()->selected_annotation()->kind, engine::AnnotationKind::kSquare);
 }
 
 TEST_F(AnnotationTest, PenDragCreatesInk) {
@@ -233,7 +280,7 @@ TEST_F(AnnotationTest, SelectDeleteAndRecolorAnnotation) {
   ASSERT_TRUE(window_.edit_controller()->undo());
   ASSERT_TRUE(wait_annotations(0, 1));
   EXPECT_EQ((*view()->annotations(0))[0].contents, "메모");
-  // 빈 곳 클릭 → 선택 해제, Escape 도 해제
+  // 다시 고른 뒤 Escape 로 해제
   click(view()->page_point_to_viewport(0, {300, 300}));
   ASSERT_TRUE(view()->selected_annotation().has_value());
   QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);

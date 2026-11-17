@@ -85,12 +85,12 @@ class DocumentHandle {
                                                           const Rect& region_px,
                                                           Priority priority = Priority::kNormal) const;
 
-  // 쪽 텍스트 인덱스. 계약은 render_page 와 같다 (콜백은 정확히 한 번).
   // 쪽의 주석 목록 (뷰 hit-test·선택용 스냅샷). 계약은 render_page 와 같다
   TaskHandle load_annotations(int page_index, Priority priority,
                               std::function<void(Result<std::vector<AnnotationInfo>>)> on_done) const;
   [[nodiscard]] std::future<Result<std::vector<AnnotationInfo>>> load_annotations(int page_index,
                                                                                Priority priority = Priority::kLow) const;
+  // 쪽 텍스트 인덱스. 계약은 render_page 와 같다 (콜백은 정확히 한 번).
   TaskHandle load_text(int page_index, Priority priority,
                        std::function<void(Result<view::PageTextIndex>)> on_done) const;
   [[nodiscard]] std::future<Result<view::PageTextIndex>> load_text(int page_index,

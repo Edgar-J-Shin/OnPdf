@@ -41,6 +41,7 @@
 #include <QPrinter>
 #include <QProgressBar>
 #include <QProgressDialog>
+#include <QScopedValueRollback>
 #include <QScrollBar>
 #include <QSpinBox>
 #include <QSplitter>
@@ -360,6 +361,8 @@ void MainWindow::update_title() {
 }
 
 void MainWindow::update_edit_actions() {
+  if (updating_actions_) return;  // set_tool → annotation_selected → 여기로 되돌아오는 재진입 차단
+  const QScopedValueRollback guard(updating_actions_, true);
   const bool has_pages = session_.has_document() && session_.handle().valid() && session_.handle().info().page_count > 0;
   const bool printing = print_job_ && print_job_->active();
   // 편집 가능 상태(작업 중이 아님)와 편집 종류별 문서 권한을 따로 본다
@@ -378,18 +381,23 @@ void MainWindow::update_edit_actions() {
   thumbnail_panel_->set_editable(idle && can_assemble);
   const bool can_annotate = has_pages && session_.handle().info().permissions.annotate;
   const QString annotate_tip = has_pages && !can_annotate ? tr("이 문서는 주석이 허용되지 않습니다") : QString();
+  // 도구는 권한으로만 켜고 끈다. 바쁨·저장·인쇄 중에는 요청(annotation_edits_allowed_)만 막아 도구가 유지된다 (리뷰 W1)
+  annotation_edits_allowed_ = idle && can_annotate;
   for (QAction* action : tool_actions_) {
     if (action == nullptr) continue;
     const bool select = action == tool_actions_[0];
-    action->setEnabled(select || (idle && can_annotate));
+    action->setEnabled(select || can_annotate);
     action->setStatusTip(select ? QString() : annotate_tip);
   }
-  if (!(idle && can_annotate) && view_->tool() != AnnotationTool::kSelect) tool_actions_[0]->trigger();
+  if (!can_annotate && view_->tool() != AnnotationTool::kSelect) {  // 권한을 잃으면(문서 교체) 선택 도구로
+    tool_actions_[0]->setChecked(true);
+    view_->set_tool(AnnotationTool::kSelect);
+  }
   for (QAction* action : markup_selection_actions_) {
     if (action != nullptr) action->setEnabled(idle && can_annotate && view_->has_selection());
   }
-  delete_annotation_action_->setEnabled(idle && can_annotate && view_->selected_annotation().has_value());
-  color_button_->setEnabled(idle && can_annotate);
+  delete_annotation_action_->setEnabled(annotation_edits_allowed_ && view_->selected_annotation().has_value());
+  color_button_->setEnabled(can_annotate);
   // 실행 취소 대상은 이미 허용된 편집이므로 작업 중이 아니면 된다
   undo_action_->setEnabled(idle && edit_->can_undo());
   redo_action_->setEnabled(idle && edit_->can_redo());
@@ -523,7 +531,8 @@ namespace {
 constexpr engine::Color kPalette[] = {
     {255, 255, 0, 255}, {0, 200, 0, 255}, {0, 150, 255, 255}, {255, 105, 180, 255}, {255, 0, 0, 255}, {255, 140, 0, 255},
 };
-const char* const kPaletteNames[] = {"노랑", "초록", "파랑", "분홍", "빨강", "주황"};
+const char* const kPaletteNames[] = {QT_TR_NOOP("노랑"), QT_TR_NOOP("초록"), QT_TR_NOOP("파랑"),
+                                     QT_TR_NOOP("분홍"), QT_TR_NOOP("빨강"), QT_TR_NOOP("주황")};
 
 QIcon color_icon(engine::Color c) {
   QPixmap pm(16, 16);
@@ -636,14 +645,14 @@ void MainWindow::set_annotation_color(engine::Color color) {
   annotation_color_ = color;
   update_color_icon();
   // 주석이 선택돼 있으면 그 주석의 색을 바꾼다
-  if (auto selected = view_->selected_annotation(); selected && delete_annotation_action_->isEnabled()) {
+  if (auto selected = view_->selected_annotation(); selected && annotation_edits_allowed_) {
     if (!warn_signature_once()) return;
     edit_->run(std::make_shared<edit::SetAnnotationColorCommand>(view_->selected_annotation_page(), selected->id, color));
   }
 }
 
 bool MainWindow::add_markup_from_selection(engine::AnnotationKind kind) {
-  if (!tool_actions_[1]->isEnabled() || !view_->has_document()) return false;
+  if (!annotation_edits_allowed_ || !view_->has_document()) return false;
   const MarkupItems items = view_->selection_markup_items();
   if (items.empty()) return false;
   on_markup_requested(kind, items);
@@ -651,7 +660,7 @@ bool MainWindow::add_markup_from_selection(engine::AnnotationKind kind) {
 }
 
 void MainWindow::on_markup_requested(engine::AnnotationKind kind, const MarkupItems& items) {
-  if (!tool_actions_[1]->isEnabled() || items.empty()) return;
+  if (!annotation_edits_allowed_ || items.empty()) return;
   if (!warn_signature_once()) return;
   std::vector<std::pair<int, engine::AnnotationSpec>> specs;
   for (const auto& [page, rects] : items) {
@@ -667,7 +676,7 @@ void MainWindow::on_markup_requested(engine::AnnotationKind kind, const MarkupIt
 }
 
 void MainWindow::on_note_requested(int page, onpdf::Point pt) {
-  if (!tool_actions_[4]->isEnabled()) return;
+  if (!annotation_edits_allowed_) return;
   AnnotationDialog dialog(tr("메모"), QString(), this);
   if (dialog.exec() != QDialog::Accepted) return;
   const QString text = dialog.text().trimmed();
@@ -676,7 +685,7 @@ void MainWindow::on_note_requested(int page, onpdf::Point pt) {
 }
 
 bool MainWindow::add_note(int page, onpdf::Point pt, const QString& contents) {
-  if (!tool_actions_[4]->isEnabled() || !view_->has_document()) return false;
+  if (!annotation_edits_allowed_ || !view_->has_document()) return false;
   if (!warn_signature_once()) return false;
   engine::AnnotationSpec spec;
   spec.kind = engine::AnnotationKind::kText;
@@ -690,7 +699,7 @@ bool MainWindow::add_note(int page, onpdf::Point pt, const QString& contents) {
 }
 
 void MainWindow::on_ink_requested(int page, const std::vector<onpdf::Point>& points, onpdf::Rect bbox) {
-  if (!tool_actions_[5]->isEnabled() || points.size() < 2) return;
+  if (!annotation_edits_allowed_ || points.size() < 2) return;
   if (!warn_signature_once()) return;
   engine::AnnotationSpec spec;
   spec.kind = engine::AnnotationKind::kInk;
@@ -722,12 +731,13 @@ bool MainWindow::delete_selected_annotation() {
   if (!selected || !delete_annotation_action_->isEnabled()) return false;
   if (!warn_signature_once()) return false;
   const int page = view_->selected_annotation_page();
-  view_->clear_annotation_selection();
-  return edit_->run(std::make_shared<edit::RemoveAnnotationCommand>(page, selected->id));
+  if (!edit_->run(std::make_shared<edit::RemoveAnnotationCommand>(page, selected->id))) return false;
+  view_->clear_annotation_selection();  // 거절되면 선택을 남긴다
+  return true;
 }
 
 void MainWindow::on_annotation_edit_requested(int page, const engine::AnnotationInfo& info) {
-  if (!delete_annotation_action_->isEnabled() || info.kind != engine::AnnotationKind::kText) return;
+  if (!annotation_edits_allowed_ || info.kind != engine::AnnotationKind::kText) return;
   AnnotationDialog dialog(tr("메모 수정"), QString::fromStdString(info.contents), this);
   if (dialog.exec() != QDialog::Accepted) return;
   const QString text = dialog.text();

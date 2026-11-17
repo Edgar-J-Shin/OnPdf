@@ -612,6 +612,7 @@ const engine::AnnotationInfo* DocumentView::annotation_at(int page, onpdf::Point
   const auto* list = annotations(page);
   if (list == nullptr) return nullptr;
   for (auto it = list->rbegin(); it != list->rend(); ++it) {  // 뒤에 있는 것이 위에 그려진다
+    if (it->flags & (engine::kAnnotFlagHidden | engine::kAnnotFlagNoView)) continue;  // 화면에 없는 주석은 고를 수 없다
     if (it->editable && it->rect.contains(pt)) return &*it;
   }
   return nullptr;
@@ -716,6 +717,13 @@ const view::PageTextIndex* DocumentView::text_index(int page) const {
 }
 
 // ---------------------------------------------------------------- 좌표
+
+onpdf::Point DocumentView::page_point_on(int page, QPointF viewport_pos) const {
+  const double d = dpr();
+  const onpdf::Point doc{(viewport_pos.x() - horizontal_offset_logical() + horizontalScrollBar()->value()) * d,
+                         (viewport_pos.y() + verticalScrollBar()->value()) * d};
+  return layout_->page_px_to_pt(page, layout_->doc_to_page_px(page, doc));
+}
 
 std::optional<std::pair<int, onpdf::Point>> DocumentView::page_point_at(QPointF viewport_pos) const {
   if (!layout_ || layout_->page_count() == 0) return std::nullopt;
@@ -1147,9 +1155,9 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
 
 void DocumentView::mouseMoveEvent(QMouseEvent* event) {
   if (drag_ == Drag::kInk) {
-    if (auto hit = page_point_at(event->position()); hit && ink_page_ >= 0) {
-      // 다른 쪽 위로 나가도 시작한 쪽 안으로 클램프한 점을 쓴다
-      ink_points_.push_back(clamp_to_page(ink_page_, hit->second));
+    if (ink_page_ >= 0) {
+      // 다른 쪽 위로 나가도 시작한 쪽의 좌표로 투영한 뒤 쪽 안으로 클램프한다 (옆 쪽 좌표를 자르면 가장자리로 튄다)
+      ink_points_.push_back(clamp_to_page(ink_page_, page_point_on(ink_page_, event->position())));
       update_page(ink_page_);
     }
     return;

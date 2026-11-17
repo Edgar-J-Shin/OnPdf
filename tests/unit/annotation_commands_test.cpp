@@ -80,13 +80,13 @@ TEST(SetAnnotationColorCommand, UndoRestoresAppearance) {
   auto id = doc.add_annotation(0, highlight({10, 10, 100, 12}));
   ASSERT_TRUE(id);
   doc.fake_render(0);  // AP 생성
-  ASSERT_FALSE(doc.annotation(0, *id)->snap.ap_normal.empty());
+  ASSERT_TRUE(doc.annotation(0, *id)->has_ap);
   SetAnnotationColorCommand cmd(0, *id, {0, 255, 0, 255});
   ASSERT_TRUE(cmd.execute(doc));
-  EXPECT_TRUE(doc.annotation(0, *id)->snap.ap_normal.empty()) << "AP 를 지우고 색을 쓴다";
+  EXPECT_FALSE(doc.annotation(0, *id)->has_ap) << "AP 를 지우고 색을 쓴다";
   EXPECT_EQ(doc.annotation(0, *id)->snap.color, (engine::Color{0, 255, 0, 255}));
   ASSERT_TRUE(cmd.undo(doc));
-  EXPECT_FALSE(doc.annotation(0, *id)->snap.ap_normal.empty()) << "이전 AP 로 되돌린다";
+  EXPECT_EQ(doc.annotation(0, *id)->snap.color, (engine::Color{255, 255, 0, 255})) << "이전 색으로 (모양은 재생성)";
   ASSERT_TRUE(cmd.execute(doc));
   EXPECT_EQ(doc.annotation(0, *id)->snap.color, (engine::Color{0, 255, 0, 255}));
 }
@@ -141,10 +141,9 @@ TEST(AnnotationCommands, ExecuteUndoRedoOnPdfium) {
   SetAnnotationColorCommand color(0, before->id, {0, 255, 0, 255});
   ASSERT_TRUE(color.execute(*doc));
   auto mid = doc->snapshot_annotation(0, before->id);
-  EXPECT_TRUE(mid->ap_normal.empty());
   EXPECT_EQ(mid->color, (engine::Color{0, 255, 0, 255}));
   ASSERT_TRUE(color.undo(*doc));
-  EXPECT_EQ(doc->snapshot_annotation(0, before->id)->ap_normal, before->ap_normal);
+  EXPECT_EQ(doc->snapshot_annotation(0, before->id)->color, before->color);
   ASSERT_TRUE(color.execute(*doc));
   // 메모 내용
   SetAnnotationContentsCommand contents(0, "#2", "새 내용");
