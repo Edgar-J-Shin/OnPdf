@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <optional>
 #include <random>
 #include <fstream>
@@ -99,59 +100,99 @@ Result<void> verify_saved(const PdfiumDocument& source, const std::filesystem::p
 
 }  // namespace
 
+Result<std::vector<SaveResult>> write_files_safely(const std::vector<std::filesystem::path>& targets,
+                                                   const SafeWriteHooks& hooks) {
+  if (targets.empty()) return make_error(ErrorCode::kInvalidArgument, "no target paths");
+  if (!hooks.write) return make_error(ErrorCode::kInvalidArgument, "no writer");
+  struct Prepared {
+    std::filesystem::path real;
+    std::filesystem::path dir;
+    std::optional<std::filesystem::perms> keep_permissions;
+  };
+  std::vector<Prepared> prepared;
+  std::vector<std::unique_ptr<TempFile>> temps;
+  std::vector<std::filesystem::path> temp_paths;
+  for (const auto& target : targets) {
+    if (target.empty() || !target.has_filename()) return make_error(ErrorCode::kInvalidArgument, "empty target path");
+    for (const auto& other : prepared) {
+      std::error_code eq_ec;
+      if (std::filesystem::equivalent(other.real, target, eq_ec) || other.real == target) {
+        return make_error(ErrorCode::kInvalidArgument, "duplicate target path: " + path_to_utf8(target));
+      }
+    }
+    auto resolved = resolve_save_target(target);
+    if (!resolved) return std::unexpected(resolved.error());
+    Prepared p;
+    p.real = std::move(*resolved);
+    std::error_code ec;
+    p.dir = p.real.parent_path().empty() ? std::filesystem::path(".") : p.real.parent_path();
+    if (!std::filesystem::is_directory(p.dir, ec)) {
+      return make_error(ErrorCode::kIoError, "folder does not exist: " + path_to_utf8(p.dir));
+    }
+    // 기존 파일이면: 일반 파일이어야 하고, 쓸 수 있어야 하며(읽기 전용을 몰래 덮어쓰지 않는다), 권한을 그대로 옮긴다
+    const auto status = std::filesystem::status(p.real, ec);
+    if (!ec && std::filesystem::exists(status)) {
+      if (!std::filesystem::is_regular_file(status)) {
+        return make_error(ErrorCode::kInvalidArgument, "not a regular file: " + path_to_utf8(p.real));
+      }
+      if (!can_write_existing(p.real)) return make_error(ErrorCode::kNotWritable, "cannot write " + path_to_utf8(p.real));
+      p.keep_permissions = status.permissions();
+    }
+    auto temp = std::make_unique<TempFile>(temp_path_in(p.dir));
+    // 파일은 쓸 수 있어도 폴더에 새 파일을 만들 수 없는 경우(일부 공유·클라우드 폴더)를 따로 알린다
+    if (std::ofstream probe(temp->path(), std::ios::binary | std::ios::trunc); !probe) {
+      return make_error(ErrorCode::kFolderNotWritable, "cannot create files in folder " + path_to_utf8(p.dir));
+    }
+    temp_paths.push_back(temp->path());
+    temps.push_back(std::move(temp));
+    prepared.push_back(std::move(p));
+  }
+
+  if (auto written = hooks.write(temp_paths); !written) return std::unexpected(written.error());
+  std::vector<SaveResult> results;
+  for (std::size_t i = 0; i < targets.size(); ++i) {
+    if (hooks.verify) {
+      if (auto verified = hooks.verify(targets[i], temp_paths[i]); !verified) return std::unexpected(verified.error());
+    }
+    std::error_code ec;
+    if (prepared[i].keep_permissions) {
+      // 새 파일은 기본 권한(umask)으로 만들어진다: 0600 문서가 0644 로 넓어지지 않게 원본 권한을 옮긴다.
+      // 동기화(fsync) 전에 옮겨야 권한 변경도 함께 디스크에 남는다 (POSIX 동기화는 읽기 모드로 열어 권한과 무관)
+      std::filesystem::permissions(temp_paths[i], *prepared[i].keep_permissions, std::filesystem::perm_options::replace, ec);
+      if (ec) return make_error(ErrorCode::kIoError, "cannot copy permissions: " + ec.message());
+    }
+    std::error_code size_ec;
+    const std::uintmax_t size = std::filesystem::file_size(temp_paths[i], size_ec);
+    // 교체 전에 내용을 디스크까지 내린다: 그렇지 않으면 교체 직후 전원이 꺼질 때 원본과 새 내용을 모두 잃을 수 있다
+    if (auto flushed = platform::flush_file_to_disk(temp_paths[i]); !flushed) return std::unexpected(flushed.error());
+    results.push_back(SaveResult{targets[i], false, size_ec ? 0 : size});
+  }
+  // 전부 검증됐다: 순서대로 교체. (여러 파일일 때 중간 실패는 이미 바뀐 파일을 되돌리지 않는다 — 같은 폴더 rename 이라 드물다)
+  for (std::size_t i = 0; i < targets.size(); ++i) {
+    if (auto replaced = platform::replace_file(temp_paths[i], prepared[i].real); !replaced) return std::unexpected(replaced.error());
+    temps[i]->release();
+  }
+  for (const auto& p : prepared) (void)platform::flush_directory(p.dir);  // 이미 교체는 끝났으므로 실패해도 저장 실패로 보지 않는다
+  return results;
+}
+
 Result<SaveResult> save_document_safely(const PdfiumDocument& doc, const std::filesystem::path& target,
                                         const SaveOptions& options) {
   PdfiumLibrary::assert_current_thread();
-  if (target.empty() || !target.has_filename()) return make_error(ErrorCode::kInvalidArgument, "empty target path");
-  auto resolved = resolve_save_target(target);
-  if (!resolved) return std::unexpected(resolved.error());
-  const std::filesystem::path real = std::move(*resolved);
-  std::error_code ec;
-  const std::filesystem::path dir = real.parent_path().empty() ? std::filesystem::path(".") : real.parent_path();
-  if (!std::filesystem::is_directory(dir, ec)) {
-    return make_error(ErrorCode::kIoError, "folder does not exist: " + path_to_utf8(dir));
-  }
-
-  // 기존 파일이면: 일반 파일이어야 하고, 쓸 수 있어야 하며(읽기 전용을 몰래 덮어쓰지 않는다), 권한을 그대로 옮긴다
-  std::optional<std::filesystem::perms> keep_permissions;
-  const auto status = std::filesystem::status(real, ec);
-  if (!ec && std::filesystem::exists(status)) {
-    if (!std::filesystem::is_regular_file(status)) {
-      return make_error(ErrorCode::kInvalidArgument, "not a regular file: " + path_to_utf8(real));
-    }
-    if (!can_write_existing(real)) {
-      return make_error(ErrorCode::kNotWritable, "cannot write " + path_to_utf8(real));
-    }
-    keep_permissions = status.permissions();
-  }
-
-  TempFile temp(temp_path_in(dir));
-  // 파일은 쓸 수 있어도 폴더에 새 파일을 만들 수 없는 경우(일부 공유·클라우드 폴더)를 따로 알린다 (리뷰 I4)
-  if (std::ofstream probe(temp.path(), std::ios::binary | std::ios::trunc); !probe) {
-    return make_error(ErrorCode::kFolderNotWritable, "cannot create files in folder " + path_to_utf8(dir));
-  }
-  if (auto written = doc.save_to(temp.path(), options.incremental); !written) return std::unexpected(written.error());
-  if (options.after_write_for_testing) options.after_write_for_testing(temp.path());
-  if (auto verified = verify_saved(doc, temp.path(), options.incremental); !verified) {
-    return std::unexpected(verified.error());
-  }
-  if (keep_permissions) {
-    // 새 파일은 기본 권한(umask)으로 만들어진다: 0600 문서가 0644 로 넓어지지 않게 원본 권한을 옮긴다.
-    // 동기화(fsync) 전에 옮겨야 권한 변경도 함께 디스크에 남는다 (POSIX 동기화는 읽기 모드로 열어 권한과 무관)
-    std::filesystem::permissions(temp.path(), *keep_permissions, std::filesystem::perm_options::replace, ec);
-    if (ec) return make_error(ErrorCode::kIoError, "cannot copy permissions: " + ec.message());
-  }
-
-  std::error_code size_ec;
-  const std::uintmax_t size = std::filesystem::file_size(temp.path(), size_ec);
-  const std::uintmax_t bytes = size_ec ? 0 : size;
-  // 교체 전에 내용을 디스크까지 내린다: 그렇지 않으면 교체 직후 전원이 꺼질 때 원본과 새 내용을 모두 잃을 수 있다
-  if (auto flushed = platform::flush_file_to_disk(temp.path()); !flushed) return std::unexpected(flushed.error());
-  if (auto replaced = platform::replace_file(temp.path(), real); !replaced) return std::unexpected(replaced.error());
-  temp.release();
-  // 이름 바꾸기 자체도 디스크에 남긴다. 이미 교체는 끝났으므로 실패해도 저장 실패로 보지 않는다
-  (void)platform::flush_directory(dir);
-  return SaveResult{target, options.incremental, bytes};
+  SafeWriteHooks hooks;
+  hooks.write = [&](const std::vector<std::filesystem::path>& temps) -> Result<void> {
+    if (auto written = doc.save_to(temps.front(), options.incremental); !written) return written;
+    if (options.after_write_for_testing) options.after_write_for_testing(temps.front());
+    return {};
+  };
+  hooks.verify = [&](const std::filesystem::path&, const std::filesystem::path& temp) {
+    return verify_saved(doc, temp, options.incremental);
+  };
+  auto results = write_files_safely({target}, hooks);
+  if (!results) return std::unexpected(results.error());
+  SaveResult result = results->front();
+  result.incremental = options.incremental;
+  return result;
 }
 
 }  // namespace onpdf::engine

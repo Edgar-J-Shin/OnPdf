@@ -214,6 +214,38 @@ TEST(SaveDocument, ReadOnlyFolderIsRefused) {
   EXPECT_EQ(files_in(folder), 1u);
 }
 
+// write_files_safely 골격: 쓰기·검증 실패 시 기존 대상 불변, 임시 0개. 성공 시 여러 대상이 함께 바뀐다 (#37)
+TEST(SaveDocument, WriteFilesSafelySkeleton) {
+  ScopedTempDir dir;
+  const auto a = dir / "a.txt";
+  const auto b = dir / "b.txt";
+  { std::ofstream(a) << "old-a"; }
+  SafeWriteHooks ok;
+  ok.write = [](const std::vector<std::filesystem::path>& temps) -> Result<void> {
+    for (const auto& t : temps) std::ofstream(t) << "new";
+    return {};
+  };
+  auto r = write_files_safely({a, b}, ok);
+  ASSERT_TRUE(r) << r.error().message;
+  EXPECT_EQ(r->size(), 2u);
+  EXPECT_EQ(files_in(dir.path()), 2u);
+  EXPECT_EQ(read_bytes(a), read_bytes(b));
+  SafeWriteHooks failing_write;
+  failing_write.write = [](const std::vector<std::filesystem::path>&) -> Result<void> { return make_error(ErrorCode::kIoError, "disk"); };
+  const auto before = read_bytes(a);
+  EXPECT_FALSE(write_files_safely({a}, failing_write));
+  EXPECT_EQ(read_bytes(a), before);
+  SafeWriteHooks failing_verify = ok;
+  failing_verify.verify = [](const std::filesystem::path&, const std::filesystem::path&) -> Result<void> {
+    return make_error(ErrorCode::kSaveVerifyFailed, "x");
+  };
+  EXPECT_FALSE(write_files_safely({a, b}, failing_verify));
+  EXPECT_EQ(read_bytes(a), before);
+  EXPECT_EQ(files_in(dir.path()), 2u) << "임시 파일 없음";
+  EXPECT_FALSE(write_files_safely({a, a}, ok)) << "같은 대상 두 번";
+  EXPECT_FALSE(write_files_safely({}, ok));
+}
+
 // 심볼릭 링크로 연 문서: 링크는 그대로 두고 링크가 가리키는 실제 파일을 갱신한다 (#31 리뷰 C1)
 TEST(SaveDocument, SymlinkIsKeptAndRealFileUpdated) {
   ScopedTempDir dir;

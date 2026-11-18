@@ -4,6 +4,9 @@
 
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/core/engine/pdfium_library.h"
+#include "onpdf/core/engine/qpdf_tools.h"
+#include "onpdf/core/engine/save.h"
+#include "onpdf/core/page_ranges.h"
 #include "onpdf/core/image/png_io.h"
 #include "onpdf/core/platform/path.h"
 #include "onpdf/core/view/tile.h"
@@ -32,7 +35,10 @@ int usage() {
       "  onpdf_cli text   <in.pdf> [--page N] [--password PW]   (chars/lines/links + extracted text)\n"
       "                   (writes 512px tile PNGs, stitched.png and full.png)\n"
       "  onpdf_cli search <in.pdf> <query> [--case] [--word] [--password PW]\n"
-      "  onpdf_cli outline <in.pdf> [--password PW]\n",
+      "  onpdf_cli outline <in.pdf> [--password PW]\n"
+      "  onpdf_cli merge  <out.pdf> <in.pdf>... [--password PW]      (첫 파일의 목차·폼 유지)\n"
+      "  onpdf_cli split  <in.pdf> <out-dir> (--every N | --ranges \"1-3,5\" | --each) [--pattern NAME-%d.pdf] [--password PW]\n"
+      "  onpdf_cli check  <in.pdf> [--password PW]                   (qpdf 구조 검사, 경고는 출력하고 0)\n",
       stderr);
   return 2;
 }
@@ -60,6 +66,10 @@ struct Args {
   bool match_case = false;
   bool whole_word = false;
   bool printing = false;
+  int every = 0;
+  std::string ranges;
+  bool each = false;
+  std::string pattern;
 };
 
 bool parse_args(int argc, char** argv, Args& args) {
@@ -93,6 +103,16 @@ bool parse_args(int argc, char** argv, Args& args) {
     } else if (a == "--password") {
       if (!next(v)) return false;
       args.password = std::string(v);
+    } else if (a == "--every") {
+      if (!next(v) || !parse_number(v, args.every)) return false;
+    } else if (a == "--ranges") {
+      if (!next(v)) return false;
+      args.ranges = std::string(v);
+    } else if (a == "--each") {
+      args.each = true;
+    } else if (a == "--pattern") {
+      if (!next(v)) return false;
+      args.pattern = std::string(v);
     } else if (a.starts_with("--")) {
       return false;
     } else {
@@ -304,6 +324,114 @@ int cmd_outline(const Args& args) {
 
 }  // namespace
 
+void print_warnings(const onpdf::engine::JobReport& report) {
+  for (const auto& w : report.warnings) std::fprintf(stderr, "warning: %s\n", w.c_str());
+}
+
+// 병합: 첫 파일이 주 입력. 임시 → 검사·쪽 수 → 교체
+int cmd_merge(const Args& args) {
+  if (args.positional.size() < 2) return usage();
+  using onpdf::engine::QpdfTools;
+  const auto out = onpdf::path_from_utf8(args.positional[0]);
+  std::vector<onpdf::engine::StructureInput> inputs;
+  int expected = 0;
+  for (std::size_t i = 1; i < args.positional.size(); ++i) {
+    onpdf::engine::StructureInput in{onpdf::path_from_utf8(args.positional[i]), args.password};
+    auto n = QpdfTools::page_count(in.path, in.password);
+    if (!n) return fail(n.error());
+    expected += *n;
+    inputs.push_back(std::move(in));
+  }
+  onpdf::engine::JobReport report;
+  onpdf::engine::SafeWriteHooks hooks;
+  hooks.write = [&](const std::vector<std::filesystem::path>& temps) -> onpdf::Result<void> {
+    auto r = QpdfTools::merge(inputs, temps.front());
+    if (!r) return std::unexpected(r.error());
+    report = std::move(*r);
+    return {};
+  };
+  hooks.verify = [&](const std::filesystem::path&, const std::filesystem::path& temp) -> onpdf::Result<void> {
+    if (auto c = QpdfTools::check(temp); !c) return std::unexpected(c.error());
+    auto n = QpdfTools::page_count(temp);
+    if (!n) return std::unexpected(n.error());
+    if (*n != expected) return onpdf::make_error(onpdf::ErrorCode::kSaveVerifyFailed, "merged page count mismatch");
+    return {};
+  };
+  auto saved = onpdf::engine::write_files_safely({out}, hooks);
+  if (!saved) return fail(saved.error());
+  print_warnings(report);
+  std::printf("merged %zu files, %d pages -> %s\n", inputs.size(), expected, onpdf::path_to_utf8(out).c_str());
+  return 0;
+}
+
+// 분할: 범위마다 파일 하나. 전부 검증한 뒤 한 번에 교체
+int cmd_split(const Args& args) {
+  if (args.positional.size() != 2) return usage();
+  using onpdf::engine::QpdfTools;
+  const onpdf::engine::StructureInput in{onpdf::path_from_utf8(args.positional[0]), args.password};
+  const auto dir = onpdf::path_from_utf8(args.positional[1]);
+  auto count = QpdfTools::page_count(in.path, in.password);
+  if (!count) return fail(count.error());
+  std::vector<onpdf::PageRange> ranges;
+  if (args.every > 0) {
+    ranges = onpdf::ranges_every(args.every, *count);
+  } else if (!args.ranges.empty()) {
+    auto parsed = onpdf::parse_page_ranges(args.ranges, *count);
+    if (!parsed) return fail(parsed.error());
+    ranges = std::move(*parsed);
+  } else if (args.each) {
+    ranges = onpdf::ranges_each(*count);
+  } else {
+    return usage();
+  }
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  const std::string stem = onpdf::path_to_utf8(in.path.stem());
+  const std::string pattern = args.pattern.empty() ? stem + "-%d.pdf" : args.pattern;
+  std::vector<std::filesystem::path> outs;
+  for (std::size_t i = 0; i < ranges.size(); ++i) {
+    outs.push_back(dir / onpdf::path_from_utf8(onpdf::output_name(pattern, static_cast<int>(i) + 1,
+                                                                   static_cast<int>(ranges.size()), ranges[i], *count)));
+  }
+  std::vector<std::string> warnings;
+  onpdf::engine::SafeWriteHooks hooks;
+  hooks.write = [&](const std::vector<std::filesystem::path>& temps) -> onpdf::Result<void> {
+    for (std::size_t i = 0; i < temps.size(); ++i) {
+      auto r = QpdfTools::extract(in, ranges[i], temps[i]);
+      if (!r) return std::unexpected(r.error());
+      warnings.insert(warnings.end(), r->warnings.begin(), r->warnings.end());
+    }
+    return {};
+  };
+  hooks.verify = [&](const std::filesystem::path& target, const std::filesystem::path& temp) -> onpdf::Result<void> {
+    const auto it = std::find(outs.begin(), outs.end(), target);
+    const std::size_t i = static_cast<std::size_t>(it - outs.begin());
+    auto n = QpdfTools::page_count(temp);
+    if (!n) return std::unexpected(n.error());
+    if (*n != ranges[i].last - ranges[i].first + 1) {
+      return onpdf::make_error(onpdf::ErrorCode::kSaveVerifyFailed, "split page count mismatch");
+    }
+    return {};
+  };
+  auto saved = onpdf::engine::write_files_safely(outs, hooks);
+  if (!saved) return fail(saved.error());
+  for (const auto& w : warnings) std::fprintf(stderr, "warning: %s\n", w.c_str());
+  for (std::size_t i = 0; i < outs.size(); ++i) {
+    std::printf("%s  pages %s\n", onpdf::path_to_utf8(outs[i]).c_str(), onpdf::range_text(ranges[i]).c_str());
+  }
+  std::printf("%zu files\n", outs.size());
+  return 0;
+}
+
+int cmd_check(const Args& args) {
+  if (args.positional.size() != 1) return usage();
+  auto report = onpdf::engine::QpdfTools::check(onpdf::path_from_utf8(args.positional[0]), args.password);
+  if (!report) return fail(report.error());
+  print_warnings(*report);
+  std::printf("ok (%zu warnings)\n", report->warnings.size());
+  return 0;
+}
+
 int run(int argc, char** argv) {
   Args args;
   if (!parse_args(argc, argv, args)) return usage();
@@ -315,6 +443,9 @@ int run(int argc, char** argv) {
   if (args.command == "text") return cmd_text(args);
   if (args.command == "search") return cmd_search(args);
   if (args.command == "outline") return cmd_outline(args);
+  if (args.command == "merge") return cmd_merge(args);
+  if (args.command == "split") return cmd_split(args);
+  if (args.command == "check") return cmd_check(args);
   return usage();
 }
 
