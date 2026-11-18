@@ -636,19 +636,21 @@ void MainWindow::update_color_icon() {
 }
 
 std::string MainWindow::annotation_author() const {
-  QString user = qEnvironmentVariable("USER");
-  if (user.isEmpty()) user = qEnvironmentVariable("USERNAME");
-  return user.toStdString();
+  // OS 로그인 이름은 개인 정보라 파일에 쓰지 않는다. 작성자 설정 화면(M5)이 생기면 그 값을 쓴다
+  return {};
 }
 
 void MainWindow::set_annotation_color(engine::Color color) {
+  // 주석이 선택돼 있으면 그 주석의 색만 바꾼다 (다음 주석의 기본 색은 그대로). 선택이 없을 때만 기본 색을 바꾼다
+  if (auto selected = view_->selected_annotation(); selected) {
+    if (!annotation_edits_allowed_ || !warn_signature_once()) return;
+    if (edit_->run(std::make_shared<edit::SetAnnotationColorCommand>(view_->selected_annotation_page(), selected->id, color))) {
+      show_transient(tr("선택한 주석의 색을 바꿨습니다 (새 주석의 기본 색은 그대로입니다)"));
+    }
+    return;
+  }
   annotation_color_ = color;
   update_color_icon();
-  // 주석이 선택돼 있으면 그 주석의 색을 바꾼다
-  if (auto selected = view_->selected_annotation(); selected && annotation_edits_allowed_) {
-    if (!warn_signature_once()) return;
-    edit_->run(std::make_shared<edit::SetAnnotationColorCommand>(view_->selected_annotation_page(), selected->id, color));
-  }
 }
 
 bool MainWindow::add_markup_from_selection(engine::AnnotationKind kind) {

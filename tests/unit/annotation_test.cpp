@@ -193,6 +193,27 @@ TEST(Annotations, RemoveAndRestoreKeepsTextVisible) {
   EXPECT_FALSE(doc->snapshot_annotation(0, "#99"));
 }
 
+// 외부 메모의 /Popup 은 메모와 함께 지워지고, 복원은 메모만 되살린다 (리뷰 I8)
+TEST(Annotations, RemovingNoteRemovesLinkedPopup) {
+  auto doc = PdfiumDocument::open(testdata("annotation-popup.pdf"));
+  ASSERT_TRUE(doc) << doc.error().message;
+  auto list = doc->annotations(0);
+  ASSERT_TRUE(list);
+  ASSERT_EQ(list->size(), 2u);
+  EXPECT_EQ((*list)[0].kind, AnnotationKind::kText);
+  EXPECT_EQ((*list)[1].kind, AnnotationKind::kOther);  // Popup
+  EXPECT_FALSE((*list)[1].editable);
+  auto snap = doc->snapshot_annotation(0, "#0");
+  ASSERT_TRUE(snap);
+  ASSERT_TRUE(doc->remove_annotation(0, snap->id));
+  EXPECT_EQ(doc->annotations(0)->size(), 0u) << "Popup 도 함께 지워진다";
+  ASSERT_TRUE(doc->restore_annotation(0, *snap));
+  auto back = doc->annotations(0);
+  ASSERT_EQ(back->size(), 1u);
+  EXPECT_EQ((*back)[0].kind, AnnotationKind::kText);
+  EXPECT_EQ((*back)[0].contents, "팝업이 있는 메모");
+}
+
 TEST(Annotations, InkAndContents) {
   auto doc = PdfiumDocument::open(testdata("simple.pdf"));
   ASSERT_TRUE(doc);

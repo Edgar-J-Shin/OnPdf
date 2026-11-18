@@ -1157,8 +1157,14 @@ void DocumentView::mouseMoveEvent(QMouseEvent* event) {
   if (drag_ == Drag::kInk) {
     if (ink_page_ >= 0) {
       // 다른 쪽 위로 나가도 시작한 쪽의 좌표로 투영한 뒤 쪽 안으로 클램프한다 (옆 쪽 좌표를 자르면 가장자리로 튄다)
-      ink_points_.push_back(clamp_to_page(ink_page_, page_point_on(ink_page_, event->position())));
-      update_page(ink_page_);
+      const onpdf::Point previous = ink_points_.back();
+      const onpdf::Point next = clamp_to_page(ink_page_, page_point_on(ink_page_, event->position()));
+      ink_points_.push_back(next);
+      // 방금 추가된 선분 영역만 다시 그린다 (쪽 전체 갱신은 고배율에서 느리다)
+      const QPointF a = page_point_to_viewport(ink_page_, previous);
+      const QPointF b = page_point_to_viewport(ink_page_, next);
+      const double margin = std::max(6.0, 2.0 * layout_->scale() / dpr()) + 2.0;
+      viewport()->update(QRectF(a, b).normalized().adjusted(-margin, -margin, margin, margin).toAlignedRect());
     }
     return;
   }

@@ -503,11 +503,19 @@ Result<void> PdfiumDocument::remove_annotation(int page_index, std::string_view 
   if (!page) return std::unexpected(page.error());
   auto found = find_annot(page->get(), id);
   if (!found) return std::unexpected(found.error());
-  const int index = found->index;
+  std::vector<int> indices{found->index};
+  // 외부 프로그램이 만든 메모의 /Popup 은 함께 지운다 (남으면 고아가 된다). 복원 때는 다시 만들지 않는다 — 뷰어는 Popup 없이도 내용을 보여 준다
+  if (ScopedAnnotation popup(FPDFAnnot_GetLinkedAnnot(found->annot.get(), "Popup")); popup) {
+    const int popup_index = FPDFPage_GetAnnotIndex(page->get(), popup.get());
+    if (popup_index >= 0 && popup_index != found->index) indices.push_back(popup_index);
+  }
   found->annot.reset();  // 지우기 전에 핸들을 닫는다
+  std::sort(indices.rbegin(), indices.rend());  // 뒤쪽부터 지워야 앞 인덱스가 밀리지 않는다
   const int before = FPDFPage_GetAnnotCount(page->get());
-  if (!FPDFPage_RemoveAnnot(page->get(), index)) return make_error(ErrorCode::kInvalidState, "FPDFPage_RemoveAnnot failed");
-  if (FPDFPage_GetAnnotCount(page->get()) != before - 1) {
+  for (int i : indices) {
+    if (!FPDFPage_RemoveAnnot(page->get(), i)) return make_error(ErrorCode::kInvalidState, "FPDFPage_RemoveAnnot failed");
+  }
+  if (FPDFPage_GetAnnotCount(page->get()) != before - static_cast<int>(indices.size())) {
     return make_error(ErrorCode::kInvalidState, "annotation count mismatch after remove");
   }
   return {};

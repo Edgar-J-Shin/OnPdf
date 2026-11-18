@@ -264,11 +264,20 @@ TEST_F(AnnotationTest, SelectDeleteAndRecolorAnnotation) {
   EXPECT_EQ(view()->selected_annotation()->kind, engine::AnnotationKind::kText);
   EXPECT_TRUE(window_.delete_annotation_action()->isEnabled());
   EXPECT_TRUE(window_.statusBar()->currentMessage().contains(QStringLiteral("메모")));
-  // 색 변경 → 명령
+  // 색 변경 → 선택한 주석만 바뀌고 기본 색은 그대로 (리뷰 I3)
+  const engine::Color default_before = window_.annotation_color();
   window_.set_annotation_color({0, 200, 0, 255});
   ASSERT_TRUE(wait_idle());
   EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("주석 색 변경")));
+  EXPECT_EQ(window_.annotation_color(), default_before);
   ASSERT_TRUE(wait_annotations(0, 1));
+  // (색 값 자체는 렌더로 AP 가 생기면 조회 API 가 읽지 못한다 — 색 왕복은 단위 테스트가 보장한다)
+  // 선택이 없으면 기본 색이 바뀐다
+  QKeyEvent esc0(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+  QApplication::sendEvent(view(), &esc0);
+  window_.set_annotation_color({0, 150, 255, 255});
+  EXPECT_EQ(window_.annotation_color(), (engine::Color{0, 150, 255, 255}));
+  EXPECT_FALSE(window_.edit_controller()->busy());
   // 다시 선택 후 Delete
   click(view()->page_point_to_viewport(0, {300, 300}));
   ASSERT_TRUE(view()->selected_annotation().has_value());
