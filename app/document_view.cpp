@@ -5,6 +5,10 @@
 #include "qt_image.h"
 
 #include <QApplication>
+#include <QToolTip>
+#include <QPolygonF>
+#include <QPen>
+#include <QCursor>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QNativeGestureEvent>
@@ -29,6 +33,8 @@ constexpr int kShadow = 2;
 const QColor kBackground(0x80, 0x80, 0x80);
 const QColor kShadowColor(0, 0, 0, 60);
 const QColor kSelectionColor(0, 120, 215, 90);
+constexpr QColor kAnnotationOutline(0, 120, 215, 255);  // 선택한 주석 테두리
+constexpr QColor kInkPreview(200, 0, 120, 200);          // 그리는 중인 펜
 const QColor kSearchHitColor(255, 220, 0, 110);
 const QColor kSearchCurrentColor(255, 140, 0, 150);
 constexpr double kLinkClickSlop = 4.0;      // 이 거리(논리 px) 미만 이동이면 클릭
@@ -67,6 +73,12 @@ void DocumentView::set_document(const engine::DocumentHandle& handle, UiDispatch
   text_cache_.clear();
   for (auto& [page, h] : text_requested_) h.cancel();
   text_requested_.clear();
+  annot_cache_.clear();
+  for (auto& [page, h] : annot_requested_) h.cancel();
+  annot_requested_.clear();
+  selected_annot_.reset();
+  ink_points_.clear();
+  ink_page_ = -1;
   clear_selection();
   pressed_link_.reset();
   drag_ = Drag::kNone;
@@ -96,6 +108,12 @@ void DocumentView::invalidate_pages(const std::vector<int>& pages, bool sizes_ch
   for (int page : pages) {
     cache_.remove_page(page);
     text_cache_.erase(page);
+    annot_cache_.erase(page);
+    if (auto it = annot_requested_.find(page); it != annot_requested_.end()) {
+      it->second.cancel();
+      annot_requested_.erase(it);
+    }
+    if (selected_annot_ && selected_annot_->page == page) clear_annotation_selection();
     if (!selection_.empty() && page >= selection_.start().page && page <= selection_.end().page) selection_hit = true;
   }
   if (selection_hit) clear_selection();
@@ -132,6 +150,12 @@ void DocumentView::rebuild_pages(int keep_page) {
   text_requested_.clear();
   text_cache_.clear();
   cache_.clear();
+  annot_cache_.clear();
+  for (auto& [page, task] : annot_requested_) task.cancel();
+  annot_requested_.clear();
+  clear_annotation_selection();
+  ink_points_.clear();
+  ink_page_ = -1;
   clear_selection();
   pending_anchor_.reset();
   pending_focus_.reset();
@@ -157,6 +181,12 @@ void DocumentView::rebuild_pages(int keep_page) {
 void DocumentView::clear_document(const QString& placeholder) {
   scheduler_.reset();
   source_.reset();
+  annot_cache_.clear();
+  for (auto& [page, h] : annot_requested_) h.cancel();
+  annot_requested_.clear();
+  selected_annot_.reset();
+  ink_points_.clear();
+  ink_page_ = -1;
   layout_.reset();
   cache_.clear();
   ++doc_generation_;
@@ -457,6 +487,7 @@ void DocumentView::paint_page(QPainter& painter, int page, const QRectF& page_lo
   paint_search(painter, page, page_logical);
   // 5. 선택 하이라이트
   paint_selection(painter, page, page_logical);
+  paint_annotations(painter, page, page_logical);
 }
 
 // ---------------------------------------------------------------- 텍스트 인덱스
@@ -514,6 +545,152 @@ void DocumentView::request_text_indexes() {
         });
     text_requested_.emplace(page, std::move(handle));
   }
+  request_annotations();
+}
+
+void DocumentView::request_annotations() {
+  if (!layout_ || !handle_.valid() || dispatcher_ == nullptr) return;
+  const std::vector<int> visible = layout_->pages_in(viewport_doc());
+  if (visible.empty()) return;
+  const int first = std::max(0, visible.front() - 1);
+  const int last = std::min(layout_->page_count() - 1, visible.back() + 1);
+  const int keep = std::max(kTextKeepPages, last - first + 1);
+  const int center = current_page();
+  for (auto it = annot_requested_.begin(); it != annot_requested_.end();) {
+    if (it->first < first || it->first > last) {
+      it->second.cancel();
+      it = annot_requested_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  for (auto it = annot_cache_.begin(); it != annot_cache_.end();) {
+    const bool far = std::abs(it->first - center) > keep;
+    const bool selected = selected_annot_ && selected_annot_->page == it->first;
+    if (far && !selected) {
+      it = annot_cache_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  for (int page = first; page <= last; ++page) {
+    if (annot_cache_.contains(page) || annot_requested_.contains(page)) continue;
+    UiDispatcher* dispatcher = dispatcher_;
+    QPointer<DocumentView> self(this);
+    const int generation = doc_generation_;
+    engine::TaskHandle handle = handle_.load_annotations(
+        page, engine::Priority::kLow,
+        // 워커 스레드: 메인으로 넘기기만
+        [dispatcher, self, page, generation](onpdf::Result<std::vector<engine::AnnotationInfo>> result) {
+          std::shared_ptr<const std::vector<engine::AnnotationInfo>> list;
+          const bool cancelled = !result && (result.error().code == onpdf::ErrorCode::kCancelled ||
+                                             result.error().code == onpdf::ErrorCode::kInvalidState);
+          if (result) list = std::make_shared<const std::vector<engine::AnnotationInfo>>(std::move(*result));
+          dispatcher->post_to(self, [page, generation, list, cancelled](DocumentView* view) {
+            view->on_annotations(page, generation, list, cancelled);
+          });
+        });
+    annot_requested_[page] = std::move(handle);
+  }
+}
+
+void DocumentView::on_annotations(int page, int generation, std::shared_ptr<const std::vector<engine::AnnotationInfo>> list,
+                                  bool cancelled) {
+  if (generation != doc_generation_) return;
+  annot_requested_.erase(page);
+  if (cancelled) return;
+  if (!list) list = std::make_shared<const std::vector<engine::AnnotationInfo>>();  // 실패: 빈 목록으로 재요청 방지
+  annot_cache_[page] = std::move(list);
+}
+
+const std::vector<engine::AnnotationInfo>* DocumentView::annotations(int page) const {
+  auto it = annot_cache_.find(page);
+  return it == annot_cache_.end() ? nullptr : it->second.get();
+}
+
+const engine::AnnotationInfo* DocumentView::annotation_at(int page, onpdf::Point pt) const {
+  const auto* list = annotations(page);
+  if (list == nullptr) return nullptr;
+  for (auto it = list->rbegin(); it != list->rend(); ++it) {  // 뒤에 있는 것이 위에 그려진다
+    if (it->flags & (engine::kAnnotFlagHidden | engine::kAnnotFlagNoView)) continue;  // 화면에 없는 주석은 고를 수 없다
+    if (it->editable && it->rect.contains(pt)) return &*it;
+  }
+  return nullptr;
+}
+
+onpdf::Point DocumentView::clamp_to_page(int page, onpdf::Point pt) const {
+  const engine::PageSize size = layout_->page_size_pt(page);
+  return {std::clamp(pt.x, 0.0, std::max(0.0, size.width)), std::clamp(pt.y, 0.0, std::max(0.0, size.height))};
+}
+
+void DocumentView::update_page(int page) {
+  if (!layout_ || page < 0 || page >= layout_->page_count()) return;
+  const double d = dpr();
+  const onpdf::Rect r = layout_->page_rect(page);
+  viewport()->update(QRectF(horizontal_offset_logical() + r.x / d - horizontalScrollBar()->value(),
+                            r.y / d - verticalScrollBar()->value(), r.w / d, r.h / d)
+                         .toAlignedRect()
+                         .adjusted(-2, -2, 2, 2));
+}
+
+void DocumentView::set_tool(AnnotationTool tool) {
+  if (tool_ == tool) return;
+  tool_ = tool;
+  if (tool_ != AnnotationTool::kSelect) clear_annotation_selection();
+  if (drag_ == Drag::kInk) {
+    drag_ = Drag::kNone;
+    ink_points_.clear();
+    ink_page_ = -1;
+  }
+  update_hover(viewport()->mapFromGlobal(QCursor::pos()));
+  viewport()->update();
+}
+
+MarkupItems DocumentView::selection_markup_items() const {
+  MarkupItems items;
+  if (selection_.empty()) return items;
+  for (int page : selection_.pages()) {
+    const view::PageTextIndex* index = text_index(page);
+    if (index == nullptr) continue;
+    const view::TextRange range = selection_.range_on(page, index->char_count());
+    if (range.empty()) continue;
+    std::vector<onpdf::Rect> rects = index->selection_rects(range);
+    if (!rects.empty()) items.emplace_back(page, std::move(rects));
+  }
+  return items;
+}
+
+std::optional<engine::AnnotationInfo> DocumentView::selected_annotation() const {
+  if (!selected_annot_) return std::nullopt;
+  return selected_annot_->info;
+}
+
+void DocumentView::clear_annotation_selection() {
+  if (!selected_annot_) return;
+  const int page = selected_annot_->page;
+  selected_annot_.reset();
+  emit annotation_selected(false, engine::AnnotationInfo{});
+  update_page(page);
+}
+
+void DocumentView::paint_annotations(QPainter& painter, int page, const QRectF& page_logical) {
+  const double k = layout_->scale() / dpr();  // 포인트 → 논리 px
+  if (selected_annot_ && selected_annot_->page == page) {
+    const onpdf::Rect& r = selected_annot_->info.rect;
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(kAnnotationOutline, 2));
+    painter.drawRect(QRectF(page_logical.x() + r.x * k, page_logical.y() + r.y * k, r.w * k, r.h * k).adjusted(-2, -2, 2, 2));
+  }
+  if (drag_ == Drag::kInk && ink_page_ == page && ink_points_.size() >= 2) {
+    QPen pen(kInkPreview, std::max(1.0, 2.0 * k));
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+    QPolygonF poly;
+    for (const onpdf::Point& p : ink_points_) poly << QPointF(page_logical.x() + p.x * k, page_logical.y() + p.y * k);
+    painter.drawPolyline(poly);
+  }
 }
 
 void DocumentView::on_text_index(int page, int generation, std::shared_ptr<const view::PageTextIndex> index,
@@ -540,6 +717,13 @@ const view::PageTextIndex* DocumentView::text_index(int page) const {
 }
 
 // ---------------------------------------------------------------- 좌표
+
+onpdf::Point DocumentView::page_point_on(int page, QPointF viewport_pos) const {
+  const double d = dpr();
+  const onpdf::Point doc{(viewport_pos.x() - horizontal_offset_logical() + horizontalScrollBar()->value()) * d,
+                         (viewport_pos.y() + verticalScrollBar()->value()) * d};
+  return layout_->page_px_to_pt(page, layout_->doc_to_page_px(page, doc));
+}
 
 std::optional<std::pair<int, onpdf::Point>> DocumentView::page_point_at(QPointF viewport_pos) const {
   if (!layout_ || layout_->page_count() == 0) return std::nullopt;
@@ -767,9 +951,17 @@ void DocumentView::reveal(int page, const std::vector<onpdf::Rect>& rects) {
 void DocumentView::update_hover(QPointF viewport_pos) {
   QString target;
   Qt::CursorShape cursor = Qt::ArrowCursor;
+  if (tool_ == AnnotationTool::kNote || tool_ == AnnotationTool::kPen) cursor = Qt::CrossCursor;
+  QString tooltip;
   if (auto hit = page_point_at(viewport_pos)) {
     const auto [page, pt] = *hit;
-    if (const view::PageTextIndex* index = text_index(page)) {
+    if (tool_ == AnnotationTool::kSelect) {
+      if (const engine::AnnotationInfo* a = annotation_at(page, pt)) {
+        cursor = Qt::PointingHandCursor;
+        if (a->kind == engine::AnnotationKind::kText && !a->contents.empty()) tooltip = QString::fromStdString(a->contents);
+      }
+    }
+    if (const view::PageTextIndex* index = text_index(page); index != nullptr && cursor == Qt::ArrowCursor) {
       if (const view::Link* link = index->link_at(pt)) {
         cursor = Qt::PointingHandCursor;
         target = link->kind == view::LinkKind::kUri ? QString::fromStdString(link->uri)
@@ -780,6 +972,11 @@ void DocumentView::update_hover(QPointF viewport_pos) {
     }
   }
   viewport()->setCursor(cursor);
+  if (!tooltip.isEmpty()) {
+    QToolTip::showText(viewport()->mapToGlobal(viewport_pos.toPoint()), tooltip, viewport());
+  } else if (QToolTip::isVisible()) {
+    QToolTip::hideText();
+  }
   if (target != hovered_target_) {
     hovered_target_ = target;
     emit link_hovered(target);
@@ -837,6 +1034,17 @@ void DocumentView::keyPressEvent(QKeyEvent* event) {
   QScrollBar* v = verticalScrollBar();
   if (event->key() == Qt::Key_Escape) {
     clear_selection();
+    clear_annotation_selection();
+    if (drag_ == Drag::kInk) {
+      drag_ = Drag::kNone;
+      ink_points_.clear();
+      viewport()->update();
+    }
+    event->accept();
+    return;
+  }
+  if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) && selected_annot_) {
+    emit annotation_delete_requested(selected_annot_->page, QString::fromStdString(selected_annot_->info.id));
     event->accept();
     return;
   }
@@ -867,11 +1075,48 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
   last_click_pos_ = event->position();
 
   pressed_link_.reset();
+  // ---- 주석 도구 ----
+  if (tool_ == AnnotationTool::kNote) {
+    if (auto hit = page_point_at(event->position())) {
+      const auto [page, pt] = *hit;
+      emit note_requested(page, clamp_to_page(page, pt));
+    }
+    return;
+  }
+  if (tool_ == AnnotationTool::kPen) {
+    if (auto hit = page_point_at(event->position())) {
+      const auto [page, pt] = *hit;
+      ink_page_ = page;
+      ink_points_ = {clamp_to_page(page, pt)};
+      drag_ = Drag::kInk;
+    }
+    return;
+  }
+  if (tool_ == AnnotationTool::kSelect) {
+    if (auto hit = page_point_at(event->position())) {
+      const auto [page, pt] = *hit;
+      if (const engine::AnnotationInfo* a = annotation_at(page, pt)) {
+        const bool same = selected_annot_ && selected_annot_->page == page && selected_annot_->info.id == a->id;
+        const int previous_page = selected_annot_ ? selected_annot_->page : -1;
+        const engine::AnnotationInfo info = *a;  // 캐시가 바뀌어도 안전하게 복사
+        selected_annot_ = SelectedAnnotation{page, info};
+        clear_selection();
+        if (previous_page >= 0 && previous_page != page) update_page(previous_page);
+        update_page(page);
+        emit annotation_selected(true, info);
+        if (same && click_count_ == 2) emit annotation_edit_requested(page, info);
+        drag_ = Drag::kNone;
+        return;
+      }
+    }
+    if (selected_annot_) clear_annotation_selection();
+  }
   if (auto hit = page_point_at(event->position())) {
     const auto [page, pt] = *hit;
     if (const view::PageTextIndex* index = text_index(page)) {
-      // 링크는 단일 클릭에서만 활성화 (더블클릭이 두 번 열지 않도록)
-      if (const view::Link* link = index->link_at(pt); link != nullptr && click_count_ == 1) {
+      // 링크는 단일 클릭에서만 활성화 (더블클릭이 두 번 열지 않도록). 마크업 도구에서는 링크를 열지 않는다
+      if (const view::Link* link = index->link_at(pt);
+          link != nullptr && click_count_ == 1 && tool_ == AnnotationTool::kSelect) {
         pressed_link_ = *link;
         drag_ = Drag::kMaybeLink;
         return;
@@ -909,6 +1154,20 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
 }
 
 void DocumentView::mouseMoveEvent(QMouseEvent* event) {
+  if (drag_ == Drag::kInk) {
+    if (ink_page_ >= 0) {
+      // 다른 쪽 위로 나가도 시작한 쪽의 좌표로 투영한 뒤 쪽 안으로 클램프한다 (옆 쪽 좌표를 자르면 가장자리로 튄다)
+      const onpdf::Point previous = ink_points_.back();
+      const onpdf::Point next = clamp_to_page(ink_page_, page_point_on(ink_page_, event->position()));
+      ink_points_.push_back(next);
+      // 방금 추가된 선분 영역만 다시 그린다 (쪽 전체 갱신은 고배율에서 느리다)
+      const QPointF a = page_point_to_viewport(ink_page_, previous);
+      const QPointF b = page_point_to_viewport(ink_page_, next);
+      const double margin = std::max(6.0, 2.0 * layout_->scale() / dpr()) + 2.0;
+      viewport()->update(QRectF(a, b).normalized().adjusted(-margin, -margin, margin, margin).toAlignedRect());
+    }
+    return;
+  }
   if (drag_ == Drag::kText) {
     last_drag_pos_ = event->position();
     set_selection(selection_.anchor(), drag_position(event->position(), pending_focus_));
@@ -939,6 +1198,26 @@ void DocumentView::mouseReleaseEvent(QMouseEvent* event) {
     return;
   }
   autoscroll_timer_.stop();
+  if (drag_ == Drag::kInk) {
+    drag_ = Drag::kNone;
+    const int page = ink_page_;
+    std::vector<onpdf::Point> points = std::move(ink_points_);
+    ink_points_.clear();
+    ink_page_ = -1;
+    if (page >= 0) update_page(page);
+    if (page >= 0 && points.size() >= 2) {
+      double x0 = points[0].x, y0 = points[0].y, x1 = x0, y1 = y0;
+      for (const auto& p : points) {
+        x0 = std::min(x0, p.x);
+        y0 = std::min(y0, p.y);
+        x1 = std::max(x1, p.x);
+        y1 = std::max(y1, p.y);
+      }
+      emit ink_requested(page, points, onpdf::Rect{x0 - 2, y0 - 2, x1 - x0 + 4, y1 - y0 + 4});
+    }
+    return;
+  }
+  const bool was_text_drag = drag_ == Drag::kText;
   if (drag_ == Drag::kMaybeLink && pressed_link_) {
     const view::Link link = *pressed_link_;
     pressed_link_.reset();
@@ -948,6 +1227,16 @@ void DocumentView::mouseReleaseEvent(QMouseEvent* event) {
   }
   drag_ = Drag::kNone;
   update_hover(event->position());
+  // 마크업 도구: 드래그를 놓으면 선택 범위가 바로 주석이 된다 (인덱스 없는 쪽은 빠진다)
+  if (was_text_drag && tool_ != AnnotationTool::kSelect && !selection_.empty()) {
+    const MarkupItems items = selection_markup_items();
+    if (!items.empty()) {
+      const engine::AnnotationKind kind = tool_ == AnnotationTool::kHighlight   ? engine::AnnotationKind::kHighlight
+                                          : tool_ == AnnotationTool::kUnderline ? engine::AnnotationKind::kUnderline
+                                                                                : engine::AnnotationKind::kStrikeOut;
+      emit markup_requested(kind, items);
+    }
+  }
 }
 
 void DocumentView::mouseDoubleClickEvent(QMouseEvent* event) {

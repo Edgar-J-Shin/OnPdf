@@ -443,6 +443,28 @@ def make_annotations() -> bytes:
     return w.write(root=root, info=info, file_id=g.file_id_for("annotations.pdf"))
 
 
+def make_annotation_popup() -> bytes:
+    """외부 프로그램이 만든 메모처럼 Text 주석에 /Popup 이 연결된 문서. 메모를 지울 때 Popup 도 함께 지워야 한다."""
+    w = PdfWriter()
+    pages = w.reserve()
+    helv = g.simple_font(w)
+    page_num = w.reserve()
+    text_num = w.reserve()
+    popup_num = w.reserve()
+    w.set(text_num, b"<< /Type /Annot /Subtype /Text /Rect [340 580 360 600] /C [1 0.8 0] /Name /Comment /Open true "
+          b"/F 28 /P %d 0 R /Popup %d 0 R /T " % (page_num, popup_num) + text_string("작성자")
+          + b" /Contents " + text_string("팝업이 있는 메모") + b" >>")
+    w.set(popup_num, b"<< /Type /Annot /Subtype /Popup /Rect [370 500 560 600] /Open true /F 28 /P %d 0 R /Parent %d 0 R >>"
+          % (page_num, text_num))
+    c = w.stream(b"", content(_label(72, 740, 18, "Annotation with popup"),
+                              _label(72, 700, 12, "The note on the right has a linked Popup annotation.")))
+    g.page(w, pages, g.LETTER, c, _helv_resources(helv), annots=[text_num, popup_num], num=page_num)
+    g.pages_tree(w, pages, [page_num])
+    root = g.catalog(w, pages)
+    info = g.info_dict(w, "Annotation popup")
+    return w.write(root=root, info=info, file_id=g.file_id_for("annotation-popup.pdf"))
+
+
 # ----------------------------------------------------------------- 18~20
 
 

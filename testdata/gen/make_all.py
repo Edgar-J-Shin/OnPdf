@@ -34,6 +34,7 @@ GENERATED = {
     "xref-stream.pdf": docs.make_xref_stream,
     "incremental-update.pdf": docs.make_incremental_update,
     "annotations.pdf": docs.make_annotations,
+    "annotation-popup.pdf": docs.make_annotation_popup,
     "empty-page.pdf": docs.make_empty_page,
     "unicode-metadata.pdf": docs.make_unicode_metadata,
     "transparency.pdf": docs.make_transparency,

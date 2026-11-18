@@ -3,6 +3,7 @@
 
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/core/engine/save.h"
+#include "onpdf/edit/annotation_commands.h"
 #include "onpdf/edit/delete_pages.h"
 #include "onpdf/edit/insert_pages.h"
 #include "onpdf/edit/move_pages.h"
@@ -219,6 +220,141 @@ TEST(Roundtrip, SignedDocumentInsertSavesIncrementally) {
   auto reopened = PdfiumDocument::open(target);
   ASSERT_TRUE(reopened);
   EXPECT_EQ(reopened->page_count(), 2);
+  expect_qpdf_ok(dir, target);
+}
+
+
+const engine::AnnotationInfo* annot_by_id(const std::vector<engine::AnnotationInfo>& list, const std::string& id) {
+  for (const auto& a : list) if (a.id == id) return &a;
+  return nullptr;
+}
+
+// 주석 5종을 만들어 저장 → 다시 열기: 수·종류·위치·내용(한글)이 남고 qpdf 검사를 통과한다
+TEST(Roundtrip, AnnotationsSurviveSave) {
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc);
+  auto text = doc->load_text(0);
+  ASSERT_TRUE(text);
+  const std::vector<Rect> line = text->selection_rects({0, std::min(12, text->char_count())});
+  ASSERT_FALSE(line.empty());
+  std::vector<std::pair<int, engine::AnnotationSpec>> items;
+  for (auto kind : {engine::AnnotationKind::kHighlight, engine::AnnotationKind::kUnderline, engine::AnnotationKind::kStrikeOut}) {
+    engine::AnnotationSpec s;
+    s.kind = kind;
+    s.quads = line;
+    items.emplace_back(0, s);
+  }
+  engine::AnnotationSpec note;
+  note.kind = engine::AnnotationKind::kText;
+  note.rect = {400, 100, 20, 20};
+  note.flags = engine::kAnnotFlagPrint | engine::kAnnotFlagNoZoom | engine::kAnnotFlagNoRotate;
+  note.contents = "검토 필요: 한글 메모";
+  note.author = "테스터";
+  items.emplace_back(1, note);
+  engine::AnnotationSpec ink;
+  ink.kind = engine::AnnotationKind::kInk;
+  ink.ink = {{{100, 300}, {140, 280}, {180, 300}, {220, 280}}};
+  ink.rect = {98, 278, 124, 24};
+  ink.border_width = 2.0;
+  ink.color = {255, 0, 0, 255};
+  items.emplace_back(1, ink);
+  edit::AddAnnotationsCommand add(items);
+  ASSERT_TRUE(add.execute(*doc));
+  // 렌더해 AP 가 생긴 상태로 저장한다 (실제 앱 흐름)
+  RenderOptions render;
+  render.scale = 0.5f;
+  ASSERT_TRUE(doc->render_page(0, render));
+  ASSERT_TRUE(doc->render_page(1, render));
+  ScopedTempDir dir;
+  const auto target = dir / "annotated.pdf";
+  ASSERT_TRUE(save_document_safely(*doc, target, {}));
+  auto reopened = PdfiumDocument::open(target);
+  ASSERT_TRUE(reopened);
+  auto p0 = reopened->annotations(0);
+  auto p1 = reopened->annotations(1);
+  ASSERT_TRUE(p0 && p1);
+  ASSERT_EQ(p0->size(), 3u);
+  ASSERT_EQ(p1->size(), 2u);
+  for (std::size_t i = 0; i < 3; ++i) {
+    const auto* a = annot_by_id(*p0, add.items()[i].second.id);
+    ASSERT_NE(a, nullptr);
+    EXPECT_EQ(a->kind, add.items()[i].second.kind);
+    EXPECT_NEAR(a->rect.x, line.front().x, 0.05);
+    EXPECT_EQ(a->flags & engine::kAnnotFlagPrint, engine::kAnnotFlagPrint);
+  }
+  const auto* n = annot_by_id(*p1, add.items()[3].second.id);
+  ASSERT_NE(n, nullptr);
+  EXPECT_EQ(n->contents, "검토 필요: 한글 메모");
+  EXPECT_EQ(n->author, "테스터");
+  EXPECT_NEAR(n->rect.x, 400, 0.05);
+  const auto* k = annot_by_id(*p1, add.items()[4].second.id);
+  ASSERT_NE(k, nullptr);
+  EXPECT_EQ(k->kind, engine::AnnotationKind::kInk);
+  expect_qpdf_ok(dir, target);
+}
+
+// 기존 문서의 주석을 고치고(색·삭제) 저장해도 나머지 주석·링크가 그대로다
+TEST(Roundtrip, EditingExistingAnnotationsKeepsOthers) {
+  auto doc = PdfiumDocument::open(testdata("annotations.pdf"));
+  ASSERT_TRUE(doc);
+  edit::SetAnnotationColorCommand color(0, "#0", {0, 255, 0, 255});
+  ASSERT_TRUE(color.execute(*doc));
+  edit::RemoveAnnotationCommand remove(0, "#1");  // Square
+  ASSERT_TRUE(remove.execute(*doc));
+  RenderOptions render;
+  render.scale = 0.5f;
+  ASSERT_TRUE(doc->render_page(0, render));
+  ScopedTempDir dir;
+  const auto target = dir / "edited.pdf";
+  ASSERT_TRUE(save_document_safely(*doc, target, {}));
+  auto reopened = PdfiumDocument::open(target);
+  ASSERT_TRUE(reopened);
+  auto list = reopened->annotations(0);
+  ASSERT_TRUE(list);
+  ASSERT_EQ(list->size(), 5u);
+  int links = 0, highlights = 0, squares = 0;
+  for (const auto& a : *list) {
+    links += a.kind == engine::AnnotationKind::kLink;
+    highlights += a.kind == engine::AnnotationKind::kHighlight;
+    squares += a.kind == engine::AnnotationKind::kSquare;
+  }
+  EXPECT_EQ(links, 3);
+  EXPECT_EQ(highlights, 1);
+  EXPECT_EQ(squares, 0);
+  auto text = reopened->load_text(0);
+  ASSERT_TRUE(text);
+  EXPECT_EQ(text->char_count(), 222);  // 본문 텍스트 불변
+  expect_qpdf_ok(dir, target);
+}
+
+// 서명 문서에 메모를 달고 증분 저장: 원본 바이트가 앞부분에 그대로
+TEST(Roundtrip, SignedDocumentNoteSavesIncrementally) {
+  auto doc = PdfiumDocument::open(testdata("signed-dummy.pdf"));
+  ASSERT_TRUE(doc);
+  const std::size_t before_count = doc->annotations(0)->size();  // 서명 위젯 주석이 이미 있다
+  engine::AnnotationSpec note;
+  note.kind = engine::AnnotationKind::kText;
+  note.rect = {50, 50, 20, 20};
+  note.contents = "서명 문서 메모";
+  edit::AddAnnotationsCommand add({{0, note}});
+  ASSERT_TRUE(add.execute(*doc));
+  ScopedTempDir dir;
+  const auto target = dir / "signed-note.pdf";
+  SaveOptions options;
+  options.incremental = true;
+  ASSERT_TRUE(save_document_safely(*doc, target, options));
+  const auto original = onpdf::test::read_bytes(testdata("signed-dummy.pdf"));
+  const auto after = onpdf::test::read_bytes(target);
+  ASSERT_GT(after.size(), original.size());
+  EXPECT_TRUE(std::equal(original.begin(), original.end(), after.begin()));
+  auto reopened = PdfiumDocument::open(target);
+  ASSERT_TRUE(reopened);
+  auto list = reopened->annotations(0);
+  ASSERT_TRUE(list);
+  ASSERT_EQ(list->size(), before_count + 1);
+  const auto* n = annot_by_id(*list, add.items()[0].second.id);
+  ASSERT_NE(n, nullptr);
+  EXPECT_EQ(n->contents, "서명 문서 메모");
   expect_qpdf_ok(dir, target);
 }
 

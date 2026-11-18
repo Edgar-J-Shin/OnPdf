@@ -20,6 +20,7 @@
 | `xref-stream.pdf` | ok |  | 2 | gen | Apache-2.0 | PDF 1.5 xref 스트림 + 객체 스트림 |
 | `incremental-update.pdf` | ok |  | 3 | gen | Apache-2.0 | 증분 갱신으로 3쪽 추가 (/Prev) |
 | `annotations.pdf` | ok |  | 2 | gen | Apache-2.0 | Highlight(AP, BM Multiply)·Square·Text(PDFium 생성 AP)·Link 3종(URI, 내부 GoTo, 차단 스킴) |
+| `annotation-popup.pdf` | ok |  | 1 | gen | Apache-2.0 | Text 메모 + 연결된 /Popup — 메모 삭제 시 Popup 도 함께 지우는지 (I8) |
 | `empty-page.pdf` | ok |  | 1 | gen | Apache-2.0 | 내용 없는 1쪽 |
 | `unicode-metadata.pdf` | ok |  | 1 | gen | Apache-2.0 | Info 한글 제목·작성자(UTF-16BE) |
 | `transparency.pdf` | ok |  | 1 | gen | Apache-2.0 | ExtGState ca/CA 0.5 겹친 원 |

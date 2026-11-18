@@ -18,6 +18,12 @@
 namespace onpdf {
 namespace {
 
+using engine::AnnotationKind;
+using engine::AnnotationSpec;
+using engine::Color;
+using engine::kAnnotFlagNoRotate;
+using engine::kAnnotFlagNoZoom;
+using engine::kAnnotFlagPrint;
 using engine::PdfiumDocument;
 using engine::RenderOptions;
 using onpdf::test::expect_bitmap_matches_png;
@@ -146,6 +152,78 @@ TEST(RenderRegression, MovedAndSavedPage) {
     GTEST_SKIP() << "reference updated: " << expected_path;
   }
   onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "mixed-sizes-p0-moved-saved.png");
+}
+
+
+// 주석 5종(하이라이트·밑줄·취소선·메모·펜)을 달아 저장한 문서의 첫 쪽: PDFium 이 만든 모양이 기준과 같다
+TEST(RenderRegression, AnnotatedAndSavedPage) {
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc) << doc.error().message;
+  auto text = doc->load_text(0);
+  ASSERT_TRUE(text);
+  const int n = text->char_count();
+  auto markup = [&](AnnotationKind kind, int from, int to, Color color) {
+    AnnotationSpec s;
+    s.kind = kind;
+    s.quads = text->selection_rects({std::min(from, n), std::min(to, n)});
+    s.color = color;
+    ASSERT_TRUE(doc->add_annotation(0, s));
+  };
+  markup(AnnotationKind::kHighlight, 0, 8, {255, 255, 0, 255});
+  markup(AnnotationKind::kUnderline, 10, 18, {0, 0, 255, 255});
+  markup(AnnotationKind::kStrikeOut, 20, 28, {255, 0, 0, 255});
+  AnnotationSpec note;
+  note.kind = AnnotationKind::kText;
+  note.rect = {420, 80, 20, 20};
+  note.flags = kAnnotFlagPrint | kAnnotFlagNoZoom | kAnnotFlagNoRotate;
+  note.color = {255, 200, 0, 255};
+  note.contents = "메모";
+  ASSERT_TRUE(doc->add_annotation(0, note));
+  AnnotationSpec ink;
+  ink.kind = AnnotationKind::kInk;
+  ink.ink = {{{100, 400}, {140, 380}, {180, 400}, {220, 380}, {260, 400}}};
+  ink.rect = {98, 378, 164, 24};
+  ink.border_width = 2.0;
+  ink.color = {200, 0, 120, 255};
+  ASSERT_TRUE(doc->add_annotation(0, ink));
+  onpdf::test::ScopedTempDir dir;
+  const auto saved_path = dir / "annotated.pdf";
+  ASSERT_TRUE(engine::save_document_safely(*doc, saved_path, {}));
+  auto reopened = PdfiumDocument::open(saved_path);
+  ASSERT_TRUE(reopened) << reopened.error().message;
+  RenderOptions options;
+  options.scale = 1.0f;
+  auto actual = reopened->render_page(0, options);
+  ASSERT_TRUE(actual) << actual.error().message;
+  const auto expected_path = testdata("expected") / "simple-p0-annotated.png";
+  if (update_references()) {
+    ASSERT_TRUE(image::write_png(*actual, expected_path));
+    GTEST_SKIP() << "reference updated: " << expected_path;
+  }
+  onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "simple-p0-annotated.png");
+}
+
+// 회전(90°)된 쪽의 하이라이트: 글자 위에 정확히 놓인다
+TEST(RenderRegression, RotatedPageHighlight) {
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc) << doc.error().message;
+  ASSERT_TRUE(doc->set_page_rotation(0, 1));
+  auto text = doc->load_text(0);  // 회전 반영 쪽 포인트
+  ASSERT_TRUE(text);
+  AnnotationSpec s;
+  s.kind = AnnotationKind::kHighlight;
+  s.quads = text->selection_rects({0, std::min(12, text->char_count())});
+  ASSERT_TRUE(doc->add_annotation(0, s));
+  RenderOptions options;
+  options.scale = 1.0f;
+  auto actual = doc->render_page(0, options);
+  ASSERT_TRUE(actual) << actual.error().message;
+  const auto expected_path = testdata("expected") / "simple-p0-rotated-highlight.png";
+  if (update_references()) {
+    ASSERT_TRUE(image::write_png(*actual, expected_path));
+    GTEST_SKIP() << "reference updated: " << expected_path;
+  }
+  onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "simple-p0-rotated-highlight.png");
 }
 
 }  // namespace

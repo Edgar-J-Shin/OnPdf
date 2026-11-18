@@ -3,6 +3,7 @@
 // PDFium 헤더 없이 문서를 바꾸는 인터페이스. edit/ 의 Command 는 이것으로만 문서를 바꾼다.
 // 구현(PdfiumDocument)은 워커 스레드에서만 쓴다.
 
+#include "onpdf/core/engine/annotation.h"
 #include "onpdf/core/engine/render_types.h"
 #include "onpdf/core/error.h"
 
@@ -74,6 +75,21 @@ class EditableDocument {
                                                           int at) = 0;
   // 스냅샷을 해제한다 (없는 id 는 무시)
   virtual void drop_snapshot(SnapshotId id) noexcept = 0;
+
+  // ---- 주석 (id = /NM. NM 이 없는 기존 주석은 "#<index>" 로 가리키고, 편집하면 NM 이 부여된다) ----
+  [[nodiscard]] virtual Result<std::vector<AnnotationInfo>> annotations(int page_index) const = 0;
+  // 새 주석을 만든다 (AP 없음 — PDFium 이 렌더 때 만든다). 돌려주는 값은 /NM
+  [[nodiscard]] virtual Result<std::string> add_annotation(int page_index, const AnnotationSpec& spec) = 0;
+  // 되살리기용 원시값. NM 이 없으면 부여한다 (돌려준 snapshot.id 가 그 뒤의 id).
+  // 주석의 AP 를 지운다 (색을 읽기 위해) — 삭제·색 변경 직전에만 부르고, 지워진 AP 는 다음 렌더가 다시 만든다
+  [[nodiscard]] virtual Result<AnnotationSnapshot> snapshot_annotation(int page_index, std::string_view id) = 0;
+  [[nodiscard]] virtual Result<void> remove_annotation(int page_index, std::string_view id) = 0;
+  // 같은 NM 으로 다시 만든다 (모양은 PDFium 이 다시 그린다). /Annots 끝에 붙는다
+  [[nodiscard]] virtual Result<void> restore_annotation(int page_index, const AnnotationSnapshot& snapshot) = 0;
+  // AP 를 지우고 /C(+/CA) 를 쓴다. 다음 렌더가 새 AP 를 만든다
+  [[nodiscard]] virtual Result<void> set_annotation_color(int page_index, std::string_view id, Color color) = 0;
+  [[nodiscard]] virtual Result<void> set_annotation_contents(int page_index, std::string_view id,
+                                                             std::string_view utf8) = 0;
 };
 
 }  // namespace onpdf::engine
