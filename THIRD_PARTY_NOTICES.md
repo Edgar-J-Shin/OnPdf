@@ -36,12 +36,25 @@ OnPdf 는 Apache License 2.0 으로 배포되며, 아래 제3자 구성 요소�
 - 출처: https://github.com/nothings/stb
 - 라이선스: MIT 또는 퍼블릭 도메인(Unlicense) 중 선택
 
+### qpdf
+- 출처: https://qpdf.sourceforge.io (vcpkg 포트 12.4.2, 라이브러리만 — 내장 암호 공급자)
+- 라이선스: Apache-2.0 (일부 파일 MIT). 전체 문구는 qpdf 배포본의 `LICENSE.txt`·`NOTICE.md`
+- 용도: PDF 병합·분할·구조 검사. macOS·Linux 는 정적 링크, Windows 는 `qpdf*.dll` 로 함께 배포
+
+### zlib (qpdf 의존)
+- 출처: https://zlib.net (vcpkg)
+- 라이선스: zlib License
+
+### libjpeg-turbo (qpdf 의존)
+- 출처: https://libjpeg-turbo.org (vcpkg)
+- 라이선스: IJG License 및 BSD-3-Clause
+
 ## 개발·테스트에만 쓰는 구성 요소 (배포물에 포함되지 않음)
 
 | 구성 요소 | 용도 | 라이선스 |
 |---|---|---|
 | GoogleTest | 단위·앱 테스트 | BSD-3-Clause |
-| qpdf (명령줄) | 테스트 PDF 생성·검사 | Apache-2.0 |
+| qpdf (명령줄) | 테스트 PDF 생성(AES-256 암호화 샘플) | Apache-2.0 |
 
 ## 계획된 구성 요소
-- qpdf 라이브러리(병합·분할·암호화, M2), FreeType·HarfBuzz 직접 사용(글자 배치, M3)은 도입할 때 이 문서에 추가한다.
+- FreeType·HarfBuzz 직접 사용(글자 배치, M3)은 도입할 때 이 문서에 추가한다.
