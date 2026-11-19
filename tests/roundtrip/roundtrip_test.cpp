@@ -410,7 +410,7 @@ TEST(Roundtrip, EditedTextSurvivesSave) {
   }
   auto legacy_added = doc->add_text_objects(0, legacy);
   ASSERT_TRUE(legacy_added);
-  ASSERT_TRUE(doc->move_text_objects(0, legacy_added->ids, {10, 10}));
+  ASSERT_TRUE(doc->move_page_objects(0, legacy_added->ids, {10, 10}));
   RenderOptions render;
   render.scale = 1.0f;
   auto before = doc->render_page(0, render);

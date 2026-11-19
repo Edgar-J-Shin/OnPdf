@@ -5,6 +5,7 @@
 
 #include "onpdf/core/engine/annotation.h"
 #include "onpdf/core/engine/render_types.h"
+#include "onpdf/core/engine/page_object.h"
 #include "onpdf/core/engine/text_object.h"
 #include "onpdf/core/error.h"
 
@@ -103,8 +104,24 @@ class EditableDocument {
   [[nodiscard]] virtual Result<void> remove_text_objects(int page_index, const std::vector<std::string>& ids) = 0;
   // OnPdf 가 만든 텍스트 객체 목록 (저장 검증·선택용)
   [[nodiscard]] virtual Result<std::vector<TextObjectInfo>> text_objects(int page_index) const = 0;
-  // 텍스트 객체들을 쪽 포인트 delta 만큼 옮긴다 (행렬 e,f 만 변경, 회전 쪽에서도 화면 방향). 전부 찾은 뒤에만 바꾼다 (#47)
-  [[nodiscard]] virtual Result<void> move_text_objects(int page_index, const std::vector<std::string>& ids, Point delta_pt) = 0;
+  // 마크 객체(텍스트·이미지)들을 쪽 포인트 delta 만큼 옮긴다 (행렬 e,f 만 변경, 회전 쪽에서도 화면 방향). 전부 찾은 뒤에만 바꾼다 (#47·#49)
+  [[nodiscard]] virtual Result<void> move_page_objects(int page_index, const std::vector<std::string>& ids, Point delta_pt) = 0;
+
+  // ---- 이미지·쪽 객체 일반 (#49) ----
+  // 이미지 객체를 만든다 (픽셀 → SetBitmap(+SMask), JPEG → 원본 그대로). 돌려주는 값 = 객체 id
+  [[nodiscard]] virtual Result<std::string> add_image_object(int page_index, const ImageSpec& spec) = 0;
+  // 텍스트(마크 있는 것)·이미지(쪽 직속 전부) 목록, 쪽 객체 순서대로
+  [[nodiscard]] virtual Result<std::vector<PageObjectInfo>> page_objects(int page_index) const = 0;
+  // "#obj<n>" 이면 그 이미지에 마크를 붙이고 새 id 를, 이미 마크 id 면 그대로 돌려준다 (기존 이미지 첫 편집)
+  [[nodiscard]] virtual Result<std::string> mark_object(int page_index, std::string_view id) = 0;
+  // 이미지를 쪽 포인트 사각형에 맞춘다 (행렬 교체, 회전 쪽 기저 반영)
+  [[nodiscard]] virtual Result<void> set_object_rect(int page_index, std::string_view id, Rect rect_pt) = 0;
+  // 객체들을 쪽에서 떼어 문서가 보관한다 (삭제·추가 취소). 전부 찾은 뒤에만 뗀다
+  [[nodiscard]] virtual Result<DetachedId> detach_objects(int page_index, const std::vector<std::string>& ids) = 0;
+  // 보관한 객체를 원래 쪽·원래 순서 자리에 다시 넣는다. 성공하면 보관 토큰은 사라진다
+  [[nodiscard]] virtual Result<void> reattach_objects(DetachedId id) = 0;
+  // 보관한 객체를 버린다 (밀려난 Command 의 discard). 없는 토큰은 무시
+  virtual void drop_detached(DetachedId id) noexcept = 0;
 };
 
 }  // namespace onpdf::engine

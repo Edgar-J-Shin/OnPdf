@@ -158,7 +158,7 @@ TEST(TextObjects, MoveShiftsInPagePointsOnAnyRotation) {
     auto added = doc->add_text_objects(0, spec);
     ASSERT_TRUE(added) << "rotation " << rotation;
     const auto origin_before = (*doc->text_objects(0))[0].baseline_origin;
-    ASSERT_TRUE(doc->move_text_objects(0, added->ids, {60.0, 40.0})) << "rotation " << rotation;
+    ASSERT_TRUE(doc->move_page_objects(0, added->ids, {60.0, 40.0})) << "rotation " << rotation;
     const auto after = (*doc->text_objects(0))[0];
     EXPECT_NEAR(after.baseline_origin.x, origin_before.x + 60.0, 0.05) << "rotation " << rotation;
     EXPECT_NEAR(after.baseline_origin.y, origin_before.y + 40.0, 0.05) << "rotation " << rotation;
@@ -168,7 +168,7 @@ TEST(TextObjects, MoveShiftsInPagePointsOnAnyRotation) {
       if (ch.code == U'회') { found = true; EXPECT_NEAR(ch.box.x, 160.0, 3.0) << "rotation " << rotation; }
     }
     EXPECT_TRUE(found);
-    EXPECT_FALSE(doc->move_text_objects(0, {"onpdf-text-ffffffffffffffff"}, {1, 1}));
+    EXPECT_FALSE(doc->move_page_objects(0, {"onpdf-text-ffffffffffffffff"}, {1, 1}));
     // 지우면 원본 그대로
     ASSERT_TRUE(doc->remove_text_objects(0, added->ids));
     auto restored = doc->render_page(0, options);

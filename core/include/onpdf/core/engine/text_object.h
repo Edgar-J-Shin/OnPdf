@@ -67,6 +67,7 @@ struct TextObjectInfo {
   Color color{0, 0, 0, 255};
   Point baseline_origin;  // 기준선 왼쪽 끝 (쪽 포인트)
   Rect bbox;              // 쪽 포인트
+  int index = -1;         // 쪽 객체 순서 (z 순서)
 };
 
 }  // namespace onpdf::engine
