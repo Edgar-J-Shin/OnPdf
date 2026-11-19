@@ -3,6 +3,7 @@
 #include "document_session.h"
 #include "document_view.h"
 #include "edit_controller.h"
+#include "structure_job.h"
 #include "print_job.h"
 #include "onpdf/core/engine/pdfium_worker.h"
 #include "onpdf/core/view/search.h"
@@ -12,6 +13,7 @@
 #include <QMainWindow>
 #include <QString>
 
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -63,6 +65,9 @@ class MainWindow : public QMainWindow {
   [[nodiscard]] QAction* redo_action() const noexcept { return redo_action_; }
   [[nodiscard]] QAction* rotate_cw_action() const noexcept { return rotate_cw_action_; }
   [[nodiscard]] QAction* delete_pages_action() const noexcept { return delete_pages_action_; }
+  [[nodiscard]] QAction* merge_action() const noexcept { return merge_action_; }
+  [[nodiscard]] QAction* split_action() const noexcept { return split_action_; }
+  [[nodiscard]] StructureJob* structure_job() const noexcept { return structure_job_; }
   [[nodiscard]] QAction* tool_action(AnnotationTool tool) const;
   [[nodiscard]] QAction* delete_annotation_action() const noexcept { return delete_annotation_action_; }
   [[nodiscard]] QToolBar* annotation_toolbar() const noexcept { return annotation_toolbar_; }
@@ -88,6 +93,10 @@ class MainWindow : public QMainWindow {
   bool delete_selected_annotation();
   // 메모 생성: contents 가 주어지면 대화상자 없이 만든다 (테스트용)
   bool add_note(int page, onpdf::Point pt, const QString& contents);
+  // ---- 병합·분할 (대화상자 없이 같은 경로를 타는 진입점, 테스트용으로도 쓴다). 시작하면 true ----
+  bool merge_files(std::vector<engine::StructureInput> inputs, const QString& output);
+  bool split_document(int every, const QString& directory);  // 현재 문서(디스크 파일)를 every 쪽마다
+  void session_open_for_test(const QString& path, const QString& password) { session_.open(path, password); }  // 암호 대화상자 우회
   // 이 경로로 저장한다 (대화상자 없이 — 다른 이름으로 저장의 뒷부분, 테스트용). 시작하면 true
   bool save_to(const QString& path);
   // 대화상자 없이 이 프린터 설정으로 인쇄를 시작한다 (파일 > 인쇄 의 뒷부분, 테스트용). 시작하면 true
@@ -141,6 +150,11 @@ class MainWindow : public QMainWindow {
   [[nodiscard]] std::string annotation_author() const;
   void update_color_icon();
   void on_insert_pages_action();
+  void on_merge_action();
+  void on_split_action();
+  void prompt_split();
+  void on_structure_finished(bool cancelled);
+  void show_structure_progress(const QString& title);
   void move_selection(int delta);  // 위로(-1)·아래로(+1) 이동
   bool warn_signature_once();      // 서명 문서의 첫 구조 편집: 계속하면 true
   void on_thumbnail_context_menu(const QPoint& global_pos, const std::vector<int>& pages);
@@ -189,6 +203,16 @@ class MainWindow : public QMainWindow {
   QAction* move_up_action_ = nullptr;
   QAction* move_down_action_ = nullptr;
   QAction* insert_pages_action_ = nullptr;
+  QAction* merge_action_ = nullptr;
+  QAction* split_action_ = nullptr;
+  StructureJob* structure_job_ = nullptr;
+  QProgressDialog* structure_progress_ = nullptr;
+  std::vector<std::filesystem::path> structure_outputs_;  // 진행 중 작업의 출력 (취소·실패 시 정리, 성공 시 열기)
+  enum class StructureKind { kNone, kMerge, kSplit } structure_kind_ = StructureKind::kNone;
+  QString structure_folder_;
+  std::vector<engine::StructureInput> pending_merge_inputs_;  // 암호를 물어 다시 시도할 병합
+  QString pending_merge_output_;
+  int merge_password_attempts_ = 0;
   QToolBar* annotation_toolbar_ = nullptr;
   QActionGroup* tool_group_ = nullptr;
   QAction* tool_actions_[6] = {};  // AnnotationTool 순서

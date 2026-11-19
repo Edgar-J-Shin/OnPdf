@@ -3,6 +3,9 @@
 #include "document_view.h"
 #include "onpdf/core/platform/path.h"
 #include "annotation_dialog.h"
+#include "onpdf/core/engine/qpdf_tools.h"
+#include "onpdf/core/engine/save.h"
+#include "onpdf/core/page_ranges.h"
 #include "onpdf/edit/annotation_commands.h"
 #include "onpdf/edit/delete_pages.h"
 #include "onpdf/edit/insert_pages.h"
@@ -23,6 +26,7 @@
 #include <QClipboard>
 #include <QCloseEvent>
 #include <QDesktopServices>
+#include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFileDialog>
@@ -110,6 +114,8 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   set_document_status(tr("문서 없음"));
 
   edit_ = new EditController(dispatcher_, this);
+  structure_job_ = new StructureJob(dispatcher_, this);
+  connect(structure_job_, &StructureJob::finished, this, &MainWindow::on_structure_finished);
   build_menus();
   build_annotation_ui();
   connect(edit_, &EditController::document_changed, this, &MainWindow::on_document_changed);
@@ -186,6 +192,12 @@ void MainWindow::build_menus() {
   open->setStatusTip(tr("PDF 파일을 연다"));
   save_action_ = file->addAction(tr("저장(&S)"), QKeySequence::Save, this, &MainWindow::on_save);
   save_as_action_ = file->addAction(tr("다른 이름으로 저장(&A)..."), QKeySequence::SaveAs, this, &MainWindow::on_save_as);
+  file->addSeparator();
+  merge_action_ = file->addAction(tr("병합(&M)..."), this, &MainWindow::on_merge_action);
+  merge_action_->setStatusTip(tr("PDF 여러 개를 한 파일로 합친다 (첫 문서의 목차·폼 유지)"));
+  split_action_ = file->addAction(tr("분할(&T)..."), this, &MainWindow::on_split_action);
+  split_action_->setStatusTip(tr("현재 문서를 N쪽마다 나눠 저장한다"));
+  split_action_->setEnabled(false);
   file->addSeparator();
   print_action_ = file->addAction(tr("인쇄(&P)..."), QKeySequence::Print, this, &MainWindow::on_print);
   print_action_->setEnabled(false);
@@ -398,6 +410,9 @@ void MainWindow::update_edit_actions() {
   }
   delete_annotation_action_->setEnabled(annotation_edits_allowed_ && view_->selected_annotation().has_value());
   color_button_->setEnabled(can_annotate);
+  const bool structure_busy = structure_job_ != nullptr && structure_job_->active();
+  split_action_->setEnabled(has_pages && !structure_busy);
+  merge_action_->setEnabled(!structure_busy);
   // 실행 취소 대상은 이미 허용된 편집이므로 작업 중이 아니면 된다
   undo_action_->setEnabled(idle && edit_->can_undo());
   redo_action_->setEnabled(idle && edit_->can_redo());
@@ -748,6 +763,250 @@ void MainWindow::on_annotation_edit_requested(int page, const engine::Annotation
   edit_->run(std::make_shared<edit::SetAnnotationContentsCommand>(page, info.id, text.toStdString()));
 }
 
+// ---------------------------------------------------------------- 병합·분할
+
+namespace {
+
+QString q_filename(const std::filesystem::path& p) { return QString::fromStdString(onpdf::path_to_utf8(p.filename())); }
+
+QString structure_error_text(const onpdf::Error& e) {
+  switch (e.code) {
+    case ErrorCode::kPasswordRequired: return MainWindow::tr("암호가 필요한 문서가 있습니다: %1").arg(QString::fromStdString(e.message));
+    case ErrorCode::kPermissionDenied: return MainWindow::tr("쪽 추출이 허용되지 않은 문서가 있습니다: %1").arg(QString::fromStdString(e.message));
+    case ErrorCode::kNotWritable: return MainWindow::tr("파일에 쓸 수 없습니다. 읽기 전용이거나 다른 프로그램이 사용 중입니다.");
+    case ErrorCode::kFolderNotWritable: return MainWindow::tr("이 폴더에 새 파일을 만들 수 없습니다. 다른 폴더를 고르세요.");
+    case ErrorCode::kSaveVerifyFailed: return MainWindow::tr("만든 파일을 검증하지 못했습니다: %1").arg(QString::fromStdString(e.message));
+    default: return QString::fromStdString(e.message);
+  }
+}
+
+}  // namespace
+
+void MainWindow::show_structure_progress(const QString& title) {
+  delete structure_progress_;
+  structure_progress_ = new QProgressDialog(title, tr("취소"), 0, 100, this);
+  structure_progress_->setObjectName(QStringLiteral("structure_progress"));
+  structure_progress_->setWindowTitle(title);
+  structure_progress_->setWindowModality(Qt::NonModal);  // 모달 진행 창은 setValue 마다 이벤트를 재진입 처리한다 (인쇄와 같은 이유)
+  structure_progress_->setMinimumDuration(0);
+  structure_progress_->setAutoClose(false);
+  structure_progress_->setAutoReset(false);
+  structure_progress_->setRange(0, 0);  // 입력을 읽는 동안은 진행률이 없다 → busy 표시 (리뷰 I9)
+  structure_progress_->setLabelText(tr("%1 (준비 중…)").arg(title));
+  structure_progress_->show();
+  QProgressDialog* progress = structure_progress_;
+  connect(structure_job_, &StructureJob::progress, progress, [progress, title](int percent) {
+    if (progress->maximum() == 0) {
+      progress->setRange(0, 100);
+      progress->setLabelText(title);
+    }
+    progress->setValue(percent);
+  }, Qt::QueuedConnection);
+  connect(progress, &QProgressDialog::canceled, this, [this] {
+    structure_job_->cancel();
+    show_transient(tr("작업이 끝나면 결과를 버립니다…"));
+  });
+}
+
+void MainWindow::on_merge_action() {
+  if (!merge_action_->isEnabled()) return;
+  const QString start_dir = session_.has_document() ? QFileInfo(session_.path()).absolutePath() : QDir::homePath();
+  const QStringList files = QFileDialog::getOpenFileNames(this, tr("병합할 PDF (고른 순서대로 합칩니다)"), start_dir,
+                                                          tr("PDF 문서 (*.pdf)"));
+  if (files.isEmpty()) return;
+  // 파일은 작업 스레드에서 읽는다 (큰 파일을 메인에서 열면 UI 가 멈춘다). 암호가 필요하면 결과로 돌아와 묻고 다시 시도한다
+  std::vector<engine::StructureInput> inputs;
+  for (const QString& file : files) inputs.push_back({onpdf::path_from_utf8(file.toUtf8().toStdString()), ""});
+  const QFileInfo first(files.first());
+  const QString suggested = first.absolutePath() + QLatin1Char('/') + first.completeBaseName() + tr("-병합.pdf");
+  const QString output = QFileDialog::getSaveFileName(this, tr("병합 결과 저장"), suggested, tr("PDF 문서 (*.pdf)"));
+  if (output.isEmpty()) return;
+  merge_files(std::move(inputs), output);
+}
+
+bool MainWindow::merge_files(std::vector<engine::StructureInput> inputs, const QString& output) {
+  if (inputs.empty() || output.isEmpty() || structure_job_->active()) return false;
+  const auto out = onpdf::path_from_utf8(output.toUtf8().toStdString());
+  for (const auto& in : inputs) {
+    std::error_code ec;
+    if (std::filesystem::exists(out, ec) && std::filesystem::equivalent(out, in.path, ec)) {
+      show_transient(tr("출력 파일이 입력 파일과 같습니다"));
+      return false;
+    }
+  }
+  structure_kind_ = StructureKind::kMerge;
+  structure_outputs_ = {out};
+  structure_folder_ = QFileInfo(output).absolutePath();
+  pending_merge_inputs_ = inputs;
+  pending_merge_output_ = output;
+  show_structure_progress(tr("병합 중…"));
+  const bool started = structure_job_->start([inputs = std::move(inputs), out](const engine::ProgressFn& progress) -> StructureJob::Outcome {
+    int expected = 0;
+    for (const auto& in : inputs) {
+      auto n = engine::QpdfTools::page_count(in.path, in.password);
+      if (!n) return std::unexpected(n.error());
+      expected += *n;
+    }
+    engine::SafeWriteHooks hooks;
+    hooks.write = [&](const std::vector<std::filesystem::path>& temps) -> onpdf::Result<void> {
+      auto r = engine::QpdfTools::merge(inputs, temps.front(), progress);
+      if (!r) return std::unexpected(r.error());
+      return {};
+    };
+    hooks.verify = [&](std::size_t, const std::filesystem::path&, const std::filesystem::path& temp) -> onpdf::Result<void> {
+      if (auto c = engine::QpdfTools::check(temp); !c) return std::unexpected(c.error());
+      auto n = engine::QpdfTools::page_count(temp);
+      if (!n) return std::unexpected(n.error());
+      if (*n != expected) return onpdf::make_error(ErrorCode::kSaveVerifyFailed, "merged page count mismatch");
+      return {};
+    };
+    return engine::write_files_safely({out}, hooks);
+  });
+  update_edit_actions();
+  return started;
+}
+
+void MainWindow::on_split_action() {
+  if (!split_action_->isEnabled() || !session_.has_document()) return;
+  // 분할은 디스크의 파일을 읽는다: 수정됐으면 먼저 저장할지 묻는다 (저장 안 함이면 디스크 상태로 나눈다)
+  if (edit_->is_modified()) {
+    maybe_save([this] { prompt_split(); });
+    return;
+  }
+  prompt_split();
+}
+
+void MainWindow::prompt_split() {
+  if (!session_.has_document()) return;
+  const int count = session_.handle().info().page_count;
+  QInputDialog dialog(this);
+  dialog.setObjectName(QStringLiteral("split_every"));
+  dialog.setWindowTitle(tr("분할"));
+  dialog.setLabelText(tr("몇 쪽마다 나눌까요? (전체 %1쪽)").arg(count));
+  dialog.setInputMode(QInputDialog::IntInput);
+  dialog.setIntRange(1, std::max(1, count));
+  dialog.setIntValue(1);
+  if (dialog.exec() != QDialog::Accepted) return;
+  const QString dir = QFileDialog::getExistingDirectory(this, tr("분할 파일을 저장할 폴더"), QFileInfo(session_.path()).absolutePath());
+  if (dir.isEmpty()) return;
+  split_document(dialog.intValue(), dir);
+}
+
+bool MainWindow::split_document(int every, const QString& directory) {
+  if (!session_.has_document() || every <= 0 || directory.isEmpty() || structure_job_->active()) return false;
+  const int count = session_.handle().info().page_count;
+  const auto ranges = onpdf::ranges_every(every, count);
+  if (ranges.empty()) return false;
+  const engine::StructureInput input{onpdf::path_from_utf8(session_.path().toUtf8().toStdString()),
+                                     session_.password().toStdString()};  // 암호 문서도 나눌 수 있게 (리뷰 W2)
+  const std::string stem = QFileInfo(session_.path()).completeBaseName().toUtf8().toStdString();
+  const auto dir = onpdf::path_from_utf8(directory.toUtf8().toStdString());
+  std::vector<std::filesystem::path> outs;
+  for (std::size_t i = 0; i < ranges.size(); ++i) {
+    outs.push_back(dir / onpdf::path_from_utf8(onpdf::output_name(stem + "-%d.pdf", static_cast<int>(i) + 1,
+                                                                   static_cast<int>(ranges.size()), ranges[i], count)));
+  }
+  int existing = 0;
+  for (const auto& p : outs) {
+    std::error_code ec;
+    if (std::filesystem::exists(p, ec)) ++existing;
+  }
+  if (existing > 0) {  // 폴더 선택 창은 덮어쓰기를 묻지 않으므로 여기서 한 번 묻는다 (리뷰 W3)
+    QMessageBox box(QMessageBox::Question, tr("분할"), tr("같은 이름의 파일 %1개를 덮어씁니다. 계속할까요?").arg(existing),
+                    QMessageBox::NoButton, this);
+    box.setObjectName(QStringLiteral("split_overwrite"));
+    QPushButton* go = box.addButton(tr("덮어쓰기"), QMessageBox::AcceptRole);
+    QPushButton* cancel = box.addButton(tr("취소"), QMessageBox::RejectRole);
+    box.setDefaultButton(cancel);
+    box.exec();
+    if (box.clickedButton() != go) return false;
+  }
+  structure_kind_ = StructureKind::kSplit;
+  structure_outputs_ = outs;
+  structure_folder_ = directory;
+  show_structure_progress(tr("분할 중…"));
+  const bool started = structure_job_->start([input, ranges, outs](const engine::ProgressFn& progress) -> StructureJob::Outcome {
+    engine::SafeWriteHooks hooks;
+    hooks.write = [&](const std::vector<std::filesystem::path>& temps) -> onpdf::Result<void> {
+      for (std::size_t i = 0; i < temps.size(); ++i) {
+        if (auto r = engine::QpdfTools::extract(input, ranges[i], temps[i]); !r) return std::unexpected(r.error());
+        progress(static_cast<int>((i + 1) * 100 / temps.size()));
+      }
+      return {};
+    };
+    hooks.verify = [&](std::size_t i, const std::filesystem::path&, const std::filesystem::path& temp) -> onpdf::Result<void> {
+      auto n = engine::QpdfTools::page_count(temp);
+      if (!n) return std::unexpected(n.error());
+      if (*n != ranges[i].last - ranges[i].first + 1) return onpdf::make_error(ErrorCode::kSaveVerifyFailed, "split page count mismatch");
+      return {};
+    };
+    return engine::write_files_safely(outs, hooks);
+  });
+  update_edit_actions();
+  return started;
+}
+
+void MainWindow::on_structure_finished(bool cancelled) {
+  const StructureJob::Outcome& outcome = structure_job_->outcome();
+  if (structure_progress_ != nullptr) {
+    structure_progress_->hide();
+    structure_progress_->deleteLater();
+    structure_progress_ = nullptr;
+  }
+  const StructureKind kind = structure_kind_;
+  const std::vector<std::filesystem::path> outputs = std::move(structure_outputs_);
+  structure_kind_ = StructureKind::kNone;
+  update_edit_actions();
+  if (cancelled) {
+    merge_password_attempts_ = 0;
+    // qpdf 작업은 중단할 수 없어 끝까지 돈다. 결과 파일은 지우지 않는다 — 사용자가 덮어쓰기로 고른 기존 파일이나
+    // 이전 분할 결과를 지워 버릴 수 있기 때문 (리뷰 C2). 성공했으면 알리기만, 실패했으면 원래 아무것도 없다
+    show_transient(outcome ? tr("취소하기 전에 작업이 끝나 파일이 만들어졌습니다") : tr("취소했습니다"));
+    return;
+  }
+  if (!outcome && kind == StructureKind::kMerge && outcome.error().code == ErrorCode::kPasswordRequired &&
+      merge_password_attempts_ < 5) {
+    // 어느 입력인지는 메시지 앞의 경로로 찾는다 ("<파일>: ..."). 묻고 같은 병합을 다시 시도한다 (리뷰 I4·W1)
+    const std::string& message = outcome.error().message;
+    for (auto& input : pending_merge_inputs_) {
+      const std::string path = onpdf::path_to_utf8(input.path);
+      if (message.rfind(path, 0) != 0) continue;
+      QInputDialog dialog(this);
+      dialog.setObjectName(QStringLiteral("merge_password"));
+      dialog.setWindowTitle(tr("암호"));
+      dialog.setLabelText(tr("%1 은(는) 암호로 보호되어 있습니다. 암호를 입력하세요.").arg(q_filename(input.path)));
+      dialog.setTextEchoMode(QLineEdit::Password);
+      if (dialog.exec() != QDialog::Accepted || dialog.textValue().isEmpty()) {
+        show_transient(tr("병합을 취소했습니다"));
+        return;
+      }
+      input.password = dialog.textValue().toStdString();
+      ++merge_password_attempts_;
+      merge_files(pending_merge_inputs_, pending_merge_output_);
+      return;
+    }
+  }
+  merge_password_attempts_ = 0;
+  if (!outcome) {
+    QMessageBox box(QMessageBox::Warning, kind == StructureKind::kMerge ? tr("병합하지 못했습니다") : tr("분할하지 못했습니다"),
+                    tr("%1\n\n만들어진 파일은 없습니다.").arg(structure_error_text(outcome.error())), QMessageBox::Ok, this);
+    box.setObjectName(QStringLiteral("structure_failed"));
+    box.exec();
+    return;
+  }
+  if (kind == StructureKind::kMerge) {
+    show_transient(tr("병합했습니다"));
+    open_file(QString::fromStdString(onpdf::path_to_utf8(outputs.front())));
+    return;
+  }
+  QMessageBox box(QMessageBox::Information, tr("분할"), tr("%1개 파일을 저장했습니다.").arg(outcome->size()), QMessageBox::NoButton, this);
+  box.setObjectName(QStringLiteral("split_done"));
+  QPushButton* open_folder = box.addButton(tr("폴더 열기"), QMessageBox::ActionRole);
+  box.addButton(tr("확인"), QMessageBox::AcceptRole);
+  box.exec();
+  if (box.clickedButton() == open_folder) QDesktopServices::openUrl(QUrl::fromLocalFile(structure_folder_));
+}
+
 void MainWindow::on_thumbnail_context_menu(const QPoint& global_pos, const std::vector<int>& pages) {
   if (pages.empty() || !view_->has_document()) return;
   const bool enabled = delete_pages_action_->isEnabled();
@@ -881,6 +1140,11 @@ void MainWindow::maybe_save(std::function<void()> then) {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+  if (structure_job_ != nullptr && structure_job_->active()) {  // 병합·분할이 끝나기 전에는 닫지 않는다 (임시 파일 정리를 위해)
+    show_transient(tr("병합·분할이 끝난 뒤 닫을 수 있습니다"));
+    event->ignore();
+    return;
+  }
   if (allow_close_ || !session_.has_document() || !edit_->is_modified()) {
     if (saving_) {  // 저장이 끝날 때까지 닫지 않는다 (원본 교체 중)
       event->ignore();

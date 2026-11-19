@@ -21,6 +21,7 @@ enum class ErrorCode {
   kNotWritable,       // 대상 파일에 쓸 수 없다: 읽기 전용·잠금·다른 프로그램이 사용 중
   kFolderNotWritable, // 대상 폴더에 새 파일(임시 파일)을 만들 수 없다 — 다른 폴더에 저장해야 한다
   kPermissionDenied,  // 문서 권한이 그 동작을 허용하지 않는다 (예: 추출 금지 문서를 삽입 소스로)
+  kJobFailed,         // 구조 작업(qpdf 병합·분할·검사)이 오류로 끝났다. message 에 qpdf 의 설명
 };
 
 struct Error {
@@ -52,6 +53,7 @@ inline const char* to_string(ErrorCode code) noexcept {
     case ErrorCode::kNotWritable: return "file is not writable";
     case ErrorCode::kFolderNotWritable: return "cannot create files in folder";
     case ErrorCode::kPermissionDenied: return "operation not permitted by document permissions";
+    case ErrorCode::kJobFailed: return "structure job failed";
   }
   return "unknown";
 }

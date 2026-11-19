@@ -34,6 +34,7 @@ class DocumentSession : public QObject {
   [[nodiscard]] const engine::DocumentHandle& handle() const noexcept { return handle_; }
   [[nodiscard]] const engine::DocumentInfo& info() const { return handle_.info(); }
   [[nodiscard]] QString path() const { return path_; }
+  [[nodiscard]] QString password() const { return password_; }  // 열 때 쓴 암호 (분할 등 디스크 파일을 다시 읽는 작업용)
 
  signals:
   void opened(const QString& path, int page_count);
@@ -47,6 +48,7 @@ class DocumentSession : public QObject {
   UiDispatcher& dispatcher_;
   engine::DocumentHandle handle_;
   QString path_;
+  QString password_;
   std::uint64_t open_generation_ = 0;
   std::uint64_t render_generation_ = 0;
   engine::TaskHandle pending_open_;

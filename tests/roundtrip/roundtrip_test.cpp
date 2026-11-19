@@ -1,7 +1,8 @@
 // 왕복 테스트: manifest 의 열 수 있는 모든 PDF 를 열기 → (변경 없이) 안전 저장 → 다시 열기 후 일치 확인.
-// 계획서 성공 기준 "테스트 PDF 열기·저장 왕복 후 깨지는 파일 0건". qpdf 명령이 있으면 qpdf --check 도 돌린다.
+// 계획서 성공 기준 "테스트 PDF 열기·저장 왕복 후 깨지는 파일 0건". 구조 검사는 qpdf 라이브러리(QpdfTools::check)로 항상 돈다.
 
 #include "onpdf/core/engine/pdfium_document.h"
+#include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/engine/save.h"
 #include "onpdf/edit/annotation_commands.h"
 #include "onpdf/edit/delete_pages.h"
@@ -13,8 +14,6 @@
 
 #include <gtest/gtest.h>
 
-#include <cstdlib>
-#include <fstream>
 #include <string>
 
 namespace onpdf::engine {
@@ -45,19 +44,6 @@ double different_fraction(const Bitmap& a, const Bitmap& b) {
     }
   }
   return static_cast<double>(diff) / static_cast<double>(std::max(1, a.width * a.height));
-}
-
-// qpdf 명령 (ONPDF_QPDF 환경 변수 또는 PATH 의 qpdf). 없으면 빈 문자열
-std::string qpdf_command(const std::filesystem::path& scratch) {
-  static const std::string cached = [&] {
-    const char* env = std::getenv("ONPDF_QPDF");
-    const std::string exe = env != nullptr ? env : "qpdf";
-    // 명령 맨 앞을 따옴표로 시작하지 않는다: Windows cmd 는 그 경우 첫·마지막 따옴표를 지워 명령이 깨진다
-    // (ONPDF_QPDF 는 공백 없는 경로를 쓴다)
-    const std::string probe = exe + " --version > \"" + onpdf::path_to_utf8(scratch / "qpdf-version.txt") + "\" 2>&1";
-    return std::system(probe.c_str()) == 0 ? exe : std::string();
-  }();
-  return cached;
 }
 
 class RoundtripTest : public ::testing::TestWithParam<ManifestEntry> {};
@@ -96,18 +82,9 @@ TEST_P(RoundtripTest, SaveAndReopenMatches) {
     EXPECT_LE(different_fraction(*before, *after), onpdf::test::kMaxDifferentFraction);
   }
 
-  if (const std::string qpdf = qpdf_command(dir.path()); !qpdf.empty()) {
-    std::string cmd = qpdf + " --check";
-    if (!e.password.empty()) cmd += " --password=" + e.password;
-    cmd += " \"" + onpdf::path_to_utf8(target) + "\" > \"" + onpdf::path_to_utf8(dir / "check.txt") + "\" 2>&1";
-    const int status = std::system(cmd.c_str());
-    // qpdf 종료 코드: 0 정상, 3 경고(원본에도 있던 경고 포함), 2 오류.
-    // std::system 은 POSIX 에서 종료 코드를 8비트 민 대기 상태를, Windows 에서는 종료 코드 그대로를 돌려준다
-    std::ifstream log(dir / "check.txt");
-    const std::string output((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const bool ok = status == 0 || status == 3 || status == (3 << 8);
-    EXPECT_TRUE(ok) << "qpdf --check status " << status << "\n" << output;
-  }
+  // 라이브러리 qpdf 로 구조 검사 (CI 에도 항상 돈다). 경고(원본에도 있던 경고 포함)는 통과
+  auto checked = engine::QpdfTools::check(target, e.password);
+  EXPECT_TRUE(checked) << "qpdf check: " << (checked ? "" : checked.error().message);
 }
 
 INSTANTIATE_TEST_SUITE_P(Testdata, RoundtripTest, ::testing::ValuesIn(load_manifest()), test_name);
@@ -130,16 +107,10 @@ TEST(Roundtrip, RotatedDocument) {
 }
 
 
-// 저장 파일에 qpdf --check 를 돌린다 (qpdf 가 없으면 건너뜀)
-void expect_qpdf_ok(const ScopedTempDir& dir, const std::filesystem::path& target) {
-  const std::string qpdf = qpdf_command(dir.path());
-  if (qpdf.empty()) return;
-  const std::string cmd = qpdf + " --check \"" + onpdf::path_to_utf8(target) + "\" > \"" +
-                          onpdf::path_to_utf8(dir / "check.txt") + "\" 2>&1";
-  const int status = std::system(cmd.c_str());
-  std::ifstream log(dir / "check.txt");
-  const std::string output((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-  EXPECT_TRUE(status == 0 || status == 3 || status == (3 << 8)) << "qpdf --check status " << status << "\n" << output;
+// 저장 파일에 qpdf 라이브러리 검사를 돌린다 (경고는 통과, 오류는 실패)
+void expect_qpdf_ok(const ScopedTempDir&, const std::filesystem::path& target) {
+  auto checked = engine::QpdfTools::check(target);
+  EXPECT_TRUE(checked) << "qpdf check: " << (checked ? "" : checked.error().message);
 }
 
 std::string page_text(const PdfiumDocument& doc, int page) {
@@ -356,6 +327,54 @@ TEST(Roundtrip, SignedDocumentNoteSavesIncrementally) {
   ASSERT_NE(n, nullptr);
   EXPECT_EQ(n->contents, "서명 문서 메모");
   expect_qpdf_ok(dir, target);
+}
+
+
+// 병합 결과를 PDFium 으로 다시 열어 쪽 순서(텍스트)·첫 쪽 렌더·목차가 입력과 같다 (#37)
+TEST(Roundtrip, MergedDocumentMatchesInputs) {
+  ScopedTempDir dir;
+  const auto out = dir / "merged.pdf";
+  auto report = engine::QpdfTools::merge({{testdata("bookmarks.pdf"), ""}, {testdata("simple.pdf"), ""}}, out);
+  ASSERT_TRUE(report) << report.error().message;
+  auto merged = PdfiumDocument::open(out);
+  auto bookmarks = PdfiumDocument::open(testdata("bookmarks.pdf"));
+  auto simple = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(merged && bookmarks && simple);
+  ASSERT_EQ(merged->page_count(), 12);
+  EXPECT_EQ(page_text(*merged, 0), page_text(*bookmarks, 0));
+  EXPECT_EQ(page_text(*merged, 9), page_text(*bookmarks, 9));
+  EXPECT_EQ(page_text(*merged, 10), page_text(*simple, 0));
+  EXPECT_EQ(page_text(*merged, 11), page_text(*simple, 1));
+  EXPECT_EQ(merged->load_outline()->size(), 15);
+  RenderOptions render;
+  render.scale = 0.5f;
+  auto a = merged->render_page(10, render);
+  auto b = simple->render_page(0, render);
+  ASSERT_TRUE(a && b);
+  EXPECT_LE(different_fraction(*a, *b), onpdf::test::kMaxDifferentFraction);
+  expect_qpdf_ok(dir, out);
+}
+
+TEST(Roundtrip, SplitPiecesMatchSource) {
+  ScopedTempDir dir;
+  const engine::StructureInput in{testdata("mixed-sizes.pdf"), ""};
+  auto source = PdfiumDocument::open(in.path);
+  ASSERT_TRUE(source);
+  const auto ranges = onpdf::ranges_every(3, source->page_count());  // 7쪽 → 3개
+  ASSERT_EQ(ranges.size(), 3u);
+  for (std::size_t i = 0; i < ranges.size(); ++i) {
+    const auto out = dir.path() / ("piece-" + std::to_string(i) + ".pdf");
+    ASSERT_TRUE(engine::QpdfTools::extract(in, ranges[i], out));
+    auto piece = PdfiumDocument::open(out);
+    ASSERT_TRUE(piece);
+    ASSERT_EQ(piece->page_count(), ranges[i].last - ranges[i].first + 1);
+    for (int p = 0; p < piece->page_count(); ++p) {
+      const int src = ranges[i].first - 1 + p;
+      EXPECT_NEAR(piece->page_size(p)->width, source->page_size(src)->width, 0.01) << "piece " << i << " page " << p;
+      EXPECT_EQ(page_text(*piece, p), page_text(*source, src));
+    }
+    expect_qpdf_ok(dir, out);
+  }
 }
 
 }  // namespace

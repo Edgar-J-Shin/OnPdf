@@ -41,6 +41,8 @@ onpdf_add_test(onpdf_unit_tests
   unit/insert_pages_test.cpp
   unit/annotation_test.cpp
   unit/annotation_commands_test.cpp
+  unit/page_ranges_test.cpp
+  unit/qpdf_tools_test.cpp
   unit/save_test.cpp
   unit/fs_sync_test.cpp
 )
@@ -78,6 +80,7 @@ if(ONPDF_BUILD_APP)
     app/print_test.cpp
     app/edit_test.cpp
     app/annotation_test.cpp
+    app/merge_split_test.cpp
   )
   target_link_libraries(onpdf_app_tests PRIVATE onpdf_app_lib)
   set_tests_properties(onpdf_app_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

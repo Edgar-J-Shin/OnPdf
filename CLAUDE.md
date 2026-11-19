@@ -26,7 +26,7 @@ Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜
 - Language: C++23 (std::expected 사용), CMake ≥ 3.25 + vcpkg(manifest 모드), Ninja
 - 배포 타깃: Windows x64(MSVC 2022) 와 macOS 13+(Apple Clang, arm64·x64). 개발 머신은 macOS. Linux 는 `core`·`cli`·`tests` CI 빌드만. 플랫폼 분기는 최소화하고 Qt 에 맡긴다. 설치 파일: Windows 설치기 + macOS DMG(공증) — M5
 - PDF 엔진: PDFium (`bblanchon/pdfium-binaries` 사전 빌드, Chromium 브랜치 번호로 버전 고정 — `third_party/` 스크립트)
-- 구조 작업: qpdf (병합·분할·암호화·검사·복구)
+- 구조 작업: qpdf 12 (vcpkg, 라이브러리만·내장 암호 공급자) — 병합·분할·구조 검사. 헤더는 `core/src/engine/qpdf_tools.cpp` 에서만. 암호화 설정·복구 저장은 후속
 - UI: Qt 6 Widgets, **동적 링크**(LGPL 준수)
 - 글자 배치: HarfBuzz + FreeType
 - 테스트: GoogleTest + 렌더링 이미지 비교
@@ -51,13 +51,16 @@ ctest --preset dev                      # unit + rendering regression + roundtri
 ./build/dev/bin/onpdf_cli text in.pdf --page 0                       # 글자·줄·링크 수 + 추출 텍스트
 ./build/dev/bin/onpdf_cli search in.pdf "query" [--case] [--word]    # 쪽별 결과 + 문맥
 ./build/dev/bin/onpdf_cli outline in.pdf                             # 목차 트리 (깊이 들여쓰기, [p.N]/[uri])
+./build/dev/bin/onpdf_cli merge out.pdf a.pdf b.pdf                  # 병합 (첫 파일의 목차·폼 유지, qpdf)
+./build/dev/bin/onpdf_cli split in.pdf out-dir --every 3             # 분할 (--ranges "1-3,5" | --each, --pattern NAME-%d.pdf)
+./build/dev/bin/onpdf_cli check in.pdf                               # qpdf 구조 검사 (경고 출력, 오류면 1)
 ONPDF_UPDATE_REFERENCES=1 ./build/dev/bin/onpdf_render_tests   # 렌더링 기준 이미지 갱신
 cmake --preset dev-app && cmake --build --preset dev-app        # Qt 앱 포함 빌드
 ./build/dev-app/bin/onpdf_app testdata/simple.pdf              # 앱 실행
 ctest --preset dev-app                                         # app 테스트(offscreen) 포함
 ```
 
-- 테스트 PDF: `python3 testdata/gen/make_all.py` 로 전부 생성(표준 라이브러리만, 결정적). `--check` 가 CI 에서 커밋본과 비교. 파일별 기대값은 `testdata/manifest.tsv`, 절차는 `testdata/README.md`
+- 테스트 PDF: `python3 testdata/gen/make_all.py` 로 전부 생성(표준 라이브러리만, 결정적). `--check` 가 CI 에서 커밋본과 비교. 파일별 기대값은 `testdata/manifest.tsv`, 절차는 `testdata/README.md`. 왕복 테스트의 구조 검사는 qpdf **라이브러리**(`QpdfTools::check`)라 외부 명령이 없어도 돈다
 - `core` 는 `stb` 로 PNG 를 읽고 쓴다. 새 의존성은 `vcpkg.json` 에 추가하고 `builtin-baseline` 을 유지한다
 - 빌드 산출물은 `build/<preset>/` 아래에만 생성한다 (소스 트리 내 빌드 금지). 실행 파일과 PDFium 공유 라이브러리는 `build/<preset>/bin/`
 - PDFium/qpdf 바이너리는 저장소에 커밋하지 않는다 — `third_party/` 스크립트로 받아온다
@@ -66,15 +69,17 @@ ctest --preset dev-app                                         # app 테스트(o
 # Architecture
 
 ```text
-app/          Qt UI (Qt 의존). onpdf_app_lib(UiDispatcher·DocumentSession·qt_image·DocumentTileSource·DocumentView·SearchBar·ThumbnailPanel·OutlinePanel·PrintJob·EditController·AnnotationDialog·MainWindow) + onpdf_app(main 만)
+app/          Qt UI (Qt 의존). onpdf_app_lib(UiDispatcher·DocumentSession·qt_image·DocumentTileSource·DocumentView·SearchBar·ThumbnailPanel·OutlinePanel·PrintJob·EditController·AnnotationDialog·StructureJob·MainWindow) + onpdf_app(main 만)
 edit/         Command(execute/undo/discard, EditableDocument 로만 문서 변경)·UndoStack(저장 지점, push 가 밀려난 명령 반환)
               RotatePageCommand(여러 쪽)·DeletePagesCommand(스냅샷으로 취소)·MovePagesCommand(역순열 취소)·InsertPagesCommand(파일 스냅샷)
               annotation_commands(AddAnnotations·RemoveAnnotation·SetAnnotationColor·SetAnnotationContents — /NM 과 값만 보관)
               page_ops(normalize·validate_move·simulate_move·apply_order·structural_change). 선택·텍스트 블록·폰트(M3)
 core/         Document, Page, 렌더 캐시(타일 LRU), 텍스트 인덱스       (Qt 의존 금지)
 core/engine/  PdfiumLibrary(init RAII) · PdfiumDocument(열기·크기·렌더·load_text·load_outline·resolve_location·print_preferences·회전·save_to — EditableDocument 구현) · TextPage(FPDFText/FPDFLink 추출, 좌표 변환) · dest(목적지·URI·UTF-16 변환 공용, 내부) · pdfium_handles
-              PdfiumWorker(전용 스레드 + High/Normal/Low 큐 + 취소) · DocumentHandle(워커 쪽 문서의 스레드 안전 핸들), QpdfTools(M2)
+              PdfiumWorker(전용 스레드 + High/Normal/Low 큐 + 취소) · DocumentHandle(워커 쪽 문서의 스레드 안전 핸들)
+              QpdfTools(qpdf C 작업 API: merge(첫 입력이 주 입력 — 그 목차·폼 보존)·extract·check·page_count·allows_extraction — PDFium 과 무관, 어느 스레드든)
 core/engine/  EditableDocument(PDFium 없는 편집 인터페이스 — edit/ 가 씀: 회전·삭제·이동·스냅샷(SnapshotId)·삽입·주석)·ChangeSet(structural+all_sizes)
+              save(write_files_safely: 생산자 무관 "임시 → 검증 → 교체" 골격, 여러 대상은 전부-또는-없음; save_document_safely 는 그 위) · page_ranges("1-3,5,8-" 파서·N쪽마다·파일 이름 패턴)
               annotation.h(AnnotationInfo·AnnotationSpec(쪽 포인트)·AnnotationSnapshot(사용자 좌표 원시값+AP) — PDFium 없음)
               save(save_document_safely: 임시→검증→rename)
 core/platform/ fs_sync(flush_file_to_disk·replace_file·flush_directory — 저장의 플랫폼 분기는 여기만)
@@ -100,7 +105,7 @@ core/   → edit/, app/, cli/ include 금지. Qt 헤더 include 금지
 edit/   → core/ 만 include. Qt 헤더 include 금지
 app/    → core/, edit/ include 가능
 cli/    → core/, edit/ include 가능. Qt 금지
-PDFium / qpdf 헤더(fpdf*.h, qpdf/*)는 core/engine/ 안에서만 include
+PDFium / qpdf 헤더(fpdf*.h, qpdf/*)는 core/engine/ 안에서만 include (qpdf 는 `qpdf_tools.cpp` 한 파일)
 ```
 
 Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인터페이스를 두고 app 에서 구현한다.
@@ -122,6 +127,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 - **쪽 구조 편집(삭제·이동·삽입, #33):** 결과는 `ChangeSet::structural` + `all_sizes` → `apply_change` 가 쪽 수·크기 목록을 통째로 교체 → `DocumentView::rebuild_pages`(캐시·텍스트·선택 전부 폐기, 레이아웃 재구성, 현재 쪽 클램프)·`ThumbnailPanel::reset_pages`(세대↑, 행 재설정)·쪽 번호 스핀·목차 재로드(`load_outline(false)`, 탭 유지)·검색 재실행. 저장·이동 결과 폐기는 `document_generation_`(열 때만 증가), 목차는 `outline_generation_`
 - **스냅샷은 문서가 소유한다.** 삭제 취소용 쪽 사본·삽입 소스는 `PdfiumDocument::snapshots_`(워커 전용 PDFium 문서)에 있고 Command 는 `SnapshotId` 만 쥔다 — Command 는 메인 스레드(실행 취소 스택)에서 소멸하므로 PDFium 핸들을 직접 쥐면 안 된다. 스택에서 밀려난 Command 는 `EditController` 가 워커에서 `discard` 를 불러 해제한다. `FPDF_MovePages` 는 실패 시 문서가 불확정이므로 `validate_move` 로 호출 전에 전부 검증한다. 전체 삭제는 금지(쪽 ≥ 1)
 - **주석(#35):** 좌표는 뷰·Command 는 쪽 포인트, PDF 는 사용자 좌표 — 변환은 `detail::PageSpace::to_user/quad_of/user_rect_of`(engine 안)에서만. 마크업 QuadPoints 는 선택 사각형(`selection_rects`) 꼭짓점을 변환해 좌상·우상·좌하·우하 순서. **새 주석은 AP 없이 만든다**(PDFium 이 렌더 때 AP 를 만들어 사전에 저장한다). AP 가 있으면 `FPDFAnnot_SetColor` 가 실패하므로 색 변경은 `SetAP(Normal, nullptr)` → `SetColor`, 취소는 보관한 이전 AP 로 `SetAP`. 정체성은 /NM(없는 기존 주석은 `"#<index>"` 로 가리키고 편집 때 `onpdf-<16진 16자>` 를 부여). `FPDFPage_RemoveAnnot` 는 되돌릴 수 없어 삭제 취소는 `AnnotationSnapshot`(색·내부색·불투명도·Quad·Ink·플래그·문자열 — **AP 는 보관하지 않는다**: `GetAP/SetAP` 텍스트 복원은 `/Resources` 를 잃어 하이라이트가 글자를 덮는다)으로 재생성하고 PDFium 이 모양을 다시 만든다(같은 NM, /Annots 끝). `snapshot_annotation` 은 AP 를 지우고 색을 읽으므로 삭제·색 변경 직전에만 부른다. Print 플래그 필수(없으면 인쇄 안 됨), 메모는 NoZoom|NoRotate. Popup 은 만들지 않고(FPDF_ANNOT 가 그리지 않음) 메모 내용은 툴팁·`AnnotationDialog`. 링크·위젯·팝업은 `editable=false`. 뷰는 보이는 쪽 ±1 의 `load_annotations`(kLow) 스냅샷으로 hit-test 하고 `invalidate_pages` 가 캐시를 버린다. 도구 모드는 `DocumentView::set_tool`, 도구·단축키는 `permissions.annotate` 로 게이트
+- **병합·분할(#37):** 현재 문서를 바꾸지 않는 내보내기라 Command 대상이 아니다. `QpdfTools` 작업은 PDFium 워커가 아닌 `StructureJob`(전용 `std::jthread`, 한 번에 하나)에서 돌고 결과는 `UiDispatcher::post_to` 로. 출력은 `write_files_safely`(임시 → qpdf `check` + 쪽 수 → 교체, 분할은 전부-또는-없음). 병합은 첫 파일이 주 입력(그 목차·폼만 보존 — qpdf 는 다른 입력의 목차를 버린다), 모든 입력은 추출 권한(비트 5) 필요, 결과는 평문. 작업 JSON 에 `decrypt` 를 넣어 **결과는 항상 평문**(주 입력이 암호 문서여도 — 그렇지 않으면 검증이 열지 못한다). 암호 오류 판정은 `qpdf_get_error_code == qpdf_e_password` 또는 정확한 문구만(경로에 "password" 가 든 파일을 오판하지 않게). qpdf 작업은 중단 API 가 없어 취소 = 결과를 열지 않기만(파일은 **지우지 않는다** — 사용자가 덮어쓰기로 고른 파일일 수 있다). 분할은 디스크 파일을 세션이 보관한 암호로 읽으므로 수정된 문서는 먼저 `maybe_save`, 기존 파일이 있으면 덮어쓰기 확인. vcpkg 의 qpdf 설정이 zlib·jpeg 를 맨이름으로 적어 `core/CMakeLists.txt` 가 `ZLIB::ZLIB`·`JPEG::JPEG` 로 바꾼다
 - **썸네일:** 다중 선택(`ExtendedSelection`), 현재 쪽 강조는 선택과 분리. 끌어 놓기는 모델이 행을 옮기지 않고 `move_requested(pages, drop_row)` 만 내며(`dropMimeData` 는 항상 false), `MainWindow::move_pages` 가 `dest = drop_row − |{p < drop_row}|` 로 바꿔 Command 를 실행한다. 파일 URL 드롭은 삽입. Delete 키·우클릭 메뉴. 편집 불가 상태면 `set_editable(false)` 로 끌기 자체를 막는다. 삽입 소스 암호는 `failed(kPasswordRequired)` 뒤 `insert_password` 대화상자로 다시 시도, 추출 금지(권한 비트 5)는 `kPermissionDenied`. 서명 문서의 첫 구조 편집은 `signature_warning` 으로 한 번 묻는다
 
 ### 렌더링 (구현: core/view + app/DocumentView)

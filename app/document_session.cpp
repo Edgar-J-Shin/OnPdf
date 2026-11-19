@@ -42,9 +42,9 @@ void DocumentSession::open(const QString& path, const QString& password) {
       worker_, onpdf::path_from_utf8(path.toUtf8().toStdString()), password.toStdString(),
       engine::Priority::kHigh,
       // 워커 스레드: 결과를 메인 스레드로 넘기기만 한다.
-      [dispatcher, self, gen, path](onpdf::Result<engine::DocumentHandle> result) {
+      [dispatcher, self, gen, path, password](onpdf::Result<engine::DocumentHandle> result) {
         auto shared = std::make_shared<onpdf::Result<engine::DocumentHandle>>(std::move(result));
-        dispatcher->post_to(self, [gen, path, shared](DocumentSession* s) {
+        dispatcher->post_to(self, [gen, path, password, shared](DocumentSession* s) {
           if (gen != s->open_generation_) return;  // 늦게 도착한 이전 요청
           onpdf::Result<engine::DocumentHandle>& r = *shared;
           if (r) {
@@ -54,6 +54,7 @@ void DocumentSession::open(const QString& path, const QString& password) {
             s->handle_.close();
             s->handle_ = std::move(*r);
             s->path_ = path;
+            s->password_ = password;
             emit s->opened(path, s->handle_.info().page_count);
             return;
           }
@@ -113,6 +114,7 @@ void DocumentSession::close() {
   handle_.close();
   handle_ = engine::DocumentHandle{};
   path_.clear();
+  password_.clear();
 }
 
 }  // namespace onpdf::app
