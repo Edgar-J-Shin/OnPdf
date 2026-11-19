@@ -314,6 +314,8 @@ TEST_F(TextToolTest, ClickSelectsBoxAndDragMoves) {
   EXPECT_NEAR(view()->selected_text_box()->bbox.x, before_x + 50, 2.0);
   ASSERT_TRUE(window_.edit_controller()->undo());
   ASSERT_TRUE(spin_until([&] { return idle() && view()->text_objects(0) && std::abs((*view()->text_objects(0))[0].bbox.x - before_x) < 2.0; }));
+  ASSERT_TRUE(spin_until([&] { return view()->selected_text_box().has_value(); })) << "이동 취소 뒤에도 재선택";
+  EXPECT_NEAR(view()->selected_text_box()->bbox.x, before_x, 2.0);
   // Esc 해제
   QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
   QApplication::sendEvent(view(), &esc);
@@ -392,6 +394,24 @@ TEST_F(TextToolTest, AnnotationWinsHitTestAndPermissionGatesEditing) {
   EXPECT_FALSE(view()->selected_text_box().has_value());
   // 선택이 주석일 때 텍스트 상자 삭제는 아무것도 하지 않는다 (권한 게이트는 PermissionAndFontGateTheTool 이 덮는다)
   EXPECT_FALSE(window_.delete_selected_text_box());
+  // 상자를 고른 뒤 주석을 고르면 상자 선택은 해제된다 (리뷰 W3)
+  QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+  QApplication::sendEvent(view(), &esc);
+  settle_clicks();
+  click(view()->page_point_to_viewport(0, {box.bbox.right() - 5, box.bbox.y + box.bbox.h / 2}));
+  ASSERT_TRUE(view()->selected_text_box().has_value());
+  settle_clicks();
+  click(view()->page_point_to_viewport(0, {box.bbox.x + 10, box.bbox.y + 10}));
+  EXPECT_TRUE(view()->selected_annotation().has_value());
+  EXPECT_FALSE(view()->selected_text_box().has_value());
+  // 도구를 바꾸면 상자 선택이 해제된다
+  QApplication::sendEvent(view(), &esc);
+  settle_clicks();
+  click(view()->page_point_to_viewport(0, {box.bbox.right() - 5, box.bbox.y + box.bbox.h / 2}));
+  ASSERT_TRUE(view()->selected_text_box().has_value());
+  use_tool(AnnotationTool::kHighlight);
+  EXPECT_FALSE(view()->selected_text_box().has_value());
+  use_tool(AnnotationTool::kSelect);
 }
 
 TEST_F(TextToolTest, SavedBoxReopensEditable) {

@@ -8,6 +8,8 @@
 #include "onpdf/core/geometry.h"
 
 #include <cstdint>
+#include <cstdio>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -35,7 +37,8 @@ struct TextObjectsSpec {
   std::vector<TextLineSpec> lines;
   std::vector<std::string> ids;  // 줄별 객체 id. 비어 있으면 엔진이 만든다 (재실행은 같은 id 를 준다)
   std::string box;               // 상자 id("onpdf-box-<16진 16자>"): 줄들을 묶는다. 비면 엔진이 만든다 (#47)
-  bool write_box = true;         // 테스트용: false 면 box 마크를 쓰지 않는다 (#47 이전 파일 흉내)
+  std::string box_text;          // 상자 원문 전체(빈 줄 포함, '\n' 구분) — 첫 줄 객체의 블롭 "box_text". 빈 줄은 객체가 없어 줄 원문만으로는 복원이 안 된다
+  bool write_box = true;         // 테스트용: false 면 box·box_text 마크를 쓰지 않는다 (#47 이전 파일 흉내)
 };
 
 struct TextObjectsResult {
@@ -43,11 +46,23 @@ struct TextObjectsResult {
   std::string box;
 };
 
+// 텍스트 객체·상자 id ("onpdf-text-<16진 16자>" / "onpdf-box-…"). 엔진과 edit 가 같은 형식을 쓴다
+[[nodiscard]] inline std::string make_onpdf_id(const char* prefix) {
+  std::random_device random;
+  const std::uint64_t nonce = (static_cast<std::uint64_t>(random()) << 32) ^ static_cast<std::uint64_t>(random());
+  char hex[17];
+  std::snprintf(hex, sizeof hex, "%016llx", static_cast<unsigned long long>(nonce));
+  return std::string(prefix) + hex;
+}
+[[nodiscard]] inline std::string make_text_object_id() { return make_onpdf_id("onpdf-text-"); }
+[[nodiscard]] inline std::string make_text_box_id() { return make_onpdf_id("onpdf-box-"); }
+
 // 조회용: OnPdf 가 만든(마크가 있는) 텍스트 객체
 struct TextObjectInfo {
   std::string id;       // 마크 "OnPdf" 의 id 파라미터 ("onpdf-text-<16진 16자>")
   std::string box;      // 상자 id (마크가 없는 옛 객체는 id 와 같다)
-  std::string text;     // 원문(마크 블롭). 없으면 ToUnicode 추출로 대체 (공유 글리프 한계)
+  std::string text;     // 줄 원문(마크 블롭). 없으면 ToUnicode 추출로 대체 (공유 글리프 한계)
+  std::string box_text; // 상자 원문 전체 (첫 줄 객체에만, 빈 줄 포함). 없으면 호출자가 줄 원문을 잇는다
   double font_size = 0.0;
   Color color{0, 0, 0, 255};
   Point baseline_origin;  // 기준선 왼쪽 끝 (쪽 포인트)

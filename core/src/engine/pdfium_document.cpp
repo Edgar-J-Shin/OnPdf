@@ -307,16 +307,8 @@ std::string pdf_date_now() {
   return buf;
 }
 
-// 텍스트 객체 id: 주석 /NM 과 같은 난수 형식
-std::string new_text_id() {
-  std::random_device random;
-  const std::uint64_t nonce = (static_cast<std::uint64_t>(random()) << 32) ^ static_cast<std::uint64_t>(random());
-  char hex[17];
-  std::snprintf(hex, sizeof hex, "%016llx", static_cast<unsigned long long>(nonce));
-  return std::string("onpdf-text-") + hex;
-}
-
-std::string new_box_id() { return "onpdf-box-" + new_text_id().substr(std::string("onpdf-text-").size()); }
+std::string new_text_id() { return make_text_object_id(); }
+std::string new_box_id() { return make_text_box_id(); }
 
 // 쪽 객체의 OnPdf 마크 (없으면 nullptr)
 FPDF_PAGEOBJECTMARK onpdf_mark_of(FPDF_PAGEOBJECT obj) {
@@ -726,6 +718,12 @@ Result<TextObjectsResult> PdfiumDocument::add_text_objects(int page_index, const
                                       static_cast<unsigned long>(line.text.size()))) {
       return fail("cannot set mark text");
     }
+    if (spec.write_box && i == 0 && !spec.box_text.empty() &&
+        !FPDFPageObjMark_SetBlobParam(doc_.get(), obj.get(), mark, "box_text",
+                                      reinterpret_cast<const unsigned char*>(spec.box_text.data()),
+                                      static_cast<unsigned long>(spec.box_text.size()))) {
+      return fail("cannot set mark box_text");
+    }
     FPDF_PAGEOBJECT raw = obj.release();
     FPDFPage_InsertObject(page->get(), raw);  // 소유권 이전
     inserted.push_back(raw);
@@ -781,6 +779,7 @@ Result<std::vector<TextObjectInfo>> PdfiumDocument::text_objects(int page_index)
     info.box = mark_string(mark, "box");
     if (info.box.empty()) info.box = id;  // #47 이전 객체: 줄 하나가 상자 하나
     info.text = mark_blob(mark, "text");
+    info.box_text = mark_blob(mark, "box_text");
     if (info.text.empty()) {
       if (!text_page) text_page.reset(FPDFText_LoadPage(page->get()));
       if (text_page) {
@@ -832,14 +831,22 @@ Result<void> PdfiumDocument::move_text_objects(int page_index, const std::vector
   const auto basis = space.user_matrix_at({0.0, 0.0});
   const double du = basis[0] * delta_pt.x - basis[2] * delta_pt.y;
   const double dv = basis[1] * delta_pt.x - basis[3] * delta_pt.y;
+  std::vector<std::pair<FPDF_PAGEOBJECT, FS_MATRIX>> moved;  // 중간 실패 시 되돌린다
+  const auto fail = [&](const char* what) -> Result<void> {
+    for (auto& [obj, original] : moved) (void)FPDFPageObj_SetMatrix(obj, &original);
+    if (!moved.empty()) (void)FPDFPage_GenerateContent(page->get());
+    return make_error(ErrorCode::kInvalidState, what);
+  };
   for (FPDF_PAGEOBJECT obj : found) {
     FS_MATRIX m{};
-    if (!FPDFPageObj_GetMatrix(obj, &m)) return make_error(ErrorCode::kInvalidState, "FPDFPageObj_GetMatrix failed");
+    if (!FPDFPageObj_GetMatrix(obj, &m)) return fail("FPDFPageObj_GetMatrix failed");
+    const FS_MATRIX original = m;
     m.e += static_cast<float>(du);
     m.f += static_cast<float>(dv);
-    if (!FPDFPageObj_SetMatrix(obj, &m)) return make_error(ErrorCode::kInvalidState, "FPDFPageObj_SetMatrix failed");
+    if (!FPDFPageObj_SetMatrix(obj, &m)) return fail("FPDFPageObj_SetMatrix failed");
+    moved.emplace_back(obj, original);
   }
-  if (!FPDFPage_GenerateContent(page->get())) return make_error(ErrorCode::kInvalidState, "FPDFPage_GenerateContent failed");
+  if (!FPDFPage_GenerateContent(page->get())) return fail("FPDFPage_GenerateContent failed");
   return {};
 }
 

@@ -780,13 +780,25 @@ std::optional<DocumentView::SelectedTextBox> DocumentView::text_box_by_id(int pa
   return out;
 }
 
-std::optional<DocumentView::SelectedTextBox> DocumentView::text_box_at(int page, onpdf::Point pt) const {
+std::string DocumentView::text_box_id_at(int page, onpdf::Point pt) const {
   const auto* list = text_objects(page);
-  if (list == nullptr) return std::nullopt;
+  if (list == nullptr) return {};
   for (auto it = list->rbegin(); it != list->rend(); ++it) {  // 뒤에 있는 것이 위에 그려진다
-    if (it->bbox.contains(pt)) return text_box_by_id(page, it->box);
+    if (it->bbox.contains(pt)) return it->box;
   }
-  return std::nullopt;
+  return {};
+}
+
+std::optional<DocumentView::SelectedTextBox> DocumentView::text_box_at(int page, onpdf::Point pt) const {
+  const std::string box = text_box_id_at(page, pt);
+  return box.empty() ? std::nullopt : text_box_by_id(page, box);
+}
+
+void DocumentView::set_text_editable(bool editable) {
+  if (text_editable_ == editable) return;
+  text_editable_ = editable;
+  if (!editable && drag_ == Drag::kMoveText) cancel_text_drag();
+  update_hover(viewport()->mapFromGlobal(QCursor::pos()));
 }
 
 void DocumentView::clear_text_box_selection() {
@@ -1202,8 +1214,8 @@ void DocumentView::update_hover(QPointF viewport_pos) {
         cursor = Qt::PointingHandCursor;
         if (a->kind == engine::AnnotationKind::kText && !a->contents.empty()) tooltip = QString::fromStdString(a->contents);
       } else if (selected_text_ && selected_text_->page == page && selected_text_->bbox.contains(pt)) {
-        cursor = Qt::SizeAllCursor;  // 선택한 상자 안: 끌어 옮길 수 있다
-      } else if (text_box_at(page, pt)) {
+        cursor = text_editable_ ? Qt::SizeAllCursor : Qt::ArrowCursor;  // 선택한 상자 안: 끌어 옮길 수 있다 (권한 있을 때)
+      } else if (!text_box_id_at(page, pt).empty()) {  // 커서 판정은 bbox 만 (리뷰 I1)
         cursor = Qt::PointingHandCursor;
       }
     }
@@ -1368,6 +1380,7 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
     if (auto hit = page_point_at(event->position())) {
       const auto [page, pt] = *hit;
       if (const engine::AnnotationInfo* a = annotation_at(page, pt)) {
+        if (selected_text_ || reselect_text_page_ >= 0) clear_text_box_selection();  // 주석과 텍스트 상자를 동시에 고르지 않는다 (리뷰 W3)
         const bool same = selected_annot_ && selected_annot_->page == page && selected_annot_->info.id == a->id;
         const int previous_page = selected_annot_ ? selected_annot_->page : -1;
         const engine::AnnotationInfo info = *a;  // 캐시가 바뀌어도 안전하게 복사
@@ -1391,12 +1404,18 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
           drag_ = Drag::kNone;
           return;
         }
+        if (!text_editable_) {  // 권한 없음·바쁨: 이동 드래그를 시작하지 않는다 (리뷰 I2)
+          drag_ = Drag::kNone;
+          return;
+        }
         move_start_pt_ = pt;
         move_delta_ = {};
         drag_ = Drag::kMoveText;
         return;
       }
       if (auto box = text_box_at(page, pt)) {
+        reselect_text_page_ = -1;  // 늦게 올 재선택 결과가 새 선택을 흔들지 않게 (리뷰 I3)
+        reselect_text_box_.clear();
         const int previous_page = selected_text_ ? selected_text_->page : -1;
         selected_text_ = box;
         clear_selection();

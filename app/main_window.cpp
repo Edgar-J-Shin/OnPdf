@@ -450,6 +450,7 @@ void MainWindow::update_edit_actions() {
     const bool can_edit_contents = has_pages && session_.handle().info().permissions.modify_contents;
     const bool text_ok = can_edit_contents && text_font_ != nullptr;
     text_edits_allowed_ = idle && text_ok;
+    view_->set_text_editable(text_edits_allowed_);
     text_tool->setEnabled(text_ok);
     text_tool->setStatusTip(!has_pages ? QString()
                             : !can_edit_contents ? tr("이 문서는 내용 수정이 허용되지 않습니다")

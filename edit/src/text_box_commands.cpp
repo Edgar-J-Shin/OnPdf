@@ -3,8 +3,6 @@
 #include "onpdf/edit/text_layout.h"
 
 #include <algorithm>
-#include <cstdio>
-#include <random>
 #include <utility>
 
 namespace onpdf::edit {
@@ -22,19 +20,10 @@ bool visible(const LaidOutLine& line) {
   });
 }
 
-// 엔진과 같은 형식의 줄 id (엔진은 ids 가 전부 있거나 전부 없어야 하므로 모자라는 것을 여기서 만든다)
-std::string new_text_object_id() {
-  std::random_device random;
-  const std::uint64_t nonce = (static_cast<std::uint64_t>(random()) << 32) ^ static_cast<std::uint64_t>(random());
-  char hex[17];
-  std::snprintf(hex, sizeof hex, "%016llx", static_cast<unsigned long long>(nonce));
-  return std::string("onpdf-text-") + hex;
-}
-
 // 줄 id 를 순서대로 재사용하고 모자라면 새로 만든다, 남으면 버린다 (재실행이 결정적이도록 Command 가 보관)
 std::vector<std::string> reuse_ids(const std::vector<std::string>& previous, std::size_t needed) {
   std::vector<std::string> ids(previous.begin(), previous.begin() + static_cast<std::ptrdiff_t>(std::min(previous.size(), needed)));
-  while (ids.size() < needed) ids.push_back(new_text_object_id());
+  while (ids.size() < needed) ids.push_back(engine::make_text_object_id());  // 엔진과 같은 형식 (ids 는 전부 있거나 전부 없어야 한다)
   return ids;
 }
 
@@ -62,6 +51,8 @@ Result<engine::TextObjectsSpec> build_text_objects_spec(const TextBoxSpec& spec,
   const std::vector<std::string> source_lines = split_lines(spec.utf8);
   engine::TextObjectsSpec out;
   out.box = box;
+  // 상자 원문 전체(빈 줄 포함)를 첫 줄 객체에 보관 — 빈 줄은 객체가 없어 줄 원문만으로는 복원할 수 없다 (리뷰 W1)
+  for (std::size_t i = 0; i < source_lines.size(); ++i) out.box_text += (i ? "\n" : "") + source_lines[i];
   out.font.key = subset->key;
   out.font.ttf = std::move(subset->ttf);
   out.font.cid_to_gid = std::move(subset->cid_to_gid);
@@ -100,6 +91,7 @@ Result<TextBoxContent> collect_text_box(engine::EditableDocument& doc, int page,
   content.spec.page = page;
   content.spec.face = face;
   bool first = true;
+  std::string box_text;
   for (const auto& o : *objects) {
     if (o.box != box) continue;
     content.ids.push_back(o.id);
@@ -109,12 +101,14 @@ Result<TextBoxContent> collect_text_box(engine::EditableDocument& doc, int page,
       const ShapedText metrics = face->shape("", content.spec.size);
       content.spec.origin = {o.baseline_origin.x, o.baseline_origin.y - metrics.ascent};
       content.spec.utf8 = o.text;
+      box_text = o.box_text;
       first = false;
     } else {
       content.spec.utf8 += "\n" + o.text;
     }
   }
   if (content.ids.empty()) return make_error(ErrorCode::kInvalidArgument, "text box not found: " + box);
+  if (!box_text.empty()) content.spec.utf8 = box_text;  // 빈 줄까지 그대로 (#47 이전 객체는 줄 원문을 이은 것)
   return content;
 }
 
@@ -145,6 +139,10 @@ Result<engine::ChangeSet> RemoveTextBoxCommand::execute(engine::EditableDocument
   if (!executed_) {  // 재실행은 첫 실행의 내용을 그대로 쓴다 (취소로 복원한 상자는 같은 내용)
     auto content = collect_text_box(doc, page_, box_, face_);
     if (!content) return std::unexpected(content.error());
+    // 지우기 전에 되살릴 수 있는지 확인한다 — 옛 객체의 ToUnicode 원문에 U+FFFD 가 섞이면 복원이 안 된다 (리뷰 W2)
+    if (auto restorable = build_text_objects_spec(content->spec, content->box, content->ids); !restorable) {
+      return make_error(ErrorCode::kInvalidArgument, "cannot restore this text box after deletion: " + restorable.error().message);
+    }
     content_ = std::move(*content);
   }
   if (auto removed = doc.remove_text_objects(page_, content_.ids); !removed) return std::unexpected(removed.error());
@@ -186,11 +184,17 @@ Result<engine::ChangeSet> ReplaceTextBoxCommand::execute(engine::EditableDocumen
   }
   engine::TextObjectsSpec spec = std::move(*probe);
   spec.ids = after_ids_;
+  // 지우기 전에 복원 스펙을 만들어 둔다 (보상이 스펙 생성 실패로 막히지 않게, 리뷰 W2)
+  auto restore = build_text_objects_spec(before_.spec, before_.box, before_.ids);
+  if (!restore) return make_error(ErrorCode::kInvalidArgument, "cannot rebuild the current text box: " + restore.error().message);
   if (auto removed = doc.remove_text_objects(page_, before_.ids); !removed) return std::unexpected(removed.error());
   auto added = doc.add_text_objects(page_, spec);
   if (!added) {
-    // 보상: 이전 내용으로 되살린다 (같은 id)
-    if (auto restore = build_text_objects_spec(before_.spec, before_.box, before_.ids)) (void)doc.add_text_objects(page_, *restore);
+    auto compensated = doc.add_text_objects(page_, *restore);  // 보상: 이전 내용으로 되살린다 (같은 id)
+    if (!compensated) {
+      return make_error(ErrorCode::kInvalidState, added.error().message + " (and restoring the previous text failed: " +
+                                                      compensated.error().message + ")");
+    }
     return std::unexpected(added.error());
   }
   after_ids_ = added->ids;
@@ -200,16 +204,23 @@ Result<engine::ChangeSet> ReplaceTextBoxCommand::execute(engine::EditableDocumen
 
 Result<engine::ChangeSet> ReplaceTextBoxCommand::undo(engine::EditableDocument& doc) {
   if (!executed_) return make_error(ErrorCode::kInvalidState, "undo before execute");
-  if (auto removed = doc.remove_text_objects(page_, after_ids_); !removed) return std::unexpected(removed.error());
+  // 스펙을 먼저 만든다: 실패하면 아무것도 지우지 않는다 (리뷰 W2)
   auto spec = build_text_objects_spec(before_.spec, before_.box, before_.ids);
   if (!spec) return std::unexpected(spec.error());
+  TextBoxSpec after = before_.spec;
+  if (utf8_) after.utf8 = *utf8_;
+  if (size_) after.size = *size_;
+  if (color_) after.color = *color_;
+  auto restore = build_text_objects_spec(after, before_.box, after_ids_);
+  if (!restore) return std::unexpected(restore.error());
+  if (auto removed = doc.remove_text_objects(page_, after_ids_); !removed) return std::unexpected(removed.error());
   auto added = doc.add_text_objects(page_, *spec);
   if (!added) {
-    TextBoxSpec after = before_.spec;
-    if (utf8_) after.utf8 = *utf8_;
-    if (size_) after.size = *size_;
-    if (color_) after.color = *color_;
-    if (auto restore = build_text_objects_spec(after, before_.box, after_ids_)) (void)doc.add_text_objects(page_, *restore);
+    auto compensated = doc.add_text_objects(page_, *restore);
+    if (!compensated) {
+      return make_error(ErrorCode::kInvalidState, added.error().message + " (and restoring the edited text failed: " +
+                                                      compensated.error().message + ")");
+    }
     return std::unexpected(added.error());
   }
   return page_change(page_);

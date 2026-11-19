@@ -59,6 +59,7 @@ class FakeDocument final : public engine::EditableDocument {
   struct FakeTextObject {
     std::string id;
     std::string box;
+    std::string box_text;  // 첫 줄에만
     engine::TextLineSpec line;
     std::string font_key;
   };
@@ -84,6 +85,7 @@ class FakeDocument final : public engine::EditableDocument {
       t.id = spec.ids.empty() ? "fake-text-" + std::to_string(next_text_++) : spec.ids[i];
       t.box = spec.write_box ? result.box : t.id;
       t.line = spec.lines[i];
+      if (spec.write_box && i == 0) t.box_text = spec.box_text;
       if (!spec.write_box) t.line.text.clear();
       t.font_key = spec.font.key;
       texts_[page].push_back(std::move(t));
@@ -123,6 +125,7 @@ class FakeDocument final : public engine::EditableDocument {
       info.id = t.id;
       info.box = t.box;
       info.text = t.line.text;
+      info.box_text = t.box_text;
       info.font_size = t.line.font_size;
       info.color = t.line.color;
       info.baseline_origin = t.line.origin;

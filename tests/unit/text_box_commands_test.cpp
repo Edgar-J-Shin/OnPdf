@@ -82,6 +82,26 @@ TEST(TextBoxCommands, RemoveExecuteUndoRedoOnFake) {
   EXPECT_FALSE(missing.execute(doc));
 }
 
+// 빈 줄이 든 상자: 삭제 취소·크기 변경 뒤에도 줄 자리가 같다 (상자 원문 전체를 첫 줄 블롭에 보관, 리뷰 W1)
+TEST(TextBoxCommands, BlankLinesSurviveRemoveUndoAndReplace) {
+  FakeDocument doc({{612, 792}});
+  AddTextCommand add(box(0, "첫째\n\n셋째"));
+  ASSERT_TRUE(add.execute(doc));
+  ASSERT_EQ(doc.text_objects_on(0).size(), 2u) << "빈 줄은 객체가 없다";
+  EXPECT_EQ(doc.text_objects_on(0)[0].box_text, "첫째\n\n셋째");
+  const double third_y = doc.text_objects_on(0)[1].line.origin.y;
+  RemoveTextBoxCommand remove(0, add.box_id(), test_font());
+  ASSERT_TRUE(remove.execute(doc));
+  EXPECT_EQ(remove.content().spec.utf8, "첫째\n\n셋째");
+  ASSERT_TRUE(remove.undo(doc));
+  ASSERT_EQ(doc.text_objects_on(0).size(), 2u);
+  EXPECT_DOUBLE_EQ(doc.text_objects_on(0)[1].line.origin.y, third_y) << "셋째 줄이 같은 자리";
+  ReplaceTextBoxCommand recolor(0, add.box_id(), test_font(), std::nullopt, std::nullopt, engine::Color{0, 0, 255, 255});
+  ASSERT_TRUE(recolor.execute(doc));
+  EXPECT_DOUBLE_EQ(doc.text_objects_on(0)[1].line.origin.y, third_y);
+  EXPECT_EQ(doc.text_objects_on(0)[0].box_text, "첫째\n\n셋째");
+}
+
 TEST(TextBoxCommands, ReplaceExecuteUndoRedoOnFake) {
   FakeDocument doc({{612, 792}});
   AddTextCommand add(box(0, "한글\n둘째"));
@@ -187,6 +207,32 @@ TEST(TextBoxCommands, ExecuteUndoRedoOnPdfium) {
   EXPECT_EQ((*list)[1].text, "둘째 줄");
   ASSERT_TRUE(replace.execute(*doc));
   EXPECT_EQ(doc->text_objects(0)->size(), 1u);
+  // 빈 줄이 든 상자도 PDFium 에서 삭제 → 취소 뒤 줄 자리가 같다 (리뷰 W1)
+  AddTextCommand blank(box(0, "첫째\n\n셋째", {72, 600}));
+  ASSERT_TRUE(blank.execute(*doc));
+  auto before_blank = *doc->text_objects(0);
+  const auto third = std::find_if(before_blank.begin(), before_blank.end(), [&](const engine::TextObjectInfo& t) { return t.text == "셋째"; });
+  ASSERT_NE(third, before_blank.end());
+  const double third_y = third->baseline_origin.y;
+  EXPECT_EQ(before_blank.back().box_text.empty() ? std::string("x") : std::string("ok"), "x") << "box_text 는 첫 줄에만";
+  RemoveTextBoxCommand remove_blank(0, blank.box_id(), test_font());
+  ASSERT_TRUE(remove_blank.execute(*doc));
+  ASSERT_TRUE(remove_blank.undo(*doc));
+  auto after_blank = *doc->text_objects(0);
+  const auto third_again = std::find_if(after_blank.begin(), after_blank.end(), [&](const engine::TextObjectInfo& t) { return t.text == "셋째"; });
+  ASSERT_NE(third_again, after_blank.end());
+  EXPECT_NEAR(third_again->baseline_origin.y, third_y, 0.01);
+  // 옛 객체(블롭 없음)는 삭제 전에 복원 가능성을 확인한다 (리뷰 W2): 복원 가능한 글자면 삭제·취소 OK
+  engine::TextObjectsSpec legacy = *build_text_objects_spec(box(0, "회전 쪽", {72, 700}), "", {});
+  legacy.write_box = false;
+  auto legacy_added = doc->add_text_objects(0, legacy);
+  ASSERT_TRUE(legacy_added);
+  RemoveTextBoxCommand remove_legacy(0, legacy_added->ids.front(), test_font());
+  ASSERT_TRUE(remove_legacy.execute(*doc)) << "옛 객체(줄 = 상자)도 지운다";
+  ASSERT_TRUE(remove_legacy.undo(*doc));
+  bool legacy_back = false;
+  for (const auto& t : *doc->text_objects(0)) legacy_back = legacy_back || t.text == "회전 쪽";
+  EXPECT_TRUE(legacy_back);
 }
 
 }  // namespace

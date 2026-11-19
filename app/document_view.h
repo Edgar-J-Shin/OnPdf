@@ -86,6 +86,9 @@ class DocumentView : public QAbstractScrollArea {
   [[nodiscard]] const std::vector<engine::TextObjectInfo>* text_objects(int page) const;  // 캐시에 있을 때만
   [[nodiscard]] std::optional<SelectedTextBox> selected_text_box() const { return selected_text_; }
   void clear_text_box_selection();
+  // 내용 수정 권한·바쁨에 따라 상자 이동 드래그·커서를 막는다 (선택·정보 표시는 그대로). 썸네일 set_editable 과 같은 역할
+  void set_text_editable(bool editable);
+  [[nodiscard]] bool text_editable() const noexcept { return text_editable_; }
 
   void set_zoom_mode(ZoomMode mode);
   [[nodiscard]] ZoomMode zoom_mode() const noexcept { return mode_; }
@@ -204,7 +207,8 @@ class DocumentView : public QAbstractScrollArea {
   [[nodiscard]] const engine::AnnotationInfo* annotation_at(int page, onpdf::Point pt) const;  // 위에 그려진 것 먼저
   void request_text_boxes();  // 주석과 같은 범위의 텍스트 상자 목록
   void on_text_boxes(int page, int generation, std::shared_ptr<const std::vector<engine::TextObjectInfo>> list, bool cancelled);
-  [[nodiscard]] std::optional<SelectedTextBox> text_box_at(int page, onpdf::Point pt) const;  // 뒤(위)에 있는 것 먼저
+  [[nodiscard]] std::string text_box_id_at(int page, onpdf::Point pt) const;  // 뒤(위)에 있는 것 먼저. 없으면 빈 문자열
+  [[nodiscard]] std::optional<SelectedTextBox> text_box_at(int page, onpdf::Point pt) const;
   [[nodiscard]] std::optional<SelectedTextBox> text_box_by_id(int page, const std::string& box) const;
   void cancel_text_drag();
   [[nodiscard]] onpdf::Point clamp_to_page(int page, onpdf::Point pt) const;
@@ -261,6 +265,7 @@ class DocumentView : public QAbstractScrollArea {
   std::unordered_map<int, std::shared_ptr<const std::vector<engine::TextObjectInfo>>> text_box_cache_;
   std::unordered_map<int, engine::TaskHandle> text_box_requested_;
   std::optional<SelectedTextBox> selected_text_;
+  bool text_editable_ = false;
   int reselect_text_page_ = -1;
   std::string reselect_text_box_;
   onpdf::Point move_start_pt_{};  // 이동 드래그 시작점 (쪽 포인트)
