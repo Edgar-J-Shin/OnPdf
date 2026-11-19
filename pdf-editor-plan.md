@@ -102,7 +102,7 @@ PDFium을 엔진으로 삼아 Windows·macOS용 C++ PDF 뷰어를 먼저 완성�
 
 - M1: `FPDF_LoadCustomDocument`, `FPDF_RenderPageBitmap`, `FPDFText_LoadPage`, `FPDFText_FindStart`, `FPDFBookmark_*`
 - M2: `FPDFPage_CreateAnnot`와 `FPDFAnnot_*`, `FPDF_ImportPages`, `FPDFPage_Delete`, `FPDF_SaveAsCopy`
-- M3: `FPDFPageObj_NewTextObj`, `FPDFText_LoadFont`, `FPDFImageObj_SetBitmap`, `FPDFPageObj_Transform`, `FPDFPage_InsertObject`, `FPDFPage_GenerateContent`, `FORM_*`
+- M3: `FPDFPageObj_CreateTextObj`, `FPDFText_LoadCidType2Font`(ToUnicode·CIDToGIDMap 을 직접 제공), `FPDFText_SetCharcodes`, `FPDFImageObj_SetBitmap`, `FPDFPageObj_Transform`, `FPDFPage_InsertObject`, `FPDFPage_GenerateContent`, `FORM_*`. (`FPDFText_LoadFont` 의 자동 ToUnicode 는 공유 글리프에서 틀려 쓰지 않는다 — #43)
 - M4: `FPDFText_SetText`, `FPDFPage_RemoveObject`, 텍스트 객체의 폰트·행렬 조회 함수
 
 ---
@@ -121,8 +121,8 @@ PDF에는 문단이 없고 글자 조각이 좌표에 놓여 있을 뿐입니다
 **폰트**
 
 - 원본 폰트가 서브셋이라 새 글자가 없는 경우가 많습니다. 폰트 이름으로 시스템 폰트를 찾고, 없으면 굵기·세리프 여부가 비슷한 폰트로 대체합니다.
-- 한글은 CID 폰트로 임베딩해야 합니다. `FPDFText_LoadFont`의 CID 옵션을 쓰고, M3 초기에 한글 왕복 테스트를 먼저 만듭니다.
-- 전체 폰트를 넣으면 파일이 커집니다. 서브셋 임베딩은 HarfBuzz의 서브셋 기능으로 처리하는 방안을 M3에서 검증합니다.
+- 한글은 CID 폰트로 임베딩해야 합니다(비-CID TrueType 은 `.notdef` 로 렌더 — #43 검증). PDFium 은 ToUnicode 를 글리프→유니코드 역매핑으로 자동 생성해 공백/NBSP 처럼 글리프를 공유하는 글자에서 틀리므로, `FPDFText_LoadCidType2Font` 에 **우리가 만든 ToUnicode·CIDToGIDMap** 을 주고 텍스트는 CID 배열(`FPDFText_SetCharcodes`)로 넣습니다. 폰트 객체는 문서당 하나를 재사용합니다(두 번 로드하면 두 번 임베딩).
+- PDFium 은 서브셋하지 않습니다(Noto Sans KR 전체 임베딩 시 문서 +3MB, 문장 서브셋은 +10KB — #43). 저장할 글자 집합으로 HarfBuzz `hb-subset` 서브셋을 만들어 넣습니다. 미참조 폰트 객체 정리, OTF(CFF)·TTC 입력은 M3 에서 추가 검증합니다.
 
 **렌더링 성능**
 
@@ -181,7 +181,7 @@ PDF에는 문단이 없고 글자 조각이 좌표에 놓여 있을 뿐입니다
 |---|---|---|
 | 기존 텍스트 수정 품질이 기대에 못 미침 | 높음 | M4 범위를 줄 단위로 제한. M3 끝에 2주짜리 사전 검증 진행 |
 | PDFium API 변경·문서 부족 | 중간 | 버전 고정, 래퍼 계층으로 격리, PDFium 테스트 코드를 참고 자료로 활용 |
-| 한글 폰트 임베딩 문제 | 높음 | M3 첫 주에 한글 왕복 테스트부터 작성 |
+| 한글 폰트 임베딩 문제 | 중간(완화됨, #43 스파이크) | PDFium CID 임베딩 왕복(렌더·추출·qpdf) 확인. 남은 조건: 서브셋(hb-subset)과 ToUnicode 를 직접 생성. M3 첫 PR 에 한글 왕복 테스트 + Adobe Reader·Chrome·Edge 수동 확인 |
 | 저장 시 파일 손상 | 높음 | 임시 파일 저장 + 검증 후 교체, 왕복 테스트를 CI에 포함 |
 | 1인 개발 일정 지연 | 중간 | 마일스톤마다 공개 가능한 상태 유지. 뷰어만으로도 쓸 수 있게 함 |
 | 악성 PDF로 인한 보안 문제 | 중간 | PDFium 정기 업데이트, 자바스크립트 실행 기본 비활성화 |
