@@ -3,6 +3,7 @@
 
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/core/engine/qpdf_tools.h"
+#include "onpdf/core/image/png_io.h"
 #include "onpdf/core/engine/save.h"
 #include "onpdf/edit/add_text_command.h"
 #include "onpdf/edit/object_commands.h"
@@ -457,6 +458,85 @@ TEST(Roundtrip, EditedTextSurvivesSave) {
   EXPECT_EQ(reopened->text_objects(0)->size(), 1u);
   ASSERT_TRUE(remove.undo(*reopened));
   EXPECT_EQ(reopened->text_objects(0)->size(), 4u);
+}
+
+// 이미지(#49): 픽셀·JPEG 추가, 기존 이미지(scanned.pdf) 크기·이동, 삭제 → 저장 → 다시 열기 → 객체·필터·마크·렌더·qpdf. 서명 증분
+TEST(Roundtrip, ImagesSurviveSave) {
+  struct Case { const char* file; bool incremental; };
+  for (const Case c : {Case{"simple.pdf", false}, Case{"scanned.pdf", false}, Case{"signed-dummy.pdf", true}}) {
+    auto doc = PdfiumDocument::open(testdata(c.file));
+    ASSERT_TRUE(doc) << c.file;
+    engine::ImagePixels pixels;
+    pixels.width = 20;
+    pixels.height = 10;
+    pixels.bgra.assign(20 * 10 * 4, 0);
+    for (std::size_t k = 0; k < pixels.bgra.size(); k += 4) { pixels.bgra[k + 2] = 255; pixels.bgra[k + 3] = (k / 4) % 20 < 10 ? 255 : 0; }
+    engine::ImageSpec png;
+    png.source = pixels;
+    png.rect = {40, 40, 100, 50};
+    edit::AddImageCommand add_png(0, png);
+    ASSERT_TRUE(add_png.execute(*doc)) << c.file;
+    Bitmap gray;
+    gray.width = gray.height = 16;
+    gray.stride = 64;
+    gray.pixels.assign(16 * 16 * 4, 128);
+    auto jpeg = image::encode_jpeg(gray);
+    ASSERT_TRUE(jpeg);
+    engine::ImageSpec jpg;
+    jpg.source = engine::JpegBytes{*jpeg, 16, 16};
+    jpg.rect = {200, 200, 64, 64};
+    edit::AddImageCommand add_jpg(0, jpg);
+    ASSERT_TRUE(add_jpg.execute(*doc));
+    edit::ResizeObjectCommand resize(0, add_jpg.object_id(), {200, 200, 64, 64}, {210, 220, 128, 128});
+    ASSERT_TRUE(resize.execute(*doc));
+    std::string foreign_id;
+    for (const auto& o : *doc->page_objects(0)) if (o.kind == engine::ObjectKind::kImage && !o.marked) foreign_id = o.id;
+    if (!foreign_id.empty()) {  // scanned.pdf: 기존 이미지를 줄이고 옮긴다
+      edit::MoveObjectsCommand move(0, {foreign_id}, {0, 0});
+      Rect before{};
+      for (const auto& o : *doc->page_objects(0)) if (o.id == foreign_id) before = o.bbox;
+      edit::ResizeObjectCommand shrink(0, foreign_id, before, {before.x + 20, before.y + 20, before.w / 2, before.h / 2});
+      ASSERT_TRUE(shrink.execute(*doc));
+    }
+    // 하나 더 넣고 지운다 (보관된 채 저장 — 저장 파일에는 없어야 한다)
+    edit::AddImageCommand extra(0, png);
+    ASSERT_TRUE(extra.execute(*doc));
+    edit::RemoveObjectsCommand remove(0, {extra.object_id()});
+    ASSERT_TRUE(remove.execute(*doc));
+    RenderOptions render;
+    render.scale = 1.0f;
+    auto before_render = doc->render_page(0, render);
+    ASSERT_TRUE(before_render);
+    const auto before_objects = *doc->page_objects(0);
+    ScopedTempDir dir;
+    const auto target = dir / "images.pdf";
+    engine::SaveOptions options;
+    options.incremental = c.incremental;
+    auto saved = save_document_safely(*doc, target, options);
+    ASSERT_TRUE(saved) << c.file << ": " << saved.error().message;
+    auto reopened = PdfiumDocument::open(target);
+    ASSERT_TRUE(reopened) << c.file;
+    const auto after_objects = *reopened->page_objects(0);
+    ASSERT_EQ(after_objects.size(), before_objects.size()) << c.file;
+    for (std::size_t k = 0; k < after_objects.size(); ++k) {
+      EXPECT_EQ(after_objects[k].id, before_objects[k].id) << c.file;
+      EXPECT_NEAR(after_objects[k].bbox.x, before_objects[k].bbox.x, 0.5) << c.file;
+      EXPECT_NEAR(after_objects[k].bbox.w, before_objects[k].bbox.w, 0.5) << c.file;
+    }
+    for (const auto& o : after_objects) {
+      if (o.id == add_jpg.object_id()) EXPECT_EQ(o.filter, "DCTDecode") << c.file;
+      if (o.id == add_png.object_id()) EXPECT_EQ(o.filter, "FlateDecode") << c.file;
+      EXPECT_NE(o.id, extra.object_id()) << "지운 이미지는 저장되지 않는다";
+    }
+    auto after_render = reopened->render_page(0, render);
+    ASSERT_TRUE(after_render);
+    int diff = 0;
+    for (std::size_t k = 0; k < before_render->pixels.size(); ++k) diff += before_render->pixels[k] != after_render->pixels[k];
+    EXPECT_EQ(diff, 0) << c.file;
+    auto check = engine::QpdfTools::check(target);
+    EXPECT_TRUE(check) << c.file << ": " << (check ? "" : check.error().message);
+    if (c.incremental) EXPECT_GT(reopened->signature_count(), 0);
+  }
 }
 
 TEST(Roundtrip, EditingExistingAnnotationsKeepsOthers) {

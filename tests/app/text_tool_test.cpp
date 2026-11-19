@@ -302,14 +302,14 @@ TEST_F(TextToolTest, ClickSelectsBoxAndDragMoves) {
   settle_clicks();
   drag(inside, inside + QPointF(2, 2));
   ASSERT_TRUE(wait_idle());
-  EXPECT_FALSE(window_.edit_controller()->can_undo() && window_.undo_action()->text().contains(QStringLiteral("텍스트 이동")));
+  EXPECT_FALSE(window_.edit_controller()->can_undo() && window_.undo_action()->text().contains(QStringLiteral("객체 이동")));
   // 이동
   const double before_x = first.bbox.x;
   const QPointF to = view()->page_point_to_viewport(0, {first.bbox.x + 5 + 50, first.bbox.y + first.bbox.h / 2 + 30});
   settle_clicks();
   drag(inside, to);
   ASSERT_TRUE(spin_until([&] { return idle() && view()->text_objects(0) && std::abs((*view()->text_objects(0))[0].bbox.x - (before_x + 50)) < 2.0; }));
-  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("텍스트 이동")));
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("객체 이동")));
   ASSERT_TRUE(spin_until([&] { return view()->selected_text_box().has_value(); })) << "편집 뒤 같은 상자를 다시 고른다";
   EXPECT_NEAR(view()->selected_text_box()->bbox.x, before_x + 50, 2.0);
   ASSERT_TRUE(window_.edit_controller()->undo());
@@ -333,7 +333,7 @@ TEST_F(TextToolTest, DeleteKeyRemovesBoxAndUndoRestores) {
   QKeyEvent del(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
   QApplication::sendEvent(view(), &del);
   ASSERT_TRUE(wait_text_boxes(0, 0));
-  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("텍스트 삭제")));
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("삭제")));
   EXPECT_FALSE(view()->selected_text_box().has_value());
   ASSERT_TRUE(wait_text_missing(0, QStringLiteral("둘째 줄 텍스트")));
   ASSERT_TRUE(window_.edit_controller()->undo());

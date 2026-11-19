@@ -708,14 +708,14 @@ void DocumentView::request_text_boxes() {
     UiDispatcher* dispatcher = dispatcher_;
     QPointer<DocumentView> self(this);
     const int generation = doc_generation_;
-    engine::TaskHandle handle = handle_.load_text_objects(
+    engine::TaskHandle handle = handle_.load_page_objects(
         page, engine::Priority::kLow,
         // 워커 스레드: 메인으로 넘기기만
-        [dispatcher, self, page, generation](onpdf::Result<std::vector<engine::TextObjectInfo>> result) {
-          std::shared_ptr<const std::vector<engine::TextObjectInfo>> list;
+        [dispatcher, self, page, generation](onpdf::Result<std::vector<engine::PageObjectInfo>> result) {
+          std::shared_ptr<const std::vector<engine::PageObjectInfo>> list;
           const bool cancelled = !result && (result.error().code == onpdf::ErrorCode::kCancelled ||
                                              result.error().code == onpdf::ErrorCode::kInvalidState);
-          if (result) list = std::make_shared<const std::vector<engine::TextObjectInfo>>(std::move(*result));
+          if (result) list = std::make_shared<const std::vector<engine::PageObjectInfo>>(std::move(*result));
           dispatcher->post_to(self, [page, generation, list, cancelled](DocumentView* view) {
             view->on_text_boxes(page, generation, list, cancelled);
           });
@@ -724,13 +724,17 @@ void DocumentView::request_text_boxes() {
   }
 }
 
-void DocumentView::on_text_boxes(int page, int generation, std::shared_ptr<const std::vector<engine::TextObjectInfo>> list,
+void DocumentView::on_text_boxes(int page, int generation, std::shared_ptr<const std::vector<engine::PageObjectInfo>> list,
                                  bool cancelled) {
   if (generation != doc_generation_) return;
   text_box_requested_.erase(page);
   if (cancelled) return;
-  if (!list) list = std::make_shared<const std::vector<engine::TextObjectInfo>>();
-  text_box_cache_[page] = std::move(list);
+  auto cache = std::make_shared<ObjectCache>();
+  if (list) {
+    cache->objects = *list;
+    for (const auto& o : cache->objects) if (o.kind == engine::ObjectKind::kText) cache->texts.push_back(o.text);
+  }
+  text_box_cache_[page] = std::move(cache);
   if (reselect_text_page_ == page) {
     reselect_text_page_ = -1;
     const std::string box = std::move(reselect_text_box_);
@@ -739,20 +743,58 @@ void DocumentView::on_text_boxes(int page, int generation, std::shared_ptr<const
       if (auto found = text_box_by_id(page, box)) {
         selected_text_ = found;
         update_page(page);
-        emit text_box_reselected(*selected_text_);
+        const bool announce = std::exchange(reselect_announce_, false);
+        if (announce) {
+          emit text_box_selected(true, *selected_text_);
+        } else {
+          emit text_box_reselected(*selected_text_);
+        }
         return;
       }
     }
+    reselect_announce_ = false;
     emit text_box_selected(false, SelectedTextBox{});  // 지워졌거나 못 찾음
   }
 }
 
 const std::vector<engine::TextObjectInfo>* DocumentView::text_objects(int page) const {
   auto it = text_box_cache_.find(page);
-  return it == text_box_cache_.end() ? nullptr : it->second.get();
+  return it == text_box_cache_.end() ? nullptr : &it->second->texts;
+}
+
+const std::vector<engine::PageObjectInfo>* DocumentView::page_objects(int page) const {
+  auto it = text_box_cache_.find(page);
+  return it == text_box_cache_.end() ? nullptr : &it->second->objects;
+}
+
+void DocumentView::select_after_refresh(int page, const std::string& key) {
+  clear_annotation_selection();
+  clear_text_box_selection();
+  reselect_text_page_ = page;
+  reselect_text_box_ = key;
+  reselect_announce_ = true;
 }
 
 std::optional<DocumentView::SelectedTextBox> DocumentView::text_box_by_id(int page, const std::string& box) const {
+  const auto* objects = page_objects(page);
+  if (objects == nullptr) return std::nullopt;
+  // 기존 이미지("#obj<n>")는 첫 편집에서 마크 id 로 바뀌지만 쪽 객체 순서는 그대로다 → index 로도 찾는다 (재선택)
+  int foreign_index = -1;
+  if (box.starts_with("#obj")) foreign_index = std::atoi(box.c_str() + 4);
+  for (const engine::PageObjectInfo& o : *objects) {  // 이미지: id 로 바로
+    if (o.kind != engine::ObjectKind::kImage || (o.id != box && o.index != foreign_index)) continue;
+    SelectedObject image;
+    image.kind = engine::ObjectKind::kImage;
+    image.page = page;
+    image.box = o.id;
+    image.ids = {o.id};
+    image.bbox = o.bbox;
+    image.pixel_width = o.pixel_width;
+    image.pixel_height = o.pixel_height;
+    image.filter = o.filter;
+    image.marked = o.marked;
+    return image;
+  }
   const auto* list = text_objects(page);
   if (list == nullptr) return std::nullopt;
   SelectedTextBox out;
@@ -781,12 +823,42 @@ std::optional<DocumentView::SelectedTextBox> DocumentView::text_box_by_id(int pa
 }
 
 std::string DocumentView::text_box_id_at(int page, onpdf::Point pt) const {
-  const auto* list = text_objects(page);
-  if (list == nullptr) return {};
-  for (auto it = list->rbegin(); it != list->rend(); ++it) {  // 뒤에 있는 것이 위에 그려진다
-    if (it->bbox.contains(pt)) return it->box;
+  const auto* objects = page_objects(page);
+  if (objects == nullptr) return {};
+  for (auto it = objects->rbegin(); it != objects->rend(); ++it) {  // 뒤에 있는 것이 위에 그려진다
+    if (!it->bbox.contains(pt)) continue;
+    return it->kind == engine::ObjectKind::kText ? it->text.box : it->id;
   }
   return {};
+}
+
+int DocumentView::handle_at(QPointF viewport_pos) const {
+  if (!selected_text_ || selected_text_->kind != engine::ObjectKind::kImage || layout_ == nullptr) return -1;
+  const onpdf::Rect& b = selected_text_->bbox;
+  const onpdf::Point corners[4] = {{b.x, b.y}, {b.right(), b.y}, {b.x, b.bottom()}, {b.right(), b.bottom()}};
+  for (int i = 0; i < 4; ++i) {
+    const QPointF c = page_point_to_viewport(selected_text_->page, corners[i]);
+    if (std::abs(c.x() - viewport_pos.x()) <= 6.0 && std::abs(c.y() - viewport_pos.y()) <= 6.0) return i;
+  }
+  return -1;
+}
+
+onpdf::Rect DocumentView::resized_rect(onpdf::Point pt, bool keep_aspect) const {
+  const onpdf::Rect& b = selected_text_->bbox;
+  // 반대 모서리 고정
+  const double ax = (resize_handle_ == 0 || resize_handle_ == 2) ? b.right() : b.x;
+  const double ay = (resize_handle_ == 0 || resize_handle_ == 1) ? b.bottom() : b.y;
+  constexpr double kMin = 8.0;
+  double w = std::max(kMin, std::abs(pt.x - ax));
+  double h = std::max(kMin, std::abs(pt.y - ay));
+  if (keep_aspect && b.w > 0 && b.h > 0) {
+    const double scale = std::max(w / b.w, h / b.h);
+    w = std::max(kMin, b.w * scale);
+    h = std::max(kMin, b.h * scale);
+  }
+  const double x = (resize_handle_ == 0 || resize_handle_ == 2) ? ax - w : ax;
+  const double y = (resize_handle_ == 0 || resize_handle_ == 1) ? ay - h : ay;
+  return {x, y, w, h};
 }
 
 std::optional<DocumentView::SelectedTextBox> DocumentView::text_box_at(int page, onpdf::Point pt) const {
@@ -797,7 +869,7 @@ std::optional<DocumentView::SelectedTextBox> DocumentView::text_box_at(int page,
 void DocumentView::set_text_editable(bool editable) {
   if (text_editable_ == editable) return;
   text_editable_ = editable;
-  if (!editable && drag_ == Drag::kMoveText) cancel_text_drag();
+  if (!editable && (drag_ == Drag::kMoveText || drag_ == Drag::kResize)) cancel_text_drag();
   update_hover(viewport()->mapFromGlobal(QCursor::pos()));
 }
 
@@ -814,7 +886,8 @@ void DocumentView::clear_text_box_selection() {
 }
 
 void DocumentView::cancel_text_drag() {
-  if (drag_ == Drag::kMoveText) drag_ = Drag::kNone;
+  if (drag_ == Drag::kMoveText || drag_ == Drag::kResize) drag_ = Drag::kNone;
+  resize_handle_ = -1;
   const int page = selected_text_ ? selected_text_->page : -1;
   move_delta_ = {};
   if (page >= 0) update_page(page);
@@ -920,6 +993,20 @@ void DocumentView::paint_annotations(QPainter& painter, int page, const QRectF& 
     if (drag_ == Drag::kMoveText) {
       painter.setPen(QPen(kAnnotationOutline, 1, Qt::DashLine));
       painter.drawRect(box.translated(move_delta_.x * k, move_delta_.y * k));
+    }
+    if (selected_text_->kind == engine::ObjectKind::kImage) {
+      // 모서리 핸들 4개 (논리 8px)
+      painter.setPen(QPen(Qt::white, 1));
+      painter.setBrush(kAnnotationOutline);
+      for (const QPointF c : {box.topLeft(), box.topRight(), box.bottomLeft(), box.bottomRight()}) {
+        painter.drawRect(QRectF(c.x() - 4, c.y() - 4, 8, 8));
+      }
+      painter.setBrush(Qt::NoBrush);
+      if (drag_ == Drag::kResize) {
+        const onpdf::Rect& p = resize_preview_;
+        painter.setPen(QPen(kAnnotationOutline, 1, Qt::DashLine));
+        painter.drawRect(QRectF(page_logical.x() + p.x * k, page_logical.y() + p.y * k, p.w * k, p.h * k));
+      }
     }
   }
   if (drag_ == Drag::kInk && ink_page_ == page && ink_points_.size() >= 2) {
@@ -1202,7 +1289,7 @@ void DocumentView::update_hover(QPointF viewport_pos) {
   QString target;
   Qt::CursorShape cursor = Qt::ArrowCursor;
   if (tool_ == AnnotationTool::kNote || tool_ == AnnotationTool::kPen || tool_ == AnnotationTool::kSquare ||
-      tool_ == AnnotationTool::kCircle) {
+      tool_ == AnnotationTool::kCircle || tool_ == AnnotationTool::kImage) {
     cursor = Qt::CrossCursor;
   }
   if (tool_ == AnnotationTool::kText) cursor = Qt::IBeamCursor;
@@ -1213,6 +1300,8 @@ void DocumentView::update_hover(QPointF viewport_pos) {
       if (const engine::AnnotationInfo* a = annotation_at(page, pt)) {
         cursor = Qt::PointingHandCursor;
         if (a->kind == engine::AnnotationKind::kText && !a->contents.empty()) tooltip = QString::fromStdString(a->contents);
+      } else if (const int handle = text_editable_ ? handle_at(viewport_pos) : -1; handle >= 0) {
+        cursor = (handle == 0 || handle == 3) ? Qt::SizeFDiagCursor : Qt::SizeBDiagCursor;
       } else if (selected_text_ && selected_text_->page == page && selected_text_->bbox.contains(pt)) {
         cursor = text_editable_ ? Qt::SizeAllCursor : Qt::ArrowCursor;  // 선택한 상자 안: 끌어 옮길 수 있다 (권한 있을 때)
       } else if (!text_box_id_at(page, pt).empty()) {  // 커서 판정은 bbox 만 (리뷰 I1)
@@ -1358,6 +1447,13 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
     }
     return;
   }
+  if (tool_ == AnnotationTool::kImage) {
+    if (auto hit = page_point_at(event->position())) {
+      const auto [page, pt] = *hit;
+      emit image_requested(page, clamp_to_page(page, pt));
+    }
+    return;
+  }
   if (tool_ == AnnotationTool::kPen) {
     if (auto hit = page_point_at(event->position())) {
       const auto [page, pt] = *hit;
@@ -1397,10 +1493,17 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
     if (selected_annot_) clear_annotation_selection();
     if (auto hit = page_point_at(event->position())) {
       const auto [page, pt] = *hit;
+      // 선택한 이미지의 모서리 핸들: 크기 조절 (#49)
+      if (const int handle = text_editable_ ? handle_at(event->position()) : -1; handle >= 0) {
+        resize_handle_ = handle;
+        resize_preview_ = selected_text_->bbox;
+        drag_ = Drag::kResize;
+        return;
+      }
       // 선택된 상자 안을 누르면 이동 드래그, 다른 상자를 누르면 그 상자 선택, 두 번 클릭은 편집
       if (selected_text_ && selected_text_->page == page && selected_text_->bbox.contains(pt)) {
         if (click_count_ == 2) {
-          emit text_edit_requested(page, *selected_text_);
+          if (selected_text_->kind == engine::ObjectKind::kText) emit text_edit_requested(page, *selected_text_);
           drag_ = Drag::kNone;
           return;
         }
@@ -1485,6 +1588,15 @@ void DocumentView::mouseMoveEvent(QMouseEvent* event) {
     }
     return;
   }
+  if (drag_ == Drag::kResize) {
+    if (selected_text_) {
+      const int page = selected_text_->page;
+      const onpdf::Point pt = clamp_to_page(page, page_point_on(page, event->position()));
+      resize_preview_ = resized_rect(pt, !(event->modifiers() & Qt::ShiftModifier));
+      update_page(page);
+    }
+    return;
+  }
   if (drag_ == Drag::kMoveText) {
     if (selected_text_) {
       const int page = selected_text_->page;
@@ -1561,6 +1673,19 @@ void DocumentView::mouseReleaseEvent(QMouseEvent* event) {
         y1 = std::max(y1, p.y);
       }
       emit ink_requested(page, points, onpdf::Rect{x0 - 2, y0 - 2, x1 - x0 + 4, y1 - y0 + 4});
+    }
+    return;
+  }
+  if (drag_ == Drag::kResize) {
+    drag_ = Drag::kNone;
+    resize_handle_ = -1;
+    if (selected_text_) {
+      update_page(selected_text_->page);
+      const onpdf::Rect& b = selected_text_->bbox;
+      const onpdf::Rect& r = resize_preview_;
+      if (std::abs(r.x - b.x) >= 1 || std::abs(r.y - b.y) >= 1 || std::abs(r.w - b.w) >= 1 || std::abs(r.h - b.h) >= 1) {
+        emit object_resize_requested(selected_text_->page, QString::fromStdString(selected_text_->box), b, r);
+      }
     }
     return;
   }

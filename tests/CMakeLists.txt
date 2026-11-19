@@ -90,6 +90,7 @@ if(ONPDF_BUILD_APP)
     app/annotation_test.cpp
     app/merge_split_test.cpp
     app/text_tool_test.cpp
+    app/image_tool_test.cpp
   )
   target_link_libraries(onpdf_app_tests PRIVATE onpdf_app_lib)
   set_tests_properties(onpdf_app_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

@@ -4,6 +4,7 @@
 #include "document_view.h"
 #include "edit_controller.h"
 #include "onpdf/edit/font_face.h"
+#include "onpdf/edit/object_commands.h"
 #include "structure_job.h"
 #include "print_job.h"
 #include "onpdf/core/engine/pdfium_worker.h"
@@ -11,6 +12,7 @@
 #include "onpdf/core/view/text_index.h"
 
 #include <QColor>
+#include <QImage>
 #include <QMainWindow>
 #include <QString>
 
@@ -108,7 +110,11 @@ class MainWindow : public QMainWindow {
   // 텍스트 상자 생성: 대화상자 없이 (테스트용·on_text_requested 가 부른다). 시작하면 true
   bool add_text(int page, onpdf::Point pt, const QString& utf8);
   bool set_text_font(const QString& path);  // 번들 폰트 교체 (테스트: 저장소 서브셋 폰트)
-  bool delete_selected_text_box();         // 선택한 텍스트 상자 삭제 (Delete 키·툴바와 같은 경로). 시작하면 true
+  bool delete_selected_text_box();         // 선택한 쪽 객체(텍스트 상자·이미지) 삭제 (Delete 키·툴바와 같은 경로). 시작하면 true
+  // ---- 이미지 (#49) ----
+  // 파일을 읽어 page 의 origin 에 놓는다 (center 면 가운데로). 대화상자 없이 (테스트·드롭·도구가 부른다). 시작하면 true
+  bool add_image_file(const QString& path, int page, onpdf::Point origin, bool center);
+  bool add_image(const QImage& image, int page, onpdf::Point origin, bool center);
   [[nodiscard]] bool has_text_font() const noexcept { return text_font_ != nullptr; }
   [[nodiscard]] double text_size() const noexcept { return text_size_; }
   void set_text_size(double size);
@@ -166,6 +172,9 @@ class MainWindow : public QMainWindow {
   void on_note_requested(int page, onpdf::Point pt);
   void on_text_requested(int page, onpdf::Point pt);
   void on_text_box_selected(bool has, const DocumentView::SelectedTextBox& box);
+  void on_image_requested(int page, onpdf::Point pt);
+  void on_object_resize_requested(int page, const QString& id, onpdf::Rect before, onpdf::Rect after);
+  bool run_add_image(int page, engine::ImageSpec spec);
   void on_text_move_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta);
   void on_text_delete_requested(int page, const QString& box);
   void on_text_edit_requested(int page, const DocumentView::SelectedTextBox& box);
@@ -263,6 +272,17 @@ class MainWindow : public QMainWindow {
   engine::Color annotation_color_{255, 255, 0, 255};
   bool annotation_edits_allowed_ = false;  // idle && 권한. 도구 선택은 권한만 보고, 실제 편집 요청은 이것으로 막는다
   bool text_edits_allowed_ = false;        // idle && 내용 수정 권한(비트 4) && 번들 글꼴 (리뷰 W2)
+  bool content_edits_allowed_ = false;     // idle && 내용 수정 권한(비트 4) — 이미지·객체 이동·크기·삭제 (#49, 글꼴 불필요)
+  // 마지막 이미지 추가: 완료되면 새 이미지를 고르고, PDFium 이 JPEG 를 못 넣으면 픽셀로 다시 시도한다
+  struct PendingImage {
+    QString path;  // 비면 메모리 이미지 (재시도 없음)
+    int page = 0;
+    onpdf::Point origin;
+    bool center = false;
+    bool jpeg = false;
+  };
+  std::optional<PendingImage> pending_image_;
+  std::shared_ptr<edit::AddImageCommand> last_image_command_;
   engine::Color text_color_{0, 0, 0, 255};  // 새 텍스트 색 (기본 검정; 색 팔레트가 주석 색과 함께 바꾼다)
   bool updating_actions_ = false;          // update_edit_actions 재진입 차단
   struct PendingInsert {
