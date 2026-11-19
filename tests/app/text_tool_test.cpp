@@ -23,6 +23,7 @@
 #include <QTimer>
 
 #include <filesystem>
+#include <set>
 
 namespace onpdf::app {
 namespace {
@@ -82,6 +83,33 @@ class TextToolTest : public ::testing::Test {
   }
   bool idle() { return !window_.edit_controller()->busy() && !window_.saving(); }
   bool wait_idle() { return spin_until([&] { return idle(); }); }
+  // 텍스트 상자 캐시가 n 개 상자를 알 때까지
+  bool wait_text_boxes(int page, std::size_t n) {
+    return spin_until([&] {
+      if (!idle() || view()->text_objects(page) == nullptr) return false;
+      std::set<std::string> boxes;
+      for (const auto& t : *view()->text_objects(page)) boxes.insert(t.box);
+      return boxes.size() == n;
+    });
+  }
+  void drag(QPointF from, QPointF to) {
+    send_mouse(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+    send_mouse(QEvent::MouseMove, (from + to) / 2, Qt::NoButton, Qt::LeftButton);
+    send_mouse(QEvent::MouseMove, to, Qt::NoButton, Qt::LeftButton);
+    send_mouse(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
+  }
+  // 연속 클릭 판정(더블 클릭 → 편집 창)을 피하려고 다음 누름 전에 잠시 기다린다
+  void settle_clicks() {
+    QElapsedTimer t;
+    t.start();
+    while (t.elapsed() < 600) QApplication::processEvents(QEventLoop::AllEvents, 20);
+  }
+  void double_click(QPointF at) {
+    click(at);
+    QMouseEvent dbl(QEvent::MouseButtonDblClick, at, view()->viewport()->mapToGlobal(at.toPoint()), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(view()->viewport(), &dbl);
+    send_mouse(QEvent::MouseButtonRelease, at, Qt::LeftButton, Qt::NoButton);
+  }
   bool wait_text_contains(int page, const QString& needle) {
     return spin_until([&] {
       if (!idle() || view()->text_index(page) == nullptr) return false;
@@ -251,6 +279,142 @@ TEST_F(TextToolTest, SavedTextReopens) {
   std::filesystem::copy_file(copy, again);
   ASSERT_TRUE(open_path(again));
   ASSERT_TRUE(wait_text_contains(0, QStringLiteral("저장 열기 검증")));
+}
+
+// ---------------------------------------------------------------- 텍스트 상자 편집 (#47)
+
+TEST_F(TextToolTest, ClickSelectsBoxAndDragMoves) {
+  open_copy("simple.pdf");
+  ASSERT_TRUE(spin_until([&] { return view()->text_index(0) != nullptr; }));
+  ASSERT_TRUE(window_.add_text(0, {100, 300}, QStringLiteral("한글 텍스트\n둘째 줄")));
+  ASSERT_TRUE(wait_text_boxes(0, 1));
+  const auto& first = (*view()->text_objects(0))[0];
+  const QPointF inside = view()->page_point_to_viewport(0, {first.bbox.x + 5, first.bbox.y + first.bbox.h / 2});
+  click(inside);
+  ASSERT_TRUE(view()->selected_text_box().has_value());
+  EXPECT_EQ(view()->selected_text_box()->lines, 2);
+  EXPECT_EQ(view()->selected_text_box()->text, "한글 텍스트\n둘째 줄");
+  EXPECT_TRUE(window_.statusBar()->currentMessage().contains(QStringLiteral("2줄")));
+  EXPECT_TRUE(window_.delete_annotation_action()->isEnabled());
+  send_mouse(QEvent::MouseMove, inside, Qt::NoButton, Qt::NoButton);
+  EXPECT_EQ(view()->viewport()->cursor().shape(), Qt::SizeAllCursor);
+  // 3pt 드래그는 이동이 아니다 (연속 클릭으로 보이지 않게 잠시 기다린다)
+  settle_clicks();
+  drag(inside, inside + QPointF(2, 2));
+  ASSERT_TRUE(wait_idle());
+  EXPECT_FALSE(window_.edit_controller()->can_undo() && window_.undo_action()->text().contains(QStringLiteral("텍스트 이동")));
+  // 이동
+  const double before_x = first.bbox.x;
+  const QPointF to = view()->page_point_to_viewport(0, {first.bbox.x + 5 + 50, first.bbox.y + first.bbox.h / 2 + 30});
+  settle_clicks();
+  drag(inside, to);
+  ASSERT_TRUE(spin_until([&] { return idle() && view()->text_objects(0) && std::abs((*view()->text_objects(0))[0].bbox.x - (before_x + 50)) < 2.0; }));
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("텍스트 이동")));
+  ASSERT_TRUE(spin_until([&] { return view()->selected_text_box().has_value(); })) << "편집 뒤 같은 상자를 다시 고른다";
+  EXPECT_NEAR(view()->selected_text_box()->bbox.x, before_x + 50, 2.0);
+  ASSERT_TRUE(window_.edit_controller()->undo());
+  ASSERT_TRUE(spin_until([&] { return idle() && view()->text_objects(0) && std::abs((*view()->text_objects(0))[0].bbox.x - before_x) < 2.0; }));
+  // Esc 해제
+  QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+  QApplication::sendEvent(view(), &esc);
+  EXPECT_FALSE(view()->selected_text_box().has_value());
+}
+
+TEST_F(TextToolTest, DeleteKeyRemovesBoxAndUndoRestores) {
+  open_copy("simple.pdf");
+  ASSERT_TRUE(spin_until([&] { return view()->text_index(0) != nullptr; }));
+  ASSERT_TRUE(window_.add_text(0, {100, 300}, QStringLiteral("둘째 줄 텍스트")));
+  ASSERT_TRUE(wait_text_boxes(0, 1));
+  const auto box = (*view()->text_objects(0))[0];
+  click(view()->page_point_to_viewport(0, {box.bbox.x + 5, box.bbox.y + box.bbox.h / 2}));
+  ASSERT_TRUE(view()->selected_text_box().has_value());
+  QKeyEvent del(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+  QApplication::sendEvent(view(), &del);
+  ASSERT_TRUE(wait_text_boxes(0, 0));
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("텍스트 삭제")));
+  EXPECT_FALSE(view()->selected_text_box().has_value());
+  ASSERT_TRUE(wait_text_missing(0, QStringLiteral("둘째 줄 텍스트")));
+  ASSERT_TRUE(window_.edit_controller()->undo());
+  ASSERT_TRUE(wait_text_boxes(0, 1));
+  EXPECT_EQ((*view()->text_objects(0))[0].id, box.id) << "같은 id 로 복원";
+  ASSERT_TRUE(wait_text_contains(0, QStringLiteral("둘째 줄 텍스트")));
+}
+
+TEST_F(TextToolTest, DoubleClickEditsAndPropertiesApplyToSelection) {
+  open_copy("simple.pdf");
+  ASSERT_TRUE(spin_until([&] { return view()->text_index(0) != nullptr; }));
+  ASSERT_TRUE(window_.add_text(0, {100, 300}, QStringLiteral("한글 텍스트")));
+  ASSERT_TRUE(wait_text_boxes(0, 1));
+  const auto box = (*view()->text_objects(0))[0];
+  const QPointF inside = view()->page_point_to_viewport(0, {box.bbox.x + 5, box.bbox.y + box.bbox.h / 2});
+  click(inside);
+  ASSERT_TRUE(view()->selected_text_box().has_value());
+  // 두 번 클릭 → 원문이 채워진 입력 창 → 수정
+  QString prefilled;
+  when_dialog("text_input", [&](QWidget* w) {
+    auto* edit = w->findChild<QPlainTextEdit*>(QStringLiteral("note_text"));
+    prefilled = edit->toPlainText();
+    edit->setPlainText(QStringLiteral("저장 열기\n둘째 줄"));
+    static_cast<AnnotationDialog*>(w)->accept();
+  });
+  double_click(inside);
+  ASSERT_TRUE(wait_text_contains(0, QStringLiteral("저장 열기")));
+  EXPECT_EQ(prefilled, QStringLiteral("한글 텍스트"));
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("텍스트 수정")));
+  ASSERT_TRUE(spin_until([&] { return view()->selected_text_box().has_value() && view()->selected_text_box()->lines == 2; }));
+  EXPECT_EQ((*view()->text_objects(0))[0].id, box.id) << "첫 줄 id 재사용";
+  // 크기 콤보 → 선택한 상자만 (기본값은 그대로)
+  const double default_size = window_.text_size();
+  window_.set_text_size(36);
+  ASSERT_TRUE(spin_until([&] { return idle() && view()->text_objects(0) && std::abs((*view()->text_objects(0))[0].font_size - 36.0) < 0.01; }));
+  EXPECT_DOUBLE_EQ(window_.text_size(), default_size);
+  ASSERT_TRUE(spin_until([&] { return view()->selected_text_box().has_value(); }));
+  EXPECT_EQ(window_.text_size_combo()->currentData().toInt(), 36) << "콤보는 선택한 상자의 크기를 비춘다";
+  // 색 → 선택한 상자만
+  window_.set_annotation_color({0, 0, 255, 255});
+  ASSERT_TRUE(spin_until([&] { return idle() && view()->text_objects(0) && (*view()->text_objects(0))[0].color.b == 255 && (*view()->text_objects(0))[0].color.r == 0; }));
+  EXPECT_NE(window_.annotation_color().b, 255) << "기본 색은 그대로";
+  ASSERT_TRUE(window_.edit_controller()->undo());
+  ASSERT_TRUE(spin_until([&] { return idle() && view()->text_objects(0) && (*view()->text_objects(0))[0].color.r == 0 && (*view()->text_objects(0))[0].color.b == 0; }));
+}
+
+TEST_F(TextToolTest, AnnotationWinsHitTestAndPermissionGatesEditing) {
+  open_copy("simple.pdf");
+  ASSERT_TRUE(spin_until([&] { return view()->text_index(0) != nullptr; }));
+  ASSERT_TRUE(window_.add_text(0, {100, 300}, QStringLiteral("한글 텍스트")));
+  ASSERT_TRUE(wait_text_boxes(0, 1));
+  const auto box = (*view()->text_objects(0))[0];
+  // 같은 자리에 메모 → 클릭하면 주석이 우선
+  ASSERT_TRUE(window_.add_note(0, {box.bbox.x + 10, box.bbox.y + 10}, QStringLiteral("메모")));
+  ASSERT_TRUE(spin_until([&] { return idle() && view()->annotations(0) && view()->annotations(0)->size() == 1; }));
+  click(view()->page_point_to_viewport(0, {box.bbox.x + 10, box.bbox.y + 10}));
+  EXPECT_TRUE(view()->selected_annotation().has_value());
+  EXPECT_FALSE(view()->selected_text_box().has_value());
+  // 선택이 주석일 때 텍스트 상자 삭제는 아무것도 하지 않는다 (권한 게이트는 PermissionAndFontGateTheTool 이 덮는다)
+  EXPECT_FALSE(window_.delete_selected_text_box());
+}
+
+TEST_F(TextToolTest, SavedBoxReopensEditable) {
+  const auto copy = open_copy("simple.pdf");
+  ASSERT_TRUE(spin_until([&] { return view()->text_index(0) != nullptr; }));
+  ASSERT_TRUE(window_.add_text(0, {100, 300}, QStringLiteral("저장 열기\n둘째 줄")));
+  ASSERT_TRUE(wait_text_boxes(0, 1));
+  window_.save_action()->trigger();
+  ASSERT_TRUE(spin_until([&] { return !window_.saving() && !window_.isWindowModified(); }));
+  const auto again = dir_ / "simple-again.pdf";
+  std::filesystem::copy_file(copy, again);
+  ASSERT_TRUE(open_path(again));
+  ASSERT_TRUE(wait_text_boxes(0, 1));
+  const auto box = (*view()->text_objects(0))[0];
+  EXPECT_EQ(box.text, "저장 열기");
+  click(view()->page_point_to_viewport(0, {box.bbox.x + 5, box.bbox.y + box.bbox.h / 2}));
+  ASSERT_TRUE(view()->selected_text_box().has_value());
+  EXPECT_EQ(view()->selected_text_box()->lines, 2);
+  QKeyEvent del(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+  QApplication::sendEvent(view(), &del);
+  ASSERT_TRUE(wait_text_boxes(0, 0));
+  ASSERT_TRUE(window_.edit_controller()->undo());
+  ASSERT_TRUE(wait_text_boxes(0, 1));
 }
 
 }  // namespace

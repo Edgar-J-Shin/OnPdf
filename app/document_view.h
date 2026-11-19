@@ -72,6 +72,20 @@ class DocumentView : public QAbstractScrollArea {
   [[nodiscard]] std::optional<engine::AnnotationInfo> selected_annotation() const;
   [[nodiscard]] int selected_annotation_page() const noexcept { return selected_annot_ ? selected_annot_->page : -1; }
   void clear_annotation_selection();
+  // ---- 텍스트 상자 (#47): OnPdf 가 넣은 텍스트 객체를 상자(마크 box) 단위로 고르고 끌어 옮긴다 ----
+  struct SelectedTextBox {
+    int page = -1;
+    std::string box;
+    std::vector<std::string> ids;  // 줄 순서
+    onpdf::Rect bbox;              // 줄 bbox 합집합 (쪽 포인트)
+    double font_size = 0.0;
+    engine::Color color;
+    int lines = 0;
+    std::string text;              // 줄을 '\n' 으로 이은 원문
+  };
+  [[nodiscard]] const std::vector<engine::TextObjectInfo>* text_objects(int page) const;  // 캐시에 있을 때만
+  [[nodiscard]] std::optional<SelectedTextBox> selected_text_box() const { return selected_text_; }
+  void clear_text_box_selection();
 
   void set_zoom_mode(ZoomMode mode);
   [[nodiscard]] ZoomMode zoom_mode() const noexcept { return mode_; }
@@ -137,6 +151,12 @@ class DocumentView : public QAbstractScrollArea {
   // 편집 뒤 같은 NM 을 다시 골랐다 (사용자 조작이 아니므로 상태 표시줄 안내를 덮지 않는다)
   void annotation_reselected(const onpdf::engine::AnnotationInfo& info);
   void annotation_delete_requested(int page, const QString& id);
+  // ---- 텍스트 상자 (#47) ----
+  void text_box_selected(bool has, const SelectedTextBox& box);
+  void text_box_reselected(const SelectedTextBox& box);  // 편집 뒤 같은 상자를 조용히 다시 골랐다
+  void text_move_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta);  // 쪽 포인트
+  void text_delete_requested(int page, const QString& box);
+  void text_edit_requested(int page, const SelectedTextBox& box);  // 두 번 클릭
   void annotation_edit_requested(int page, const onpdf::engine::AnnotationInfo& info);
 
  protected:
@@ -182,6 +202,11 @@ class DocumentView : public QAbstractScrollArea {
   void on_annotations(int page, int generation, std::shared_ptr<const std::vector<engine::AnnotationInfo>> list,
                       bool cancelled);
   [[nodiscard]] const engine::AnnotationInfo* annotation_at(int page, onpdf::Point pt) const;  // 위에 그려진 것 먼저
+  void request_text_boxes();  // 주석과 같은 범위의 텍스트 상자 목록
+  void on_text_boxes(int page, int generation, std::shared_ptr<const std::vector<engine::TextObjectInfo>> list, bool cancelled);
+  [[nodiscard]] std::optional<SelectedTextBox> text_box_at(int page, onpdf::Point pt) const;  // 뒤(위)에 있는 것 먼저
+  [[nodiscard]] std::optional<SelectedTextBox> text_box_by_id(int page, const std::string& box) const;
+  void cancel_text_drag();
   [[nodiscard]] onpdf::Point clamp_to_page(int page, onpdf::Point pt) const;
   [[nodiscard]] onpdf::Point page_point_on(int page, QPointF viewport_pos) const;  // 특정 쪽 좌표로 투영 (쪽 밖도 음수·초과로)
   void update_page(int page);  // 그 쪽 영역만 다시 그린다
@@ -218,7 +243,7 @@ class DocumentView : public QAbstractScrollArea {
   std::unordered_map<int, std::shared_ptr<const view::PageTextIndex>> text_cache_;
   std::unordered_map<int, engine::TaskHandle> text_requested_;  // 쪽 → 취소 핸들
   view::TextSelection selection_;
-  enum class Drag { kNone, kText, kMaybeLink, kInk, kShape } drag_ = Drag::kNone;
+  enum class Drag { kNone, kText, kMaybeLink, kInk, kShape, kMoveText } drag_ = Drag::kNone;
   // 주석 (메인 스레드 전용)
   AnnotationTool tool_ = AnnotationTool::kSelect;
   std::unordered_map<int, std::shared_ptr<const std::vector<engine::AnnotationInfo>>> annot_cache_;
@@ -232,6 +257,14 @@ class DocumentView : public QAbstractScrollArea {
   std::string reselect_id_;
   int ink_page_ = -1;
   std::vector<onpdf::Point> ink_points_;  // 그리는 중인 펜 스트로크 (쪽 포인트)
+  // 텍스트 상자 (#47)
+  std::unordered_map<int, std::shared_ptr<const std::vector<engine::TextObjectInfo>>> text_box_cache_;
+  std::unordered_map<int, engine::TaskHandle> text_box_requested_;
+  std::optional<SelectedTextBox> selected_text_;
+  int reselect_text_page_ = -1;
+  std::string reselect_text_box_;
+  onpdf::Point move_start_pt_{};  // 이동 드래그 시작점 (쪽 포인트)
+  onpdf::Point move_delta_{};
   int shape_page_ = -1;                   // 그리는 중인 도형 (쪽 포인트)
   onpdf::Point shape_anchor_{}, shape_corner_{};
   [[nodiscard]] onpdf::Rect shape_rect() const noexcept;

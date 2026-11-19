@@ -45,6 +45,7 @@ onpdf_add_test(onpdf_unit_tests
   unit/text_layout_test.cpp
   unit/add_text_command_test.cpp
   unit/text_object_test.cpp
+  unit/text_box_commands_test.cpp
   unit/page_ranges_test.cpp
   unit/qpdf_tools_test.cpp
   unit/save_test.cpp

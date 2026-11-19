@@ -260,6 +260,19 @@ std::future<Result<std::vector<AnnotationInfo>>> DocumentHandle::load_annotation
       });
 }
 
+TaskHandle DocumentHandle::load_text_objects(int page_index, Priority priority,
+                                             std::function<void(Result<std::vector<TextObjectInfo>>)> on_done) const {
+  return DocumentHandleAccess::post_document_task<std::vector<TextObjectInfo>>(
+      *this, priority, [page_index](PdfiumDocument& doc) { return doc.text_objects(page_index); }, std::move(on_done));
+}
+
+std::future<Result<std::vector<TextObjectInfo>>> DocumentHandle::load_text_objects(int page_index, Priority priority) const {
+  return DocumentHandleAccess::to_future<std::vector<TextObjectInfo>>(
+      [=, this](std::function<void(Result<std::vector<TextObjectInfo>>)> cb) {
+        return load_text_objects(page_index, priority, std::move(cb));
+      });
+}
+
 TaskHandle DocumentHandle::load_text(int page_index, Priority priority,
                                      std::function<void(Result<view::PageTextIndex>)> on_done) const {
   return DocumentHandleAccess::post_document_task<view::PageTextIndex>(

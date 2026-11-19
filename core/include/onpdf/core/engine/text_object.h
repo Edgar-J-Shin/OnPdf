@@ -27,18 +27,31 @@ struct TextLineSpec {
   Point origin;             // 기준선 왼쪽 끝 (쪽 포인트)
   double font_size = 24.0;  // pt
   Color color{0, 0, 0, 255};
+  std::string text;         // 줄 원문(UTF-8) — 마크 블롭 "text" 로 보관해 수정 때 되읽는다 (#47). 비면 쓰지 않는다
 };
 
 struct TextObjectsSpec {
   EmbeddedFontSpec font;
   std::vector<TextLineSpec> lines;
   std::vector<std::string> ids;  // 줄별 객체 id. 비어 있으면 엔진이 만든다 (재실행은 같은 id 를 준다)
+  std::string box;               // 상자 id("onpdf-box-<16진 16자>"): 줄들을 묶는다. 비면 엔진이 만든다 (#47)
+  bool write_box = true;         // 테스트용: false 면 box 마크를 쓰지 않는다 (#47 이전 파일 흉내)
+};
+
+struct TextObjectsResult {
+  std::vector<std::string> ids;
+  std::string box;
 };
 
 // 조회용: OnPdf 가 만든(마크가 있는) 텍스트 객체
 struct TextObjectInfo {
-  std::string id;  // 마크 "OnPdf" 의 id 파라미터 ("onpdf-text-<16진 16자>")
-  Rect bbox;       // 쪽 포인트
+  std::string id;       // 마크 "OnPdf" 의 id 파라미터 ("onpdf-text-<16진 16자>")
+  std::string box;      // 상자 id (마크가 없는 옛 객체는 id 와 같다)
+  std::string text;     // 원문(마크 블롭). 없으면 ToUnicode 추출로 대체 (공유 글리프 한계)
+  double font_size = 0.0;
+  Color color{0, 0, 0, 255};
+  Point baseline_origin;  // 기준선 왼쪽 끝 (쪽 포인트)
+  Rect bbox;              // 쪽 포인트
 };
 
 }  // namespace onpdf::engine

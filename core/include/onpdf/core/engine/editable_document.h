@@ -98,11 +98,13 @@ class EditableDocument {
   // ---- 텍스트 객체 (쪽 콘텐츠, #45). 정체성은 마크 콘텐츠 "OnPdf" 의 id 파라미터 ----
   // 줄마다 텍스트 객체를 만들고 쪽 콘텐츠를 다시 생성한다. 폰트는 spec.font.key 로 문서가 캐시해 재사용한다.
   // 돌려주는 값 = 줄별 객체 id (spec.ids 가 있으면 그대로). 중간 실패 시 만든 객체를 지우고 오류 (문서 원상)
-  [[nodiscard]] virtual Result<std::vector<std::string>> add_text_objects(int page_index, const TextObjectsSpec& spec) = 0;
+  [[nodiscard]] virtual Result<TextObjectsResult> add_text_objects(int page_index, const TextObjectsSpec& spec) = 0;
   // id 들을 전부 찾은 뒤에만 지운다 (하나라도 없으면 kInvalidArgument, 아무것도 지우지 않음)
   [[nodiscard]] virtual Result<void> remove_text_objects(int page_index, const std::vector<std::string>& ids) = 0;
   // OnPdf 가 만든 텍스트 객체 목록 (저장 검증·선택용)
   [[nodiscard]] virtual Result<std::vector<TextObjectInfo>> text_objects(int page_index) const = 0;
+  // 텍스트 객체들을 쪽 포인트 delta 만큼 옮긴다 (행렬 e,f 만 변경, 회전 쪽에서도 화면 방향). 전부 찾은 뒤에만 바꾼다 (#47)
+  [[nodiscard]] virtual Result<void> move_text_objects(int page_index, const std::vector<std::string>& ids, Point delta_pt) = 0;
 };
 
 }  // namespace onpdf::engine
