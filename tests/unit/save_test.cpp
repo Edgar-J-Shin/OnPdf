@@ -236,13 +236,14 @@ TEST(SaveDocument, WriteFilesSafelySkeleton) {
   EXPECT_FALSE(write_files_safely({a}, failing_write));
   EXPECT_EQ(read_bytes(a), before);
   SafeWriteHooks failing_verify = ok;
-  failing_verify.verify = [](const std::filesystem::path&, const std::filesystem::path&) -> Result<void> {
+  failing_verify.verify = [](std::size_t, const std::filesystem::path&, const std::filesystem::path&) -> Result<void> {
     return make_error(ErrorCode::kSaveVerifyFailed, "x");
   };
   EXPECT_FALSE(write_files_safely({a, b}, failing_verify));
   EXPECT_EQ(read_bytes(a), before);
   EXPECT_EQ(files_in(dir.path()), 2u) << "임시 파일 없음";
   EXPECT_FALSE(write_files_safely({a, a}, ok)) << "같은 대상 두 번";
+  EXPECT_FALSE(write_files_safely({dir / "new.txt", dir.path() / "." / "new.txt"}, ok)) << "다른 표기의 같은 새 파일 (리뷰 I3)";
   EXPECT_FALSE(write_files_safely({}, ok));
 }
 

@@ -28,7 +28,7 @@ using ProgressFn = std::function<void(int percent)>;  // 작업 스레드에서 
 
 class QpdfTools {
  public:
-  // inputs[0] 이 주 입력: 그 문서의 목차·메타데이터·폼을 보존하고 나머지 입력의 쪽을 순서대로 덧붙인다.
+  // inputs[0] 이 주 입력: 그 문서의 목차·메타데이터·폼을 보존하고 나머지 입력의 쪽을 순서대로 덧붙인다. 결과는 암호 없는 평문.
   // 모든 입력은 추출이 허용돼야 한다(권한 비트 5, kPermissionDenied). 암호가 틀리면 kPasswordRequired(메시지에 파일 이름)
   [[nodiscard]] static Result<JobReport> merge(const std::vector<StructureInput>& inputs, const std::filesystem::path& output,
                                                const ProgressFn& progress = {});

@@ -34,8 +34,10 @@ struct SaveResult {
 // 임시 파일은 지워진다. 스레드 무관 (호출자가 생산자의 스레드 규칙을 지킨다)
 struct SafeWriteHooks {
   std::function<Result<void>(const std::vector<std::filesystem::path>& temps)> write;
-  std::function<Result<void>(const std::filesystem::path& target, const std::filesystem::path& temp)> verify;  // 비면 생략
+  // index = targets 안의 위치. 비면 생략
+  std::function<Result<void>(std::size_t index, const std::filesystem::path& target, const std::filesystem::path& temp)> verify;
 };
+// 여러 대상의 교체(rename) 가 중간에 실패하면 앞 대상은 이미 바뀐 채 남는다 — 같은 폴더 rename 이라 드물다
 [[nodiscard]] Result<std::vector<SaveResult>> write_files_safely(const std::vector<std::filesystem::path>& targets,
                                                               const SafeWriteHooks& hooks);
 

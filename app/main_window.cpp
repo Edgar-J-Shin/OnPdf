@@ -808,7 +808,7 @@ void MainWindow::on_merge_action() {
   std::vector<engine::StructureInput> inputs;
   for (const QString& file : files) {
     engine::StructureInput input{onpdf::path_from_utf8(file.toUtf8().toStdString()), ""};
-    for (;;) {
+    for (int attempt = 0; attempt < 5; ++attempt) {  // 암호는 다섯 번까지만 묻는다
       auto count = engine::QpdfTools::page_count(input.path, input.password);
       if (count) break;
       if (count.error().code != ErrorCode::kPasswordRequired) {
@@ -859,7 +859,7 @@ bool MainWindow::merge_files(std::vector<engine::StructureInput> inputs, const Q
       if (!r) return std::unexpected(r.error());
       return {};
     };
-    hooks.verify = [&](const std::filesystem::path&, const std::filesystem::path& temp) -> onpdf::Result<void> {
+    hooks.verify = [&](std::size_t, const std::filesystem::path&, const std::filesystem::path& temp) -> onpdf::Result<void> {
       if (auto c = engine::QpdfTools::check(temp); !c) return std::unexpected(c.error());
       auto n = engine::QpdfTools::page_count(temp);
       if (!n) return std::unexpected(n.error());
@@ -903,13 +903,29 @@ bool MainWindow::split_document(int every, const QString& directory) {
   const int count = session_.handle().info().page_count;
   const auto ranges = onpdf::ranges_every(every, count);
   if (ranges.empty()) return false;
-  const engine::StructureInput input{onpdf::path_from_utf8(session_.path().toUtf8().toStdString()), {}};
+  const engine::StructureInput input{onpdf::path_from_utf8(session_.path().toUtf8().toStdString()),
+                                     session_.password().toStdString()};  // 암호 문서도 나눌 수 있게 (리뷰 W2)
   const std::string stem = QFileInfo(session_.path()).completeBaseName().toUtf8().toStdString();
   const auto dir = onpdf::path_from_utf8(directory.toUtf8().toStdString());
   std::vector<std::filesystem::path> outs;
   for (std::size_t i = 0; i < ranges.size(); ++i) {
     outs.push_back(dir / onpdf::path_from_utf8(onpdf::output_name(stem + "-%d.pdf", static_cast<int>(i) + 1,
                                                                    static_cast<int>(ranges.size()), ranges[i], count)));
+  }
+  int existing = 0;
+  for (const auto& p : outs) {
+    std::error_code ec;
+    if (std::filesystem::exists(p, ec)) ++existing;
+  }
+  if (existing > 0) {  // 폴더 선택 창은 덮어쓰기를 묻지 않으므로 여기서 한 번 묻는다 (리뷰 W3)
+    QMessageBox box(QMessageBox::Question, tr("분할"), tr("같은 이름의 파일 %1개를 덮어씁니다. 계속할까요?").arg(existing),
+                    QMessageBox::NoButton, this);
+    box.setObjectName(QStringLiteral("split_overwrite"));
+    QPushButton* go = box.addButton(tr("덮어쓰기"), QMessageBox::AcceptRole);
+    QPushButton* cancel = box.addButton(tr("취소"), QMessageBox::RejectRole);
+    box.setDefaultButton(cancel);
+    box.exec();
+    if (box.clickedButton() != go) return false;
   }
   structure_kind_ = StructureKind::kSplit;
   structure_outputs_ = outs;
@@ -924,9 +940,7 @@ bool MainWindow::split_document(int every, const QString& directory) {
       }
       return {};
     };
-    hooks.verify = [&](const std::filesystem::path& target, const std::filesystem::path& temp) -> onpdf::Result<void> {
-      const auto it = std::find(outs.begin(), outs.end(), target);
-      const std::size_t i = static_cast<std::size_t>(it - outs.begin());
+    hooks.verify = [&](std::size_t i, const std::filesystem::path&, const std::filesystem::path& temp) -> onpdf::Result<void> {
       auto n = engine::QpdfTools::page_count(temp);
       if (!n) return std::unexpected(n.error());
       if (*n != ranges[i].last - ranges[i].first + 1) return onpdf::make_error(ErrorCode::kSaveVerifyFailed, "split page count mismatch");
@@ -948,14 +962,11 @@ void MainWindow::on_structure_finished(bool cancelled) {
   const StructureKind kind = structure_kind_;
   const std::vector<std::filesystem::path> outputs = std::move(structure_outputs_);
   structure_kind_ = StructureKind::kNone;
-  structure_outputs_.clear();
   update_edit_actions();
   if (cancelled) {
-    for (const auto& p : outputs) {  // 취소: 만들어졌으면 지운다
-      std::error_code ec;
-      std::filesystem::remove(p, ec);
-    }
-    show_transient(tr("취소했습니다"));
+    // qpdf 작업은 중단할 수 없어 끝까지 돈다. 결과 파일은 지우지 않는다 — 사용자가 덮어쓰기로 고른 기존 파일이나
+    // 이전 분할 결과를 지워 버릴 수 있기 때문 (리뷰 C2). 성공했으면 알리기만, 실패했으면 원래 아무것도 없다
+    show_transient(outcome ? tr("취소하기 전에 작업이 끝나 파일이 만들어졌습니다") : tr("취소했습니다"));
     return;
   }
   if (!outcome) {

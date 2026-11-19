@@ -31,7 +31,7 @@ Result<std::vector<SaveResult>> merge_safely(const std::vector<StructureInput>& 
     if (!r) return std::unexpected(r.error());
     return {};
   };
-  hooks.verify = [&](const std::filesystem::path&, const std::filesystem::path& temp) -> Result<void> {
+  hooks.verify = [&](std::size_t, const std::filesystem::path&, const std::filesystem::path& temp) -> Result<void> {
     if (auto c = QpdfTools::check(temp); !c) return std::unexpected(c.error());
     auto n = QpdfTools::page_count(temp);
     if (!n) return std::unexpected(n.error());
@@ -113,6 +113,41 @@ TEST(QpdfTools, MergeRejectsBadInputsWithoutOutput) {
   EXPECT_EQ(same.error().code, ErrorCode::kInvalidArgument);
 }
 
+// 암호 문서가 주 입력(첫 파일)이어도 결과는 평문이라 암호 없이 검증·열기가 된다 (리뷰 C1)
+TEST(QpdfTools, EncryptedPrimaryInputYieldsPlainOutput) {
+  ScopedTempDir dir;
+  const auto out = dir / "merged.pdf";
+  auto saved = merge_safely({{testdata("encrypted-aes256.pdf"), "user"}, {testdata("simple.pdf"), ""}}, out, 4);
+  ASSERT_TRUE(saved) << saved.error().message;
+  EXPECT_EQ(*QpdfTools::page_count(out), 4);  // 암호 없이
+  auto doc = PdfiumDocument::open(out);
+  ASSERT_TRUE(doc) << "결과는 평문이어야 한다";
+  EXPECT_EQ(doc->page_count(), 4);
+  // 암호 문서에서 쪽 추출도 평문으로
+  const auto piece = dir / "piece.pdf";
+  ASSERT_TRUE(QpdfTools::extract({testdata("encrypted-aes256.pdf"), "user"}, {2, 2}, piece));
+  EXPECT_EQ(*QpdfTools::page_count(piece), 1);
+  EXPECT_TRUE(QpdfTools::check(piece));
+}
+
+// 파일 경로에 "password" 가 들어간 손상 파일은 암호 오류가 아니다 (리뷰 W1)
+TEST(QpdfTools, DamagedFileNamedPasswordIsNotAPasswordError) {
+  ScopedTempDir dir;
+  const auto odd = dir / "my-passwords.pdf";
+  std::filesystem::copy_file(testdata("truncated.pdf"), odd);
+  auto count = QpdfTools::page_count(odd);
+  ASSERT_FALSE(count);
+  EXPECT_EQ(count.error().code, ErrorCode::kInvalidFormat);
+  auto checked = QpdfTools::check(odd);
+  ASSERT_FALSE(checked);
+  EXPECT_EQ(checked.error().code, ErrorCode::kJobFailed);
+  EXPECT_EQ(checked.error().message.rfind("qpdfjob json: ", 0), std::string::npos) << "접두가 정리된다: " << checked.error().message;
+  // 진짜 암호 오류는 여전히 구분된다
+  auto locked = QpdfTools::check(testdata("encrypted-aes256.pdf"));
+  ASSERT_FALSE(locked);
+  EXPECT_EQ(locked.error().code, ErrorCode::kPasswordRequired);
+}
+
 // 손상됐지만 복구되는 입력은 경고와 함께 병합된다
 TEST(QpdfTools, MergeRecoversDamagedInputWithWarnings) {
   ScopedTempDir dir;
@@ -141,8 +176,7 @@ TEST(QpdfTools, ExtractRangesAllOrNothing) {
     return {};
   };
   int verified = 0;
-  hooks.verify = [&](const std::filesystem::path& target, const std::filesystem::path& temp) -> Result<void> {
-    const std::size_t i = static_cast<std::size_t>(&target - outs.data());
+  hooks.verify = [&](std::size_t i, const std::filesystem::path&, const std::filesystem::path& temp) -> Result<void> {
     auto n = QpdfTools::page_count(temp);
     if (!n) return std::unexpected(n.error());
     if (*n != ranges[i].last - ranges[i].first + 1) return make_error(ErrorCode::kSaveVerifyFailed, "pages");
@@ -164,7 +198,7 @@ TEST(QpdfTools, ExtractRangesAllOrNothing) {
   std::vector<std::filesystem::path> outs2{dir2 / "a.pdf", dir2 / "b.pdf"};
   SafeWriteHooks failing;
   failing.write = hooks.write;
-  failing.verify = [&](const std::filesystem::path& target, const std::filesystem::path&) -> Result<void> {
+  failing.verify = [&](std::size_t, const std::filesystem::path& target, const std::filesystem::path&) -> Result<void> {
     if (target.filename() == "b.pdf") return make_error(ErrorCode::kSaveVerifyFailed, "injected");
     return {};
   };

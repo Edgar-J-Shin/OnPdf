@@ -85,6 +85,7 @@ void report_progress(int percent, void* data) {
   if (fn != nullptr && *fn) (*fn)(percent);
 }
 
+
 std::vector<std::string> split_lines(const std::string& text) {
   std::vector<std::string> lines;
   std::size_t start = 0;
@@ -97,8 +98,22 @@ std::vector<std::string> split_lines(const std::string& text) {
   return lines;
 }
 
-bool mentions_password(const std::string& text) {
-  return text.find("invalid password") != std::string::npos || text.find("password") != std::string::npos;
+// qpdf 가 암호 오류를 낼 때의 정확한 문구("<파일>: invalid password")만 본다 — 파일 경로에 "password" 가 들어간
+// 손상 파일을 암호 오류로 오판하지 않게 (리뷰 W1)
+bool is_password_error(const std::string& text) {
+  for (const std::string& line : split_lines(text)) {
+    const std::string needle = ": invalid password";
+    if (line.size() >= needle.size() && line.compare(line.size() - needle.size(), needle.size(), needle) == 0) return true;
+  }
+  return false;
+}
+
+// 오류 텍스트 정리: qpdf 접두("qpdfjob json: ")와 끝 개행 제거 (대화상자에 그대로 보인다)
+std::string tidy_error(std::string text) {
+  while (!text.empty() && (text.back() == '\n' || text.back() == '\r' || text.back() == ' ')) text.pop_back();
+  const std::string prefix = "qpdfjob json: ";
+  if (text.rfind(prefix, 0) == 0) text.erase(0, prefix.size());
+  return text;
 }
 
 // JSON 작업 실행. 종료 코드 0·3 → 성공(+경고), 그 외 → 오류
@@ -114,12 +129,12 @@ Result<JobReport> run_job(const std::string& json, const ProgressFn& progress) {
   qpdfjob_set_logger(job.get(), logger.get());
   if (progress) qpdfjob_register_progress_reporter(job.get(), &report_progress, const_cast<ProgressFn*>(&progress));
   if (qpdfjob_initialize_from_json(job.get(), json.c_str()) != 0) {
-    return make_error(ErrorCode::kJobFailed, sink.errors.empty() ? "invalid qpdf job" : sink.errors);
+    return make_error(ErrorCode::kJobFailed, sink.errors.empty() ? "invalid qpdf job" : tidy_error(sink.errors));
   }
   const int status = qpdfjob_run(job.get());
   if (status != qpdf_exit_success && status != qpdf_exit_warning) {
-    const std::string text = sink.errors.empty() ? sink.warnings : sink.errors;
-    if (mentions_password(text)) return make_error(ErrorCode::kPasswordRequired, text);
+    const std::string text = tidy_error(sink.errors.empty() ? sink.warnings : sink.errors);
+    if (is_password_error(text)) return make_error(ErrorCode::kPasswordRequired, text);
     return make_error(ErrorCode::kJobFailed, text.empty() ? "qpdf job failed" : text);
   }
   JobReport report;
@@ -136,9 +151,10 @@ Result<QpdfHandle> open_for_query(const std::filesystem::path& file, std::string
   const std::string pw(password);
   qpdf_read(q.get(), path.c_str(), pw.c_str());
   if (qpdf_has_error(q.get())) {
-    const char* text = qpdf_get_error_full_text(q.get(), qpdf_get_error(q.get()));
-    const std::string message = text != nullptr ? text : "cannot read";
-    if (mentions_password(message)) return make_error(ErrorCode::kPasswordRequired, message);
+    qpdf_error err = qpdf_get_error(q.get());
+    const char* text = qpdf_get_error_full_text(q.get(), err);
+    const std::string message = tidy_error(text != nullptr ? text : "cannot read");
+    if (qpdf_get_error_code(q.get(), err) == qpdf_e_password) return make_error(ErrorCode::kPasswordRequired, message);
     std::error_code ec;
     if (!std::filesystem::exists(file, ec)) return make_error(ErrorCode::kFileNotFound, message);
     return make_error(ErrorCode::kInvalidFormat, message);
@@ -181,7 +197,7 @@ Result<JobReport> QpdfTools::merge(const std::vector<StructureInput>& inputs, co
     if (i > 0) json += ", ";
     json += page_entry(inputs[i], "1-z");
   }
-  json += "]";
+  json += "], \"decrypt\": \"\"";  // 주 입력이 암호 문서여도 결과는 평문 (리뷰 C1: 그렇지 않으면 검증이 암호 없이 열지 못한다)
   if (progress) json += ", \"progress\": \"\"";
   json += "}";
   return run_job(json, progress);
@@ -196,7 +212,7 @@ Result<JobReport> QpdfTools::extract(const StructureInput& input, PageRange rang
   }
   std::string json = "{\"inputFile\": " + json_path(input.path);
   if (!input.password.empty()) json += ", \"password\": " + json_string(input.password);
-  json += ", \"outputFile\": " + json_path(output) + ", \"pages\": [" + page_entry(input, range_text(range)) + "]";
+  json += ", \"outputFile\": " + json_path(output) + ", \"pages\": [" + page_entry(input, range_text(range)) + "], \"decrypt\": \"\"";
   if (progress) json += ", \"progress\": \"\"";
   json += "}";
   return run_job(json, progress);

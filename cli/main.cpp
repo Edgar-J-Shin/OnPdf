@@ -350,7 +350,7 @@ int cmd_merge(const Args& args) {
     report = std::move(*r);
     return {};
   };
-  hooks.verify = [&](const std::filesystem::path&, const std::filesystem::path& temp) -> onpdf::Result<void> {
+  hooks.verify = [&](std::size_t, const std::filesystem::path&, const std::filesystem::path& temp) -> onpdf::Result<void> {
     if (auto c = QpdfTools::check(temp); !c) return std::unexpected(c.error());
     auto n = QpdfTools::page_count(temp);
     if (!n) return std::unexpected(n.error());
@@ -403,9 +403,7 @@ int cmd_split(const Args& args) {
     }
     return {};
   };
-  hooks.verify = [&](const std::filesystem::path& target, const std::filesystem::path& temp) -> onpdf::Result<void> {
-    const auto it = std::find(outs.begin(), outs.end(), target);
-    const std::size_t i = static_cast<std::size_t>(it - outs.begin());
+  hooks.verify = [&](std::size_t i, const std::filesystem::path&, const std::filesystem::path& temp) -> onpdf::Result<void> {
     auto n = QpdfTools::page_count(temp);
     if (!n) return std::unexpected(n.error());
     if (*n != ranges[i].last - ranges[i].first + 1) {

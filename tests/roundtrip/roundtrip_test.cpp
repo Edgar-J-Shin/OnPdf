@@ -1,5 +1,5 @@
 // 왕복 테스트: manifest 의 열 수 있는 모든 PDF 를 열기 → (변경 없이) 안전 저장 → 다시 열기 후 일치 확인.
-// 계획서 성공 기준 "테스트 PDF 열기·저장 왕복 후 깨지는 파일 0건". qpdf 명령이 있으면 qpdf --check 도 돌린다.
+// 계획서 성공 기준 "테스트 PDF 열기·저장 왕복 후 깨지는 파일 0건". 구조 검사는 qpdf 라이브러리(QpdfTools::check)로 항상 돈다.
 
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/core/engine/qpdf_tools.h"
@@ -14,8 +14,6 @@
 
 #include <gtest/gtest.h>
 
-#include <cstdlib>
-#include <fstream>
 #include <string>
 
 namespace onpdf::engine {

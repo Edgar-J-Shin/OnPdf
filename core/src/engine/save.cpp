@@ -107,23 +107,29 @@ Result<std::vector<SaveResult>> write_files_safely(const std::vector<std::filesy
   struct Prepared {
     std::filesystem::path real;
     std::filesystem::path dir;
+    std::filesystem::path normalized;
     std::optional<std::filesystem::perms> keep_permissions;
   };
   std::vector<Prepared> prepared;
+  std::vector<std::filesystem::path> prepared_normalized;
   std::vector<std::unique_ptr<TempFile>> temps;
   std::vector<std::filesystem::path> temp_paths;
   for (const auto& target : targets) {
     if (target.empty() || !target.has_filename()) return make_error(ErrorCode::kInvalidArgument, "empty target path");
-    for (const auto& other : prepared) {
-      std::error_code eq_ec;
-      if (std::filesystem::equivalent(other.real, target, eq_ec) || other.real == target) {
-        return make_error(ErrorCode::kInvalidArgument, "duplicate target path: " + path_to_utf8(target));
+    {
+      // 같은 파일을 두 번 쓰지 않는다. 아직 없는 파일도 비교해야 하므로 정규화한 절대 경로로 (리뷰 I3)
+      std::error_code norm_ec;
+      const auto normalized = std::filesystem::weakly_canonical(std::filesystem::absolute(target, norm_ec), norm_ec).lexically_normal();
+      for (const auto& other : prepared) {
+        if (other.normalized == normalized) return make_error(ErrorCode::kInvalidArgument, "duplicate target path: " + path_to_utf8(target));
       }
+      prepared_normalized.push_back(normalized);
     }
     auto resolved = resolve_save_target(target);
     if (!resolved) return std::unexpected(resolved.error());
     Prepared p;
     p.real = std::move(*resolved);
+    p.normalized = prepared_normalized.back();
     std::error_code ec;
     p.dir = p.real.parent_path().empty() ? std::filesystem::path(".") : p.real.parent_path();
     if (!std::filesystem::is_directory(p.dir, ec)) {
@@ -152,7 +158,7 @@ Result<std::vector<SaveResult>> write_files_safely(const std::vector<std::filesy
   std::vector<SaveResult> results;
   for (std::size_t i = 0; i < targets.size(); ++i) {
     if (hooks.verify) {
-      if (auto verified = hooks.verify(targets[i], temp_paths[i]); !verified) return std::unexpected(verified.error());
+      if (auto verified = hooks.verify(i, targets[i], temp_paths[i]); !verified) return std::unexpected(verified.error());
     }
     std::error_code ec;
     if (prepared[i].keep_permissions) {
@@ -185,7 +191,7 @@ Result<SaveResult> save_document_safely(const PdfiumDocument& doc, const std::fi
     if (options.after_write_for_testing) options.after_write_for_testing(temps.front());
     return {};
   };
-  hooks.verify = [&](const std::filesystem::path&, const std::filesystem::path& temp) {
+  hooks.verify = [&](std::size_t, const std::filesystem::path&, const std::filesystem::path& temp) {
     return verify_saved(doc, temp, options.incremental);
   };
   auto results = write_files_safely({target}, hooks);

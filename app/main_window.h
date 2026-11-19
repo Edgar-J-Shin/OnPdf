@@ -96,6 +96,7 @@ class MainWindow : public QMainWindow {
   // ---- 병합·분할 (대화상자 없이 같은 경로를 타는 진입점, 테스트용으로도 쓴다). 시작하면 true ----
   bool merge_files(std::vector<engine::StructureInput> inputs, const QString& output);
   bool split_document(int every, const QString& directory);  // 현재 문서(디스크 파일)를 every 쪽마다
+  void session_open_for_test(const QString& path, const QString& password) { session_.open(path, password); }  // 암호 대화상자 우회
   // 이 경로로 저장한다 (대화상자 없이 — 다른 이름으로 저장의 뒷부분, 테스트용). 시작하면 true
   bool save_to(const QString& path);
   // 대화상자 없이 이 프린터 설정으로 인쇄를 시작한다 (파일 > 인쇄 의 뒷부분, 테스트용). 시작하면 true

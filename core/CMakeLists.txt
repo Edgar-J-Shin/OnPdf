@@ -38,8 +38,11 @@ if(TARGET qpdf::libqpdf)
 else()
   set(ONPDF_QPDF_TARGET qpdf::libqpdf_static)
 endif()
-# vcpkg 의 qpdf 설정은 zlib·libjpeg-turbo 를 맨이름("z;jpeg")으로 적어 링커 검색 경로에 없으면 실패한다 → 실제 타깃으로 바꾼다
-set_property(TARGET ${ONPDF_QPDF_TARGET} PROPERTY INTERFACE_LINK_LIBRARIES ZLIB::ZLIB JPEG::JPEG)
+# vcpkg 의 qpdf 설정은 zlib·libjpeg-turbo 를 맨이름("z;jpeg")으로 적어 링커 검색 경로에 없으면 실패한다 → 그 항목만 실제 타깃으로 바꾼다
+get_property(ONPDF_QPDF_LINKS TARGET ${ONPDF_QPDF_TARGET} PROPERTY INTERFACE_LINK_LIBRARIES)
+list(TRANSFORM ONPDF_QPDF_LINKS REPLACE "^z$" "ZLIB::ZLIB")
+list(TRANSFORM ONPDF_QPDF_LINKS REPLACE "^jpeg$" "JPEG::JPEG")
+set_property(TARGET ${ONPDF_QPDF_TARGET} PROPERTY INTERFACE_LINK_LIBRARIES "${ONPDF_QPDF_LINKS}")
 target_link_libraries(onpdf_core PRIVATE ${ONPDF_QPDF_TARGET})
 
 onpdf_set_warnings(onpdf_core)

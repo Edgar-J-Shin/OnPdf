@@ -150,6 +150,59 @@ TEST_F(MergeSplitTest, SplitWritesPiecesAndReports) {
   EXPECT_FALSE(window_.split_document(0, q(out_dir)));
 }
 
+// 같은 폴더에 다시 나누면 덮어쓰기를 한 번 묻는다 (리뷰 W3). 취소하면 파일이 그대로다
+TEST_F(MergeSplitTest, SplitAsksBeforeOverwriting) {
+  open_copy("bookmarks.pdf");
+  const auto out_dir = dir_ / "pieces";
+  std::filesystem::create_directory(out_dir);
+  bool done = false;
+  answer_box("split_done", QMessageBox::AcceptRole, nullptr, &done);
+  ASSERT_TRUE(window_.split_document(5, q(out_dir)));
+  ASSERT_TRUE(spin_until([&] { return done && !window_.structure_job()->active(); }));
+  const auto first = out_dir / "bookmarks-1.pdf";
+  const auto before = std::filesystem::last_write_time(first);
+  bool asked = false;
+  answer_box("split_overwrite", QMessageBox::RejectRole, nullptr, &asked);
+  EXPECT_FALSE(window_.split_document(5, q(out_dir)));
+  EXPECT_TRUE(asked);
+  EXPECT_FALSE(window_.structure_job()->active());
+  EXPECT_EQ(std::filesystem::last_write_time(first), before);
+  bool accepted = false;
+  answer_box("split_overwrite", QMessageBox::AcceptRole, nullptr, &accepted);
+  bool done2 = false;
+  answer_box("split_done", QMessageBox::AcceptRole, nullptr, &done2);
+  ASSERT_TRUE(window_.split_document(5, q(out_dir)));
+  ASSERT_TRUE(spin_until([&] { return accepted && done2 && !window_.structure_job()->active(); }));
+}
+
+// 암호 문서가 첫 입력이어도 결과가 열린다(평문) (리뷰 C1)
+TEST_F(MergeSplitTest, MergeWithEncryptedFirstInputOpensPlainResult) {
+  const auto out = dir_ / "plain.pdf";
+  ASSERT_TRUE(window_.merge_files({{testdata("encrypted-aes256.pdf"), "user"}, {testdata("simple.pdf"), ""}}, q(out)));
+  ASSERT_TRUE(wait_job());
+  ASSERT_TRUE(spin_until([&] { return window_.windowTitle().contains(QStringLiteral("plain.pdf")) && window_.document_view()->has_document(); }));
+  EXPECT_EQ(window_.document_view()->page_count(), 4);
+}
+
+// 암호 문서를 열어 둔 채 분할하면 세션의 암호로 읽는다 (리뷰 W2)
+TEST_F(MergeSplitTest, SplitUsesSessionPasswordForEncryptedDocument) {
+  const auto copy = dir_ / "locked.pdf";
+  std::filesystem::copy_file(testdata("encrypted-aes256.pdf"), copy);
+  window_.open_file(q(copy));
+  // 암호 요청 → 세션에 직접 암호로 다시 연다 (대화상자 우회)
+  ASSERT_TRUE(spin_until([&] { return !window_.document_view()->has_document() || true; }, 500));
+  window_.session_open_for_test(q(copy), QStringLiteral("user"));
+  ASSERT_TRUE(spin_until([&] { return window_.document_view()->has_document() && window_.windowTitle().contains(QStringLiteral("locked.pdf")); }));
+  const auto out_dir = dir_ / "locked-pieces";
+  std::filesystem::create_directory(out_dir);
+  bool done = false;
+  answer_box("split_done", QMessageBox::AcceptRole, nullptr, &done);
+  ASSERT_TRUE(window_.split_document(1, q(out_dir)));
+  ASSERT_TRUE(spin_until([&] { return done && !window_.structure_job()->active(); }));
+  EXPECT_TRUE(std::filesystem::exists(out_dir / "locked-1.pdf"));
+  EXPECT_TRUE(std::filesystem::exists(out_dir / "locked-2.pdf"));
+}
+
 TEST_F(MergeSplitTest, SplitAsksToSaveModifiedDocumentFirst) {
   open_copy("simple.pdf");
   window_.rotate_current_page(1);

@@ -44,14 +44,19 @@ jobs:
           brew install qt
           echo "QT_ROOT_DIR=$(brew --prefix qt)" >> "$GITHUB_ENV"
 
-      # vcpkg 바이너리 캐시 (qpdf·zlib·libjpeg-turbo 소스 빌드를 매번 반복하지 않게). GitHub Actions 캐시 백엔드
-      - name: Enable vcpkg binary cache
-        uses: actions/github-script@v7
+      # vcpkg 바이너리 캐시 (qpdf·zlib·libjpeg-turbo 소스 빌드를 매번 반복하지 않게). vcpkg 의 x-gha 백엔드는 제거됐으므로
+      # files 백엔드 디렉터리를 actions/cache 로 보존한다
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
         with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-            core.exportVariable('VCPKG_BINARY_SOURCES', 'clear;x-gha,readwrite');
+          path: ${{ github.workspace }}/vcpkg_cache
+          key: vcpkg-${{ matrix.name }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-${{ matrix.name }}-
+      - name: Prepare vcpkg binary cache dir
+        shell: bash
+        run: |
+          mkdir -p "${{ github.workspace }}/vcpkg_cache"
+          echo "VCPKG_BINARY_SOURCES=clear;files,${{ github.workspace }}/vcpkg_cache,readwrite" >> "$GITHUB_ENV"
 
       - name: Set up vcpkg
         uses: lukka/run-vcpkg@v11
@@ -89,14 +94,19 @@ jobs:
         with:
           version: "6.8.*"
           cache: true
-      # vcpkg 바이너리 캐시 (qpdf·zlib·libjpeg-turbo 소스 빌드를 매번 반복하지 않게). GitHub Actions 캐시 백엔드
-      - name: Enable vcpkg binary cache
-        uses: actions/github-script@v7
+      # vcpkg 바이너리 캐시 (qpdf·zlib·libjpeg-turbo 소스 빌드를 매번 반복하지 않게). vcpkg 의 x-gha 백엔드는 제거됐으므로
+      # files 백엔드 디렉터리를 actions/cache 로 보존한다
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
         with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-            core.exportVariable('VCPKG_BINARY_SOURCES', 'clear;x-gha,readwrite');
+          path: ${{ github.workspace }}/vcpkg_cache
+          key: vcpkg-app-linux-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-app-linux-
+      - name: Prepare vcpkg binary cache dir
+        shell: bash
+        run: |
+          mkdir -p "${{ github.workspace }}/vcpkg_cache"
+          echo "VCPKG_BINARY_SOURCES=clear;files,${{ github.workspace }}/vcpkg_cache,readwrite" >> "$GITHUB_ENV"
 
       - name: Set up vcpkg
         uses: lukka/run-vcpkg@v11
