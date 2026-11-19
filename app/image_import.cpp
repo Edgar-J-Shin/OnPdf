@@ -11,6 +11,12 @@
 namespace onpdf::app {
 namespace {
 
+// Qt 의 PDF 이미지 플러그인(QtPdf)이 있으면 "pdf" 도 이미지 형식으로 보인다 — PDF 는 이미지로 다루지 않는다 (드롭은 열기·삽입)
+bool is_excluded_format(const QString& format) {
+  const QString f = format.toLower();
+  return f == QStringLiteral("pdf") || f == QStringLiteral("svg") || f == QStringLiteral("svgz");
+}
+
 Result<ImportedImage> from_qimage(QImage image, const QString& format) {
   if (image.isNull()) return make_error(ErrorCode::kInvalidFormat, "empty image");
   if (static_cast<std::int64_t>(image.width()) * image.height() > engine::kMaxImagePixels) {
@@ -41,6 +47,7 @@ Result<ImportedImage> import_image_file(const QString& path, bool force_pixels) 
   reader.setAutoTransform(true);  // EXIF 회전을 픽셀에 반영
   const QString format = QString::fromLatin1(reader.format());
   if (format.isEmpty()) return make_error(ErrorCode::kInvalidFormat, reader.errorString().toStdString());
+  if (is_excluded_format(format)) return make_error(ErrorCode::kInvalidFormat, "not a raster image");
   const QSize size = reader.size();
   if (size.isValid() && static_cast<std::int64_t>(size.width()) * size.height() > engine::kMaxImagePixels) {
     return make_error(ErrorCode::kInvalidArgument, "image is too large");
@@ -81,17 +88,21 @@ Rect place_image(engine::PageSize page, Point origin, int pixel_width, int pixel
 
 QString image_file_filter() {
   QStringList patterns;
-  for (const QByteArray& f : QImageReader::supportedImageFormats()) patterns << QStringLiteral("*.") + QString::fromLatin1(f);
+  for (const QByteArray& f : QImageReader::supportedImageFormats()) {
+    if (!is_excluded_format(QString::fromLatin1(f))) patterns << QStringLiteral("*.") + QString::fromLatin1(f);
+  }
   patterns.removeDuplicates();
   return QObject::tr("이미지 (%1)").arg(patterns.join(QLatin1Char(' ')));
 }
 
 bool looks_like_image_file(const QString& path) {
   const QString suffix = path.section(QLatin1Char('.'), -1).toLower();
+  if (is_excluded_format(suffix)) return false;
   for (const QByteArray& f : QImageReader::supportedImageFormats()) {
     if (suffix == QString::fromLatin1(f).toLower()) return true;
   }
-  return QMimeDatabase().mimeTypeForFile(path).name().startsWith(QStringLiteral("image/"));
+  const QString mime = QMimeDatabase().mimeTypeForFile(path).name();
+  return mime.startsWith(QStringLiteral("image/")) && !mime.contains(QStringLiteral("svg"));
 }
 
 }  // namespace onpdf::app

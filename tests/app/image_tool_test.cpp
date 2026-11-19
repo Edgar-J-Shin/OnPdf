@@ -136,6 +136,14 @@ class ImageToolTest : public ::testing::Test {
   MainWindow window_;
 };
 
+TEST_F(ImageToolTest, PdfAndSvgAreNotImages) {
+  EXPECT_FALSE(looks_like_image_file(QStringLiteral("/tmp/a.pdf")));
+  EXPECT_FALSE(looks_like_image_file(QStringLiteral("/tmp/a.PDF")));
+  EXPECT_TRUE(looks_like_image_file(QStringLiteral("/tmp/a.png")));
+  EXPECT_TRUE(looks_like_image_file(QStringLiteral("/tmp/a.jpg")));
+  EXPECT_FALSE(image_file_filter().contains(QStringLiteral("*.pdf")));
+}
+
 TEST_F(ImageToolTest, PlaceImageRespectsPageAndScale) {
   const engine::PageSize letter{612, 792};
   Rect r = place_image(letter, {100, 100}, 120, 80, false);
