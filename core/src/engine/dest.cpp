@@ -52,6 +52,13 @@ std::array<double, 4> PageSpace::user_rect_of(const Rect& r) const {
   return {x0, y0, x1, y1};  // left, bottom, right, top
 }
 
+std::array<double, 6> PageSpace::user_matrix_at(Point origin_pt) const {
+  const Point e = to_user(origin_pt);
+  const Point right = to_user({origin_pt.x + 1.0, origin_pt.y});
+  const Point up = to_user({origin_pt.x, origin_pt.y - 1.0});
+  return {right.x - e.x, right.y - e.y, up.x - e.x, up.y - e.y, e.x, e.y};
+}
+
 std::array<float, 8> PageSpace::quad_of(const Rect& r) const {
   const auto u = user_rect_of(r);
   const auto l = static_cast<float>(u[0]), b = static_cast<float>(u[1]), rt = static_cast<float>(u[2]),

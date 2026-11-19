@@ -3,6 +3,7 @@
 #include "document_session.h"
 #include "document_view.h"
 #include "edit_controller.h"
+#include "onpdf/edit/font_face.h"
 #include "structure_job.h"
 #include "print_job.h"
 #include "onpdf/core/engine/pdfium_worker.h"
@@ -26,6 +27,7 @@ class QLabel;
 class QPrinter;
 class QToolBar;
 class QActionGroup;
+class QComboBox;
 class QToolButton;
 class QProgressDialog;
 class QSpinBox;
@@ -102,6 +104,14 @@ class MainWindow : public QMainWindow {
   bool delete_selected_annotation();
   // 메모 생성: contents 가 주어지면 대화상자 없이 만든다 (테스트용)
   bool add_note(int page, onpdf::Point pt, const QString& contents);
+  // ---- 텍스트 추가 (#45). 번들 폰트가 없으면 도구 비활성 ----
+  // 텍스트 상자 생성: 대화상자 없이 (테스트용·on_text_requested 가 부른다). 시작하면 true
+  bool add_text(int page, onpdf::Point pt, const QString& utf8);
+  bool set_text_font(const QString& path);  // 번들 폰트 교체 (테스트: 저장소 서브셋 폰트)
+  [[nodiscard]] bool has_text_font() const noexcept { return text_font_ != nullptr; }
+  [[nodiscard]] double text_size() const noexcept { return text_size_; }
+  void set_text_size(double size);
+  [[nodiscard]] QComboBox* text_size_combo() const noexcept { return text_size_combo_; }
   // ---- 병합·분할 (대화상자 없이 같은 경로를 타는 진입점, 테스트용으로도 쓴다). 시작하면 true ----
   bool merge_files(std::vector<engine::StructureInput> inputs, const QString& output);
   bool split_document(int every, const QString& directory);  // 현재 문서(디스크 파일)를 every 쪽마다
@@ -153,6 +163,8 @@ class MainWindow : public QMainWindow {
   void build_annotation_ui();
   void on_markup_requested(onpdf::engine::AnnotationKind kind, const MarkupItems& items);
   void on_note_requested(int page, onpdf::Point pt);
+  void on_text_requested(int page, onpdf::Point pt);
+  void load_bundled_text_font();
   void on_ink_requested(int page, const std::vector<onpdf::Point>& points, onpdf::Rect bbox);
   void on_shape_requested(int page, onpdf::engine::AnnotationKind kind, onpdf::Rect rect);
   void update_property_buttons();
@@ -235,6 +247,10 @@ class MainWindow : public QMainWindow {
   QToolButton* opacity_button_ = nullptr;  // 불투명도 ▾
   double shape_border_width_ = 2.0;
   std::uint8_t shape_alpha_ = 255;
+  std::shared_ptr<const edit::FontFace> text_font_;  // 새 텍스트 글꼴 (불변, Command 와 공유)
+  QString text_font_path_;
+  QComboBox* text_size_combo_ = nullptr;
+  double text_size_ = 24.0;
   QAction* delete_annotation_action_ = nullptr;
   QAction* markup_selection_actions_[3] = {};  // 하이라이트·밑줄·취소선 (선택 영역)
   engine::Color annotation_color_{255, 255, 0, 255};

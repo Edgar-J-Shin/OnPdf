@@ -33,3 +33,14 @@ target_link_libraries(onpdf_app PRIVATE onpdf_app_lib Qt6::Widgets)
 target_compile_definitions(onpdf_app PRIVATE ONPDF_VERSION="${PROJECT_VERSION}")
 onpdf_set_warnings(onpdf_app)
 onpdf_set_runtime_rpath(onpdf_app)
+
+# 번들 글꼴 (#45): third_party/fetch_fonts.py 가 받아 둔 Noto Sans KR 을 실행 파일 옆 fonts/ 로 복사한다. 없으면 경고만 (텍스트 도구 비활성)
+set(ONPDF_BUNDLED_FONT "${CMAKE_SOURCE_DIR}/third_party/fonts/NotoSansKR[wght].ttf")
+if(EXISTS "${ONPDF_BUNDLED_FONT}")
+  add_custom_command(TARGET onpdf_app POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:onpdf_app>/fonts"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ONPDF_BUNDLED_FONT}" "${CMAKE_SOURCE_DIR}/third_party/fonts/OFL-NotoSansKR.txt" "$<TARGET_FILE_DIR:onpdf_app>/fonts/"
+    COMMENT "Copying bundled font (Noto Sans KR, OFL)")
+else()
+  message(WARNING "번들 글꼴이 없습니다: python3 third_party/fetch_fonts.py 를 먼저 실행하세요 (텍스트 추가 도구가 비활성됩니다)")
+endif()

@@ -49,6 +49,16 @@ OnPdf 는 Apache License 2.0 으로 배포되며, 아래 제3자 구성 요소�
 - 출처: https://libjpeg-turbo.org (vcpkg)
 - 라이선스: IJG License 및 BSD-3-Clause (SIMD 코드 일부는 zlib License)
 
+### HarfBuzz
+- 출처: https://github.com/harfbuzz/harfbuzz (vcpkg 포트 15.1.0, `freetype` feature 끔)
+- 라이선스: MIT ("Old MIT"). 전체 문구는 배포본의 `COPYING`
+- 용도: 새 텍스트의 글자 배치·측정과 서브셋 임베딩(hb-subset). 정적 링크(edit 계층)
+
+### Noto Sans KR (번들 글꼴)
+- 출처: https://github.com/google/fonts/tree/main/ofl/notosanskr (`third_party/fonts-version.txt` 의 커밋으로 고정, `third_party/fetch_fonts.py`)
+- 라이선스: SIL Open Font License 1.1 (`fonts/OFL-NotoSansKR.txt` 를 글꼴과 함께 배포). 이름을 바꾸지 않고 원본 그대로 번들하며, 문서에는 서브셋을 임베딩한다(OFL 허용)
+- 용도: 텍스트 추가 도구의 기본 글꼴
+
 ## 개발·테스트에만 쓰는 구성 요소 (배포물에 포함되지 않음)
 
 | 구성 요소 | 용도 | 라이선스 |

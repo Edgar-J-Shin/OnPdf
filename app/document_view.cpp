@@ -1018,6 +1018,7 @@ void DocumentView::update_hover(QPointF viewport_pos) {
       tool_ == AnnotationTool::kCircle) {
     cursor = Qt::CrossCursor;
   }
+  if (tool_ == AnnotationTool::kText) cursor = Qt::IBeamCursor;
   QString tooltip;
   if (auto hit = page_point_at(viewport_pos)) {
     const auto [page, pt] = *hit;
@@ -1150,6 +1151,13 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
     if (auto hit = page_point_at(event->position())) {
       const auto [page, pt] = *hit;
       emit note_requested(page, clamp_to_page(page, pt));
+    }
+    return;
+  }
+  if (tool_ == AnnotationTool::kText) {
+    if (auto hit = page_point_at(event->position())) {
+      const auto [page, pt] = *hit;
+      emit text_requested(page, clamp_to_page(page, pt));
     }
     return;
   }

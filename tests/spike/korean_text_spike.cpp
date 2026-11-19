@@ -348,5 +348,89 @@ TEST(KoreanTextSpike, ExplicitCidType2Font) {
   }
 }
 
+// F. (설계 확인) 텍스트 객체를 넣었다 지운 뒤 저장하면 폰트 사전이 남는가? GenerateContent 가 원본 내용을 보존하는가?
+TEST(KoreanTextSpike, RemoveLeavesFontAndPreservesContent) {
+  const auto font_path = testdata("fonts") / "NotoSansKR-subset.ttf";
+  const auto data = read_file(font_path);
+  const std::string in_utf8 = onpdf::path_to_utf8(testdata("simple.pdf"));
+  // 기준 렌더
+  auto original = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(original);
+  RenderOptions options;
+  options.scale = 2.0f;
+  auto before = original->render_page(0, options);
+  ASSERT_TRUE(before);
+  for (int remove = 0; remove < 2; ++remove) {
+    FPDF_DOCUMENT doc = FPDF_LoadDocument(in_utf8.c_str(), nullptr);
+    ASSERT_NE(doc, nullptr);
+    FPDF_PAGE page = FPDF_LoadPage(doc, 0);
+    const int count_before = FPDFPage_CountObjects(page);
+    FPDF_FONT font = FPDFText_LoadFont(doc, data.data(), static_cast<uint32_t>(data.size()), FPDF_FONT_TRUETYPE, 1);
+    FPDF_PAGEOBJECT obj = FPDFPageObj_CreateTextObj(doc, font, 24.0f);
+    const auto wide = to_utf16("한글 문서");
+    ASSERT_TRUE(FPDFText_SetText(obj, wide.data()));
+    FPDFPageObj_Transform(obj, 1, 0, 0, 1, 72, 500);
+    // 마크로 정체성 부여
+    FPDF_PAGEOBJECTMARK mark = FPDFPageObj_AddMark(obj, "OnPdf");
+    ASSERT_NE(mark, nullptr);
+    ASSERT_TRUE(FPDFPageObjMark_SetStringParam(doc, obj, mark, "id", "onpdf-text-0001"));
+    FPDFPage_InsertObject(page, obj);
+    ASSERT_TRUE(FPDFPage_GenerateContent(page));
+    if (remove) {
+      // 마크로 찾아 제거
+      const int n = FPDFPage_CountObjects(page);
+      FPDF_PAGEOBJECT found = nullptr;
+      for (int i = 0; i < n; ++i) {
+        FPDF_PAGEOBJECT o = FPDFPage_GetObject(page, i);
+        const int marks = FPDFPageObj_CountMarks(o);
+        for (int m = 0; m < marks; ++m) {
+          FPDF_PAGEOBJECTMARK mk = FPDFPageObj_GetMark(o, static_cast<unsigned long>(m));
+          FPDF_WCHAR value[64] = {};  // UTF-16LE
+          unsigned long out = 0;
+          if (FPDFPageObjMark_GetParamStringValue(mk, "id", value, sizeof value, &out)) {
+            std::string ascii;
+            for (unsigned long k = 0; k + 1 < out / 2 && value[k] != 0; ++k) ascii.push_back(static_cast<char>(value[k]));
+            if (ascii == "onpdf-text-0001") found = o;
+          }
+        }
+      }
+      ASSERT_NE(found, nullptr) << "마크로 다시 찾을 수 있다";
+      ASSERT_TRUE(FPDFPage_RemoveObject(page, found));
+      FPDFPageObj_Destroy(found);
+      ASSERT_TRUE(FPDFPage_GenerateContent(page));
+      EXPECT_EQ(FPDFPage_CountObjects(page), count_before);
+    }
+    FileWriter writer;
+    FPDF_SaveAsCopy(doc, &writer, FPDF_NO_INCREMENTAL);
+    FPDF_ClosePage(page);
+    FPDFFont_Close(font);
+    FPDF_CloseDocument(doc);
+    const std::string bytes(writer.bytes.begin(), writer.bytes.end());
+    const bool has_fontfile = bytes.find("/FontFile2") != std::string::npos;
+    const bool has_mark = bytes.find("OnPdf") != std::string::npos;
+    std::cout << "[spike] " << (remove ? "add+remove" : "add") << ": size=" << bytes.size() << "B fontfile=" << has_fontfile
+              << " mark_in_content=" << has_mark << "\n";
+    const auto out_path = spike_out_dir() / (remove ? "spike-removed.pdf" : "spike-marked.pdf");
+    { std::ofstream out(out_path, std::ios::binary); out << bytes; }
+    auto reopened = PdfiumDocument::open(out_path);
+    ASSERT_TRUE(reopened);
+    auto after = reopened->render_page(0, options);
+    ASSERT_TRUE(after);
+    // 텍스트 영역(사용자 y 500 근처, 쪽 포인트 y ≈ 792-500) 밖은 원본과 픽셀 단위로 같아야 한다
+    int diff = 0, total = 0;
+    for (int y = 0; y < before->height; ++y) {
+      if (y >= (792 - 530) * 2 && y <= (792 - 490) * 2) continue;
+      const auto* a = before->pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(before->stride);
+      const auto* b = after->pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(after->stride);
+      for (int x = 0; x < before->width * 4; ++x) { ++total; if (a[x] != b[x]) ++diff; }
+    }
+    std::cout << "[spike]   pixels outside text differing: " << diff << " / " << total << "\n";
+    EXPECT_EQ(diff, 0) << "GenerateContent 가 원본 내용을 바꿨다";
+    if (remove) {
+      EXPECT_EQ(reopened->load_text(0)->all_text().find("한글"), std::string::npos);
+    }
+  }
+}
+
 }  // namespace
 }  // namespace onpdf::engine

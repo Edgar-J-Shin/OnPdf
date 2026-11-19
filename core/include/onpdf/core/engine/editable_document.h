@@ -5,6 +5,7 @@
 
 #include "onpdf/core/engine/annotation.h"
 #include "onpdf/core/engine/render_types.h"
+#include "onpdf/core/engine/text_object.h"
 #include "onpdf/core/error.h"
 
 #include <filesystem>
@@ -93,6 +94,15 @@ class EditableDocument {
   // AP 를 지우고 /Border 폭을 쓴다 (Ink·Square·Circle). /BS 가 있는 주석은 거절한다 — PDFium 은 /BS /W 를 우선하고
   // /BS 를 지울 API 가 없다 (Command 가 삭제·재생성으로 우회)
   [[nodiscard]] virtual Result<void> set_annotation_border_width(int page_index, std::string_view id, double width) = 0;
+
+  // ---- 텍스트 객체 (쪽 콘텐츠, #45). 정체성은 마크 콘텐츠 "OnPdf" 의 id 파라미터 ----
+  // 줄마다 텍스트 객체를 만들고 쪽 콘텐츠를 다시 생성한다. 폰트는 spec.font.key 로 문서가 캐시해 재사용한다.
+  // 돌려주는 값 = 줄별 객체 id (spec.ids 가 있으면 그대로). 중간 실패 시 만든 객체를 지우고 오류 (문서 원상)
+  [[nodiscard]] virtual Result<std::vector<std::string>> add_text_objects(int page_index, const TextObjectsSpec& spec) = 0;
+  // id 들을 전부 찾은 뒤에만 지운다 (하나라도 없으면 kInvalidArgument, 아무것도 지우지 않음)
+  [[nodiscard]] virtual Result<void> remove_text_objects(int page_index, const std::vector<std::string>& ids) = 0;
+  // OnPdf 가 만든 텍스트 객체 목록 (저장 검증·선택용)
+  [[nodiscard]] virtual Result<std::vector<TextObjectInfo>> text_objects(int page_index) const = 0;
 };
 
 }  // namespace onpdf::engine

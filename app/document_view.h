@@ -41,9 +41,9 @@ class DocumentTileSource;
 enum class ZoomMode { kFitWidth, kFitPage, kCustom };
 
 // 주석 도구. kSelect 는 기존 동작(텍스트 선택·링크) + 주석 선택
-enum class AnnotationTool { kSelect, kHighlight, kUnderline, kStrikeOut, kNote, kPen, kSquare, kCircle };
-constexpr int kAnnotationToolCount = 8;
-static_assert(kAnnotationToolCount == static_cast<int>(AnnotationTool::kCircle) + 1, "도구를 추가하면 수를 맞춘다");
+enum class AnnotationTool { kSelect, kHighlight, kUnderline, kStrikeOut, kNote, kPen, kSquare, kCircle, kText };
+constexpr int kAnnotationToolCount = 9;
+static_assert(kAnnotationToolCount == static_cast<int>(AnnotationTool::kText) + 1, "도구를 추가하면 수를 맞춘다");
 // 마크업 요청: (쪽, 줄별 사각형(쪽 포인트))
 using MarkupItems = std::vector<std::pair<int, std::vector<onpdf::Rect>>>;
 
@@ -130,6 +130,7 @@ class DocumentView : public QAbstractScrollArea {
   // ---- 주석 (MainWindow 가 Command 로 바꾼다) ----
   void markup_requested(onpdf::engine::AnnotationKind kind, const onpdf::app::MarkupItems& items);
   void note_requested(int page, onpdf::Point pt);  // 쪽 포인트 (쪽 안으로 클램프됨)
+  void text_requested(int page, onpdf::Point pt);  // 텍스트 상자 왼쪽 위 (쪽 포인트, 클램프됨) — #45
   void ink_requested(int page, const std::vector<onpdf::Point>& points, onpdf::Rect bbox);
   void shape_requested(int page, onpdf::engine::AnnotationKind kind, onpdf::Rect rect);  // 쪽 포인트, 4pt 이상
   void annotation_selected(bool has, const onpdf::engine::AnnotationInfo& info);

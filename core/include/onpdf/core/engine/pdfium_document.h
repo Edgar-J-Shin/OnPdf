@@ -61,7 +61,11 @@ class PdfiumDocument final : public EditableDocument {
   [[nodiscard]] Result<void> set_annotation_contents(int page_index, std::string_view id,
                                                      std::string_view utf8) override;
   [[nodiscard]] Result<void> set_annotation_border_width(int page_index, std::string_view id, double width) override;
+  [[nodiscard]] Result<std::vector<std::string>> add_text_objects(int page_index, const TextObjectsSpec& spec) override;
+  [[nodiscard]] Result<void> remove_text_objects(int page_index, const std::vector<std::string>& ids) override;
+  [[nodiscard]] Result<std::vector<TextObjectInfo>> text_objects(int page_index) const override;
   [[nodiscard]] int snapshot_count() const noexcept { return static_cast<int>(snapshots_.size()); }  // 테스트용
+  [[nodiscard]] int font_cache_size() const noexcept { return static_cast<int>(fonts_.size()); }     // 테스트용
 
   // ---- 저장 ----
   // 파일에 스트림으로 저장한다 (FPDF_SaveAsCopy). incremental 이면 원본 바이트 뒤에 변경만 덧붙인다(서명 보존).
@@ -110,6 +114,8 @@ class PdfiumDocument final : public EditableDocument {
   std::string password_;
   std::unordered_map<SnapshotId, Snapshot> snapshots_;
   SnapshotId next_snapshot_ = 1;
+  // 임베딩 폰트 캐시: 서브셋 key → 문서에 로드된 폰트. doc_ 보다 뒤에 선언 → 먼저 닫힌다
+  std::unordered_map<std::string, ScopedFont> fonts_;
 };
 
 }  // namespace onpdf::engine

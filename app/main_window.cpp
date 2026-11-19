@@ -6,6 +6,7 @@
 #include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/engine/save.h"
 #include "onpdf/core/page_ranges.h"
+#include "onpdf/edit/add_text_command.h"
 #include "onpdf/edit/annotation_commands.h"
 #include "onpdf/edit/delete_pages.h"
 #include "onpdf/edit/insert_pages.h"
@@ -21,6 +22,7 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QToolBar>
+#include <QComboBox>
 #include <QToolButton>
 #include <QApplication>
 #include <QClipboard>
@@ -121,6 +123,7 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(edit_, &EditController::document_changed, this, &MainWindow::on_document_changed);
   connect(view_, &DocumentView::markup_requested, this, &MainWindow::on_markup_requested);
   connect(view_, &DocumentView::note_requested, this, &MainWindow::on_note_requested);
+  connect(view_, &DocumentView::text_requested, this, &MainWindow::on_text_requested);
   connect(view_, &DocumentView::ink_requested, this, &MainWindow::on_ink_requested);
   connect(view_, &DocumentView::shape_requested, this, &MainWindow::on_shape_requested);
   connect(view_, &DocumentView::annotation_selected, this, &MainWindow::on_annotation_selected);
@@ -185,6 +188,7 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   });
 
   resize(900, 1000);
+  load_bundled_text_font();  // 모든 위젯·액션이 만들어진 뒤 (update_edit_actions 를 부른다)
 }
 
 MainWindow::~MainWindow() {
@@ -370,6 +374,7 @@ QString MainWindow::command_label(std::string_view id) const {
   if (id == "add_ink") return tr("펜 추가");
   if (id == "add_square") return tr("사각형 추가");
   if (id == "add_circle") return tr("원 추가");
+  if (id == "add_text") return tr("텍스트 추가");
   if (id == "set_annotation_border_width") return tr("선 두께 변경");
   if (id == "set_annotation_opacity") return tr("불투명도 변경");
   if (id == "remove_annotation") return tr("주석 삭제");
@@ -427,6 +432,21 @@ void MainWindow::update_edit_actions() {
   }
   delete_annotation_action_->setEnabled(annotation_edits_allowed_ && view_->selected_annotation().has_value());
   color_button_->setEnabled(can_annotate);
+  // 텍스트 추가는 내용 수정 권한(비트 4) + 번들 폰트. 바쁨·저장·인쇄 중 요청은 annotation_edits_allowed_ 와 같은 규칙으로 막는다
+  if (QAction* text_tool = tool_actions_[static_cast<int>(AnnotationTool::kText)]; text_tool != nullptr) {
+    const bool can_edit_contents = has_pages && session_.handle().info().permissions.modify_contents;
+    const bool text_ok = can_edit_contents && text_font_ != nullptr;
+    text_tool->setEnabled(text_ok);
+    text_tool->setStatusTip(!has_pages ? QString()
+                            : !can_edit_contents ? tr("이 문서는 내용 수정이 허용되지 않습니다")
+                            : text_font_ == nullptr ? tr("글꼴 파일이 없습니다 (python3 third_party/fetch_fonts.py)")
+                                                    : QString());
+    if (text_size_combo_ != nullptr) text_size_combo_->setEnabled(text_ok);
+    if (!text_ok && view_->tool() == AnnotationTool::kText) {
+      tool_actions_[0]->setChecked(true);
+      view_->set_tool(AnnotationTool::kSelect);
+    }
+  }
   if (width_button_ != nullptr) {
     const auto selected = view_->selected_annotation();
     const bool width_ok = can_annotate && (!selected || has_border_width(selected->kind));
@@ -618,10 +638,11 @@ void MainWindow::build_annotation_ui() {
   tool_group_ = new QActionGroup(this);
   tool_group_->setExclusive(true);
   const QString names[kAnnotationToolCount] = {tr("선택(&S)"), tr("하이라이트(&H)"), tr("밑줄(&U)"), tr("취소선(&K)"),
-                                               tr("메모(&N)"), tr("펜(&P)"), tr("사각형(&R)"), tr("원(&O)")};
+                                               tr("메모(&N)"), tr("펜(&P)"), tr("사각형(&R)"), tr("원(&O)"), tr("텍스트(&T)")};
   const QString tips[kAnnotationToolCount] = {tr("텍스트를 선택하거나 주석을 고른다"), tr("드래그한 글에 하이라이트"),
                                               tr("드래그한 글에 밑줄"), tr("드래그한 글에 취소선"), tr("클릭한 자리에 메모"),
-                                              tr("드래그로 자유 선"), tr("드래그한 영역에 사각형 테두리"), tr("드래그한 영역에 원")};
+                                              tr("드래그로 자유 선"), tr("드래그한 영역에 사각형 테두리"), tr("드래그한 영역에 원"),
+                                              tr("클릭한 자리에 텍스트 상자 (쪽 내용에 들어간다)")};
   for (int i = 0; i < kAnnotationToolCount; ++i) {
     QAction* action = tool_group_->addAction(names[i]);
     action->setCheckable(true);
@@ -684,6 +705,16 @@ void MainWindow::build_annotation_ui() {
   }
   opacity_button_->setMenu(opacity_popup);
   annotation_toolbar_->addWidget(opacity_button_);
+  // 텍스트 크기 (텍스트 도구 전용)
+  text_size_combo_ = new QComboBox(annotation_toolbar_);
+  text_size_combo_->setObjectName(QStringLiteral("text_size"));
+  text_size_combo_->setToolTip(tr("텍스트 크기"));
+  for (int pt : {8, 10, 12, 14, 18, 24, 36, 48, 72}) text_size_combo_->addItem(tr("%1pt").arg(pt), pt);
+  text_size_combo_->setCurrentIndex(5);  // 24pt
+  connect(text_size_combo_, &QComboBox::currentIndexChanged, this, [this](int index) {
+    if (index >= 0) text_size_ = text_size_combo_->itemData(index).toDouble();
+  });
+  annotation_toolbar_->addWidget(text_size_combo_);
   update_property_buttons();
   annotation_toolbar_->addSeparator();
   delete_annotation_action_ = annotation_toolbar_->addAction(tr("주석 삭제"), this, [this] { delete_selected_annotation(); });
@@ -814,6 +845,76 @@ bool MainWindow::add_note(int page, onpdf::Point pt, const QString& contents) {
   spec.author = annotation_author();
   return edit_->run(std::make_shared<edit::AddAnnotationsCommand>(
       std::vector<std::pair<int, engine::AnnotationSpec>>{{page, std::move(spec)}}));
+}
+
+// ---------------------------------------------------------------- 텍스트 추가 (#45)
+
+void MainWindow::load_bundled_text_font() {
+  // 빌드가 third_party/fonts/ 의 Noto Sans KR 을 실행 파일 옆 fonts/ 로 복사한다 (fetch_fonts.py). 없으면 도구 비활성
+  const QString dir = QCoreApplication::applicationDirPath();
+  for (const QString& candidate : {dir + QStringLiteral("/fonts/NotoSansKR[wght].ttf"),
+                                   dir + QStringLiteral("/../Resources/fonts/NotoSansKR[wght].ttf")}) {
+    if (QFileInfo::exists(candidate) && set_text_font(candidate)) return;
+  }
+}
+
+bool MainWindow::set_text_font(const QString& path) {
+  auto face = edit::FontFace::load(onpdf::path_from_utf8(path.toUtf8().toStdString()));
+  if (!face) {
+    text_font_.reset();
+    text_font_path_.clear();
+    update_edit_actions();
+    return false;
+  }
+  text_font_ = *face;
+  text_font_path_ = path;
+  update_edit_actions();
+  return true;
+}
+
+void MainWindow::set_text_size(double size) {
+  text_size_ = size;
+  if (text_size_combo_ == nullptr) return;
+  const int index = text_size_combo_->findData(static_cast<int>(size));
+  if (index >= 0) text_size_combo_->setCurrentIndex(index);
+}
+
+void MainWindow::on_text_requested(int page, onpdf::Point pt) {
+  if (!annotation_edits_allowed_ || text_font_ == nullptr) return;
+  for (;;) {
+    AnnotationDialog dialog(tr("텍스트"), QString(), this);
+    dialog.setObjectName(QStringLiteral("text_input"));
+    if (dialog.exec() != QDialog::Accepted) return;
+    const QString text = dialog.text();
+    if (text.trimmed().isEmpty()) return;  // 빈 텍스트는 만들지 않는다
+    const std::u32string missing = text_font_->missing(text.toUtf8().toStdString());
+    if (missing.empty()) {
+      add_text(page, pt, text);
+      return;
+    }
+    QMessageBox box(QMessageBox::Warning, tr("텍스트"),
+                    tr("글꼴에 없는 글자가 있습니다: %1\n다른 글자로 바꿔 주세요.")
+                        .arg(QString::fromStdU32String(missing.substr(0, 10))),
+                    QMessageBox::Ok, this);
+    box.setObjectName(QStringLiteral("text_missing_glyphs"));
+    box.exec();
+  }
+}
+
+bool MainWindow::add_text(int page, onpdf::Point pt, const QString& utf8) {
+  if (!annotation_edits_allowed_ || !view_->has_document() || text_font_ == nullptr) return false;
+  if (!session_.handle().info().permissions.modify_contents) return false;
+  if (utf8.trimmed().isEmpty()) return false;
+  if (!warn_signature_once()) return false;
+  edit::TextBoxSpec spec;
+  spec.page = page;
+  spec.origin = pt;
+  spec.size = text_size_;
+  spec.color = annotation_color_;
+  spec.color.a = 255;
+  spec.utf8 = utf8.toUtf8().toStdString();
+  spec.face = text_font_;
+  return edit_->run(std::make_shared<edit::AddTextCommand>(std::move(spec)));
 }
 
 void MainWindow::on_ink_requested(int page, const std::vector<onpdf::Point>& points, onpdf::Rect bbox) {

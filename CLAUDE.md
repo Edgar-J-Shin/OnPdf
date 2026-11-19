@@ -28,7 +28,7 @@ Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜
 - PDF 엔진: PDFium (`bblanchon/pdfium-binaries` 사전 빌드, Chromium 브랜치 번호로 버전 고정 — `third_party/` 스크립트)
 - 구조 작업: qpdf 12 (vcpkg, 라이브러리만·내장 암호 공급자) — 병합·분할·구조 검사. 헤더는 `core/src/engine/qpdf_tools.cpp` 에서만. 암호화 설정·복구 저장은 후속
 - UI: Qt 6 Widgets, **동적 링크**(LGPL 준수)
-- 글자 배치: HarfBuzz + FreeType
+- 글자 배치·서브셋: HarfBuzz(vcpkg, `default-features: false`, `harfbuzz::harfbuzz-subset`) — **edit 에만** 링크. FreeType 은 쓰지 않는다(PDFium 공유 라이브러리가 `FT_*` 154개를 내보내 Linux 에서 충돌 위험). 번들 글꼴 Noto Sans KR(OFL)은 `third_party/fetch_fonts.py` 로 받아 앱 빌드가 `bin/fonts/` 로 복사한다(저장소에 없음)
 - 테스트: GoogleTest + 렌더링 이미지 비교
 - CI: GitHub Actions — `windows-latest`·`macos-latest` 는 Qt 앱·app 테스트까지(`dev-app`), `ubuntu-latest` 는 core(`dev`) + testdata 결정성 검사
 - 설치 파일: WiX 또는 Inno Setup (M5)
@@ -42,6 +42,8 @@ Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜
 export VCPKG_ROOT=$HOME/vcpkg
 export QT_ROOT=$(brew --prefix qt)      # dev-app preset 이 CMAKE_PREFIX_PATH 로 넘긴다 (Homebrew qt 6.12)
 python3 third_party/fetch_pdfium.py     # PDFium 사전 빌드 받기 (버전: third_party/pdfium-version.txt)
+python3 third_party/fetch_fonts.py      # 번들 글꼴 Noto Sans KR 받기 (없으면 앱의 텍스트 추가 도구가 비활성; 테스트는 저장소 서브셋을 쓴다)
+# vcpkg 의 harfbuzz 는 meson 빌드라 python ≥ 3.10 이 PATH 에 있어야 한다 (macOS 기본 3.9 → brew python 을 앞에)
 cmake --preset dev                      # configure (vcpkg manifest 설치 포함)
 cmake --build --preset dev              # build all → build/dev/bin/
 ctest --preset dev                      # unit + rendering regression + roundtrip(열기→저장→다시 열기, qpdf 있으면 --check)
@@ -73,6 +75,7 @@ app/          Qt UI (Qt 의존). onpdf_app_lib(UiDispatcher·DocumentSession·qt
 edit/         Command(execute/undo/discard, EditableDocument 로만 문서 변경)·UndoStack(저장 지점, push 가 밀려난 명령 반환)
               RotatePageCommand(여러 쪽)·DeletePagesCommand(스냅샷으로 취소)·MovePagesCommand(역순열 취소)·InsertPagesCommand(파일 스냅샷)
               annotation_commands(AddAnnotations·RemoveAnnotation·SetAnnotationColor·SetAnnotationContents — /NM 과 값만 보관)
+              font_face(HarfBuzz pimpl: 배치·글리프 없음·서브셋(GID 재배치)·ToUnicode 생성)·text_layout(줄·기준선)·AddTextCommand(객체 id 보관)
               page_ops(normalize·validate_move·simulate_move·apply_order·structural_change). 선택·텍스트 블록·폰트(M3)
 core/         Document, Page, 렌더 캐시(타일 LRU), 텍스트 인덱스       (Qt 의존 금지)
 core/engine/  PdfiumLibrary(init RAII) · PdfiumDocument(열기·크기·렌더·load_text·load_outline·resolve_location·print_preferences·회전·save_to — EditableDocument 구현) · TextPage(FPDFText/FPDFLink 추출, 좌표 변환) · dest(목적지·URI·UTF-16 변환 공용, 내부) · pdfium_handles
@@ -92,6 +95,7 @@ core/view/    PageLayout(세로 연속 레이아웃·좌표 변환) · tile.h(Ti
               search(SearchSession: 현재 쪽부터 순환 검색, 동시 4쪽·kNormal, 세대·10만 상한 — 실행기 주입, 메인 스레드; map_source_range)   (Qt 금지)
 core/platform/ path.h (UTF-8 ↔ std::filesystem::path)
 cli/          렌더·병합·검증용 명령줄 도구                            (core/edit 만 사용)
+tests/spike/  기술 검증 실험 (ONPDF_BUILD_SPIKES=ON 에서만 빌드, ctest 미등록, PDFium 헤더 직접 사용 허용)
 tests/        단위 테스트, 렌더링 회귀, 왕복 테스트
 testdata/     테스트 PDF + 기준 PNG
 third_party/  PDFium 바이너리 다운로드 스크립트
@@ -128,6 +132,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 - **스냅샷은 문서가 소유한다.** 삭제 취소용 쪽 사본·삽입 소스는 `PdfiumDocument::snapshots_`(워커 전용 PDFium 문서)에 있고 Command 는 `SnapshotId` 만 쥔다 — Command 는 메인 스레드(실행 취소 스택)에서 소멸하므로 PDFium 핸들을 직접 쥐면 안 된다. 스택에서 밀려난 Command 는 `EditController` 가 워커에서 `discard` 를 불러 해제한다. `FPDF_MovePages` 는 실패 시 문서가 불확정이므로 `validate_move` 로 호출 전에 전부 검증한다. 전체 삭제는 금지(쪽 ≥ 1)
 - **주석(#35):** 좌표는 뷰·Command 는 쪽 포인트, PDF 는 사용자 좌표 — 변환은 `detail::PageSpace::to_user/quad_of/user_rect_of`(engine 안)에서만. 마크업 QuadPoints 는 선택 사각형(`selection_rects`) 꼭짓점을 변환해 좌상·우상·좌하·우하 순서. **새 주석은 AP 없이 만든다**(PDFium 이 렌더 때 AP 를 만들어 사전에 저장한다). AP 가 있으면 `FPDFAnnot_SetColor` 가 실패하므로 색 변경은 `SetAP(Normal, nullptr)` → `SetColor`, 취소는 보관한 이전 AP 로 `SetAP`. 정체성은 /NM(없는 기존 주석은 `"#<index>"` 로 가리키고 편집 때 `onpdf-<16진 16자>` 를 부여). `FPDFPage_RemoveAnnot` 는 되돌릴 수 없어 삭제 취소는 `AnnotationSnapshot`(색·내부색·불투명도·Quad·Ink·플래그·문자열 — **AP 는 보관하지 않는다**: `GetAP/SetAP` 텍스트 복원은 `/Resources` 를 잃어 하이라이트가 글자를 덮는다)으로 재생성하고 PDFium 이 모양을 다시 만든다(같은 NM, /Annots 끝). `snapshot_annotation` 은 AP 를 지우고 색을 읽으므로 삭제·색 변경 직전에만 부른다. Print 플래그 필수(없으면 인쇄 안 됨), 메모는 NoZoom|NoRotate. Popup 은 만들지 않고(FPDF_ANNOT 가 그리지 않음) 메모 내용은 툴팁·`AnnotationDialog`. 링크·위젯·팝업은 `editable=false`. 뷰는 보이는 쪽 ±1 의 `load_annotations`(kLow) 스냅샷으로 hit-test 하고 `invalidate_pages` 가 캐시를 버린다. 도구 모드는 `DocumentView::set_tool`, 도구·단축키는 `permissions.annotate` 로 게이트
 - **도형·속성(#39):** 사각형·원은 `AnnotationSpec::rect`(쪽 포인트) + `border_width`(`/Border` 폭) + 선택적 `interior`(`/IC`, 알파는 `color.a` 와 같이 `/CA` 하나). `AnnotationInfo` 가 `border_width`·`opacity`(`/CA` 를 AP 와 무관하게 읽음)·`has_bs` 를 실어 뷰·메뉴가 메인에서 판단한다. **불투명도는 `/CA` = 색 알파로만 쓴다**(`FPDFAnnot_SetNumberValue` 없음) — `SetAnnotationOpacityCommand` 는 `set_annotation_color` 에 알파만 바꿔 호출하고 취소는 색 전체. 두께 `SetAnnotationBorderWidthCommand` 는 도형·펜만; **`/BS` 가 있는 주석(다른 프로그램)은 PDFium 이 `/BS /W` 를 우선하고 `/BS` 를 지울 API 가 없어 삭제 → 같은 NM 으로 `/BS` 없이 재생성**(원래 폭은 읽을 수 없어 취소 때 돌아오지 않음). `FPDFAnnot_GetColor` 는 `/C`·`/IC` 가 없어도 기본 검정으로 성공하므로 `has_color`·`has_interior` 는 `FPDFAnnot_HasKey` 로 판정한다. 앱의 두께·불투명도 드롭다운은 선택이 있으면 그 주석에 Command, 없으면 **새 도형·펜의 기본값만**(마크업·메모는 항상 100%). 편집 뒤 뷰는 같은 NM 을 다시 고른다(`reselect_`; `"#index"` 는 해제)
+- **텍스트 추가(#45):** 쪽 객체 API 는 `EditableDocument::add_text_objects/remove_text_objects/text_objects`(`text_object.h`, PDFium 없음). **정체성은 마크 콘텐츠** `OnPdf` + `id` 파라미터(`onpdf-text-<16진 16자>`; 파라미터 값은 UTF-16LE 로 돌아온다). 글꼴은 edit 의 `FontFace`(HarfBuzz)가 배치·서브셋·ToUnicode 를 만들고 엔진은 `FPDFText_LoadCidType2Font` + `FPDFText_SetCharcodes`(CID = 서브셋의 새 GID) 로 넣는다 — `FPDFText_LoadFont` 의 자동 ToUnicode·전체 임베딩 금지(#43). **문서가 서브셋 key(FNV-1a) 로 `FPDF_FONT` 를 캐시**해 재실행·같은 글자 집합은 한 번만 임베딩한다(지운 뒤에도 폰트 사전은 저장에 남는다 — 알려진 제한). 회전 쪽 행렬은 `PageSpace::user_matrix_at`(기준점·기저 벡터 변환, 회전 분기 없음). `FPDFPage_GenerateContent` 는 원본 내용을 보존한다(테스트가 픽셀 단위로 확인). 글꼴에 없는 글자(.notdef)는 Command 가 거절하고 앱은 입력 창에서 경고. 공백/NBSP 처럼 글리프를 공유하는 글자는 한 상자 안에서 먼저 나온 코드로 추출된다. 저장 검증은 쪽별 텍스트 객체 id 집합이 같은지 본다. 앱 게이트는 `permissions.modify_contents`(비트 4) + 번들 글꼴; 테스트는 `set_text_font` 로 저장소 서브셋 폰트를 주입한다. 테스트 폰트 글자 집합은 `fetch_font.py` TEXT(NBSP 금지 — 공백과 글리프를 공유해 생성기 ToUnicode 가 바뀐다)
 - **병합·분할(#37):** 현재 문서를 바꾸지 않는 내보내기라 Command 대상이 아니다. `QpdfTools` 작업은 PDFium 워커가 아닌 `StructureJob`(전용 `std::jthread`, 한 번에 하나)에서 돌고 결과는 `UiDispatcher::post_to` 로. 출력은 `write_files_safely`(임시 → qpdf `check` + 쪽 수 → 교체, 분할은 전부-또는-없음). 병합은 첫 파일이 주 입력(그 목차·폼만 보존 — qpdf 는 다른 입력의 목차를 버린다), 모든 입력은 추출 권한(비트 5) 필요, 결과는 평문. 작업 JSON 에 `decrypt` 를 넣어 **결과는 항상 평문**(주 입력이 암호 문서여도 — 그렇지 않으면 검증이 열지 못한다). 암호 오류 판정은 `qpdf_get_error_code == qpdf_e_password` 또는 정확한 문구만(경로에 "password" 가 든 파일을 오판하지 않게). qpdf 작업은 중단 API 가 없어 취소 = 결과를 열지 않기만(파일은 **지우지 않는다** — 사용자가 덮어쓰기로 고른 파일일 수 있다). 분할은 디스크 파일을 세션이 보관한 암호로 읽으므로 수정된 문서는 먼저 `maybe_save`, 기존 파일이 있으면 덮어쓰기 확인. vcpkg 의 qpdf 설정이 zlib·jpeg 를 맨이름으로 적어 `core/CMakeLists.txt` 가 `ZLIB::ZLIB`·`JPEG::JPEG` 로 바꾼다
 - **썸네일:** 다중 선택(`ExtendedSelection`), 현재 쪽 강조는 선택과 분리. 끌어 놓기는 모델이 행을 옮기지 않고 `move_requested(pages, drop_row)` 만 내며(`dropMimeData` 는 항상 false), `MainWindow::move_pages` 가 `dest = drop_row − |{p < drop_row}|` 로 바꿔 Command 를 실행한다. 파일 URL 드롭은 삽입. Delete 키·우클릭 메뉴. 편집 불가 상태면 `set_editable(false)` 로 끌기 자체를 막는다. 삽입 소스 암호는 `failed(kPasswordRequired)` 뒤 `insert_password` 대화상자로 다시 시도, 추출 금지(권한 비트 5)는 `kPermissionDenied`. 서명 문서의 첫 구조 편집은 `signature_warning` 으로 한 번 묻는다
 

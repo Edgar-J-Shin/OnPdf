@@ -41,6 +41,10 @@ onpdf_add_test(onpdf_unit_tests
   unit/insert_pages_test.cpp
   unit/annotation_test.cpp
   unit/annotation_commands_test.cpp
+  unit/font_face_test.cpp
+  unit/text_layout_test.cpp
+  unit/add_text_command_test.cpp
+  unit/text_object_test.cpp
   unit/page_ranges_test.cpp
   unit/qpdf_tools_test.cpp
   unit/save_test.cpp
@@ -54,6 +58,7 @@ onpdf_add_test(onpdf_render_tests
   render/tile_stitch_test.cpp
 )
 target_compile_definitions(onpdf_render_tests PRIVATE ONPDF_TEST_GLOBAL_PDFIUM=1)
+target_link_libraries(onpdf_render_tests PRIVATE onpdf::edit)
 
 # PdfiumWorker 가 자기 스레드에서 라이브러리를 만들므로 전역 환경 없이 분리한다
 # 왕복: 열기 → 저장 → 다시 열기 (manifest 전체)
@@ -81,6 +86,7 @@ if(ONPDF_BUILD_APP)
     app/edit_test.cpp
     app/annotation_test.cpp
     app/merge_split_test.cpp
+    app/text_tool_test.cpp
   )
   target_link_libraries(onpdf_app_tests PRIVATE onpdf_app_lib)
   set_tests_properties(onpdf_app_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

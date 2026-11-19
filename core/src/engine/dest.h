@@ -34,6 +34,10 @@ struct PageSpace {
   [[nodiscard]] std::array<double, 4> user_rect_of(const Rect& pt) const;
   // 쪽 포인트 사각형 → QuadPoints (Acrobat 순서: 좌상·우상·좌하·우하, 사용자 좌표)
   [[nodiscard]] std::array<float, 8> quad_of(const Rect& pt) const;
+  // 쪽 포인트 기준점에 놓인 "바로 선" 객체의 사용자 좌표 행렬 [a b c d e f]:
+  // (a,b) = 쪽 포인트 +x(오른쪽) 1pt 가 사용자 좌표에서 가는 방향, (c,d) = 쪽 포인트 −y(위쪽) 1pt 의 방향, (e,f) = 기준점.
+  // /Rotate 가 있는 쪽에서도 화면 기준으로 글이 바로 서게 한다 (회전 분기 없음)
+  [[nodiscard]] std::array<double, 6> user_matrix_at(Point origin_pt) const;
 };
 
 // 대상 → link.page + link.location(쪽 포인트). 위치 변환을 위해 대상 쪽을 연다 (링크: 쪽당 수가 적다)

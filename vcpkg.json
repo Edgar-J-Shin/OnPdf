@@ -7,6 +7,13 @@
   "dependencies": [
     "stb",
     "qpdf",
-    { "name": "gtest", "version>=": "1.14.0" }
+    {
+      "name": "harfbuzz",
+      "default-features": false
+    },
+    {
+      "name": "gtest",
+      "version>=": "1.14.0"
+    }
   ]
 }
