@@ -122,7 +122,13 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(view_, &DocumentView::markup_requested, this, &MainWindow::on_markup_requested);
   connect(view_, &DocumentView::note_requested, this, &MainWindow::on_note_requested);
   connect(view_, &DocumentView::ink_requested, this, &MainWindow::on_ink_requested);
+  connect(view_, &DocumentView::shape_requested, this, &MainWindow::on_shape_requested);
   connect(view_, &DocumentView::annotation_selected, this, &MainWindow::on_annotation_selected);
+  // 편집 뒤 자동 재선택: 버튼·메뉴만 맞추고 상태 표시줄 안내("다시 만들었습니다" 등)는 그대로 둔다
+  connect(view_, &DocumentView::annotation_reselected, this, [this](const engine::AnnotationInfo&) {
+    update_edit_actions();
+    update_property_buttons();
+  });
   connect(view_, &DocumentView::annotation_edit_requested, this, &MainWindow::on_annotation_edit_requested);
   connect(view_, &DocumentView::annotation_delete_requested, this, [this](int, const QString&) { delete_selected_annotation(); });
   connect(edit_, &EditController::state_changed, this, [this] {
@@ -345,6 +351,13 @@ void MainWindow::on_opened(const QString& path, int page_count) {
 
 // ---------------------------------------------------------------- 편집·저장
 
+// 주석 속성 표시용 (두께는 도형·펜만)
+namespace {
+using engine::has_border_width;
+QString width_text(double width) { return MainWindow::tr("%1pt").arg(width); }
+QString opacity_text(double opacity) { return MainWindow::tr("%1%").arg(qRound(opacity * 100.0)); }
+}  // namespace
+
 QString MainWindow::command_label(std::string_view id) const {
   if (id == "rotate_page") return tr("쪽 회전");
   if (id == "delete_pages") return tr("쪽 삭제");
@@ -355,6 +368,10 @@ QString MainWindow::command_label(std::string_view id) const {
   if (id == "add_strikeout") return tr("취소선 추가");
   if (id == "add_note") return tr("메모 추가");
   if (id == "add_ink") return tr("펜 추가");
+  if (id == "add_square") return tr("사각형 추가");
+  if (id == "add_circle") return tr("원 추가");
+  if (id == "set_annotation_border_width") return tr("선 두께 변경");
+  if (id == "set_annotation_opacity") return tr("불투명도 변경");
   if (id == "remove_annotation") return tr("주석 삭제");
   if (id == "set_annotation_color") return tr("주석 색 변경");
   if (id == "set_annotation_contents") return tr("메모 수정");
@@ -410,6 +427,14 @@ void MainWindow::update_edit_actions() {
   }
   delete_annotation_action_->setEnabled(annotation_edits_allowed_ && view_->selected_annotation().has_value());
   color_button_->setEnabled(can_annotate);
+  if (width_button_ != nullptr) {
+    const auto selected = view_->selected_annotation();
+    const bool width_ok = can_annotate && (!selected || has_border_width(selected->kind));
+    width_button_->setEnabled(width_ok);
+    opacity_button_->setEnabled(can_annotate);
+    width_menu_->menuAction()->setEnabled(width_ok);
+    opacity_menu_->menuAction()->setEnabled(can_annotate);
+  }
   const bool structure_busy = structure_job_ != nullptr && structure_job_->active();
   split_action_->setEnabled(has_pages && !structure_busy);
   merge_action_->setEnabled(!structure_busy);
@@ -592,10 +617,12 @@ void MainWindow::build_annotation_ui() {
   QMenu* menu = menuBar()->addMenu(tr("주석(&N)"));
   tool_group_ = new QActionGroup(this);
   tool_group_->setExclusive(true);
-  const QString names[6] = {tr("선택(&S)"), tr("하이라이트(&H)"), tr("밑줄(&U)"), tr("취소선(&K)"), tr("메모(&N)"), tr("펜(&P)")};
-  const QString tips[6] = {tr("텍스트를 선택하거나 주석을 고른다"), tr("드래그한 글에 하이라이트"), tr("드래그한 글에 밑줄"),
-                           tr("드래그한 글에 취소선"), tr("클릭한 자리에 메모"), tr("드래그로 자유 선")};
-  for (int i = 0; i < 6; ++i) {
+  const QString names[kAnnotationToolCount] = {tr("선택(&S)"), tr("하이라이트(&H)"), tr("밑줄(&U)"), tr("취소선(&K)"),
+                                               tr("메모(&N)"), tr("펜(&P)"), tr("사각형(&R)"), tr("원(&O)")};
+  const QString tips[kAnnotationToolCount] = {tr("텍스트를 선택하거나 주석을 고른다"), tr("드래그한 글에 하이라이트"),
+                                              tr("드래그한 글에 밑줄"), tr("드래그한 글에 취소선"), tr("클릭한 자리에 메모"),
+                                              tr("드래그로 자유 선"), tr("드래그한 영역에 사각형 테두리"), tr("드래그한 영역에 원")};
+  for (int i = 0; i < kAnnotationToolCount; ++i) {
     QAction* action = tool_group_->addAction(names[i]);
     action->setCheckable(true);
     action->setStatusTip(tips[i]);
@@ -625,6 +652,39 @@ void MainWindow::build_annotation_ui() {
   color_button_->setMenu(palette);
   update_color_icon();
   annotation_toolbar_->addWidget(color_button_);
+  // 두께 ▾ (도형·펜) · 불투명도 ▾ — 선택이 있으면 그 주석, 없으면 새 도형·펜의 기본값 (색 버튼과 같은 규칙)
+  width_button_ = new QToolButton(annotation_toolbar_);
+  width_button_->setObjectName(QStringLiteral("annotation_width"));
+  width_button_->setToolTip(tr("선 두께 (도형·펜)"));
+  width_button_->setPopupMode(QToolButton::InstantPopup);
+  auto* width_popup = new QMenu(width_button_);
+  QMenu* width_menu = width_menu_ = menu->addMenu(tr("두께(&W)"));
+  for (double w : {1.0, 2.0, 4.0, 8.0}) {
+    for (QMenu* m : {width_popup, width_menu}) {
+      QAction* a = m->addAction(tr("%1pt").arg(w));
+      a->setData(w);
+      connect(a, &QAction::triggered, this, [this, w] { set_annotation_border_width(w); });
+    }
+  }
+  width_button_->setMenu(width_popup);
+  annotation_toolbar_->addWidget(width_button_);
+  opacity_button_ = new QToolButton(annotation_toolbar_);
+  opacity_button_->setObjectName(QStringLiteral("annotation_opacity"));
+  opacity_button_->setToolTip(tr("불투명도"));
+  opacity_button_->setPopupMode(QToolButton::InstantPopup);
+  auto* opacity_popup = new QMenu(opacity_button_);
+  QMenu* opacity_menu = opacity_menu_ = menu->addMenu(tr("불투명도(&O)"));
+  for (int percent : {25, 50, 75, 100}) {
+    const auto alpha = static_cast<std::uint8_t>((percent * 255 + 50) / 100);
+    for (QMenu* m : {opacity_popup, opacity_menu}) {
+      QAction* a = m->addAction(tr("%1%").arg(percent));
+      a->setData(percent);
+      connect(a, &QAction::triggered, this, [this, alpha] { set_annotation_opacity(alpha); });
+    }
+  }
+  opacity_button_->setMenu(opacity_popup);
+  annotation_toolbar_->addWidget(opacity_button_);
+  update_property_buttons();
   annotation_toolbar_->addSeparator();
   delete_annotation_action_ = annotation_toolbar_->addAction(tr("주석 삭제"), this, [this] { delete_selected_annotation(); });
   delete_annotation_action_->setStatusTip(tr("선택한 주석을 지운다 (Delete)"));
@@ -648,6 +708,47 @@ QAction* MainWindow::tool_action(AnnotationTool tool) const { return tool_action
 void MainWindow::update_color_icon() {
   color_button_->setIcon(color_icon(annotation_color_));
   color_button_->setText(tr("색"));
+}
+
+void MainWindow::update_property_buttons() {
+  if (width_button_ == nullptr || opacity_button_ == nullptr) return;
+  // 선택이 있으면 그 주석의 값, 없으면 새 도형·펜의 기본값
+  if (auto selected = view_->selected_annotation(); selected) {
+    const bool unknown = selected->has_bs && !selected->has_border;  // /BS /W 는 읽을 수 없다
+    width_button_->setText(has_border_width(selected->kind) && !unknown
+                               ? width_text(selected->has_border ? selected->border_width : 1.0)
+                               : tr("두께"));
+    opacity_button_->setText(opacity_text(selected->opacity));
+  } else {
+    width_button_->setText(width_text(shape_border_width_));
+    opacity_button_->setText(opacity_text(shape_alpha_ / 255.0));
+  }
+}
+
+void MainWindow::set_annotation_border_width(double width) {
+  if (auto selected = view_->selected_annotation(); selected) {
+    if (!annotation_edits_allowed_ || !has_border_width(selected->kind) || !warn_signature_once()) return;
+    const bool recreate = selected->has_bs;
+    if (edit_->run(std::make_shared<edit::SetAnnotationBorderWidthCommand>(view_->selected_annotation_page(), selected->id, width))) {
+      show_transient(recreate ? tr("다른 프로그램이 만든 주석이라 다시 만들었습니다 (실행 취소 때 원래 두께는 돌아오지 않을 수 있습니다)")
+                              : tr("선택한 주석의 두께를 바꿨습니다"));
+    }
+    return;
+  }
+  shape_border_width_ = width;
+  update_property_buttons();
+}
+
+void MainWindow::set_annotation_opacity(std::uint8_t alpha) {
+  if (auto selected = view_->selected_annotation(); selected) {
+    if (!annotation_edits_allowed_ || !warn_signature_once()) return;
+    if (edit_->run(std::make_shared<edit::SetAnnotationOpacityCommand>(view_->selected_annotation_page(), selected->id, alpha))) {
+      show_transient(tr("선택한 주석의 불투명도를 바꿨습니다"));
+    }
+    return;
+  }
+  shape_alpha_ = alpha;
+  update_property_buttons();
 }
 
 std::string MainWindow::annotation_author() const {
@@ -722,8 +823,24 @@ void MainWindow::on_ink_requested(int page, const std::vector<onpdf::Point>& poi
   spec.kind = engine::AnnotationKind::kInk;
   spec.ink = {points};
   spec.rect = bbox;
-  spec.border_width = 2.0;
+  spec.border_width = shape_border_width_;
   spec.color = annotation_color_;
+  spec.color.a = shape_alpha_;
+  spec.flags = engine::kAnnotFlagPrint;
+  spec.author = annotation_author();
+  edit_->run(std::make_shared<edit::AddAnnotationsCommand>(
+      std::vector<std::pair<int, engine::AnnotationSpec>>{{page, std::move(spec)}}));
+}
+
+void MainWindow::on_shape_requested(int page, engine::AnnotationKind kind, onpdf::Rect rect) {
+  if (!annotation_edits_allowed_ || rect.empty()) return;
+  if (!warn_signature_once()) return;
+  engine::AnnotationSpec spec;
+  spec.kind = kind;
+  spec.rect = rect;
+  spec.border_width = shape_border_width_;
+  spec.color = annotation_color_;
+  spec.color.a = shape_alpha_;
   spec.flags = engine::kAnnotFlagPrint;
   spec.author = annotation_author();
   edit_->run(std::make_shared<edit::AddAnnotationsCommand>(
@@ -732,15 +849,21 @@ void MainWindow::on_ink_requested(int page, const std::vector<onpdf::Point>& poi
 
 void MainWindow::on_annotation_selected(bool has, const engine::AnnotationInfo& info) {
   update_edit_actions();
+  update_property_buttons();
   if (!has) {
-    show_transient(QString());
+    // 선택 정보만 지운다: "다시 만들었습니다" 같은 안내가 편집 완료 직후의 해제로 사라지지 않게 (리뷰 W1)
+    if (selection_status_shown_) show_transient(QString());
     return;
   }
   QStringList parts{kind_name(info.kind)};
+  // /BS 주석의 두께는 읽을 수 없어 표시하지 않는다
+  if (has_border_width(info.kind) && !(info.has_bs && !info.has_border)) parts << width_text(info.has_border ? info.border_width : 1.0);
+  if (info.opacity < 0.999f) parts << opacity_text(info.opacity);
   if (!info.author.empty()) parts << QString::fromStdString(info.author);
   if (!info.modified.empty()) parts << short_date(info.modified);
   if (!info.contents.empty()) parts << QString::fromStdString(info.contents).left(60);
   statusBar()->showMessage(parts.join(QStringLiteral(" · ")));
+  selection_status_shown_ = true;
 }
 
 bool MainWindow::delete_selected_annotation() {
@@ -1586,7 +1709,10 @@ void MainWindow::refresh_status() {
 
 void MainWindow::set_document_status(const QString& text) { status_label_->setText(text); }
 
-void MainWindow::show_transient(const QString& text) { statusBar()->showMessage(text, 5000); }
+void MainWindow::show_transient(const QString& text) {
+  statusBar()->showMessage(text, 5000);
+  selection_status_shown_ = false;
+}
 
 void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
   if (event->mimeData()->hasUrls()) event->acceptProposedAction();

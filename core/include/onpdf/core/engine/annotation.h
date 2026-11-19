@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -36,7 +37,16 @@ struct AnnotationInfo {
   std::string contents, author, modified;         // UTF-8
   int flags = 0;
   bool editable = false;                          // 마크업·Text·Ink·Square·Circle 만. 링크·위젯·팝업은 편집 대상이 아니다
+  float border_width = 0.0f;                      // /Border 폭 (AP 와 무관하게 읽힌다)
+  bool has_border = false;
+  float opacity = 1.0f;                           // /CA (없으면 1). AP 가 있어도 읽힌다
+  bool has_bs = false;                            // /BS 가 있는 주석: 두께는 삭제·재생성으로만 바꿀 수 있다
 };
+
+// 선 두께(/Border)가 의미 있는 종류: 펜·사각형·원 (edit 의 Command 와 app 의 메뉴가 같은 기준을 쓴다)
+[[nodiscard]] constexpr bool has_border_width(AnnotationKind kind) noexcept {
+  return kind == AnnotationKind::kInk || kind == AnnotationKind::kSquare || kind == AnnotationKind::kCircle;
+}
 
 // 생성 명세 (Command 가 값으로 보관). 좌표는 쪽 포인트
 struct AnnotationSpec {
@@ -46,7 +56,8 @@ struct AnnotationSpec {
   std::vector<Rect> quads;                        // 마크업: 줄별 사각형 (QuadPoints 하나씩)
   Rect rect;                                      // Text(아이콘)·Square·Circle·Ink 의 bbox. 마크업은 quads 합집합으로 계산
   std::vector<std::vector<Point>> ink;            // Ink 스트로크
-  double border_width = 0.0;                      // Ink 선 폭(pt). 0 이면 쓰지 않음
+  double border_width = 0.0;                      // Ink·Square·Circle 선 폭(pt). 0 이면 쓰지 않음
+  std::optional<Color> interior;                  // Square·Circle 채움색(/IC). 없으면 채우지 않음. 알파는 무시(color.a 가 /CA)
   std::string contents, author;                   // UTF-8
   std::string id;                                 // /NM. 비어 있으면 엔진이 만든다 (재실행 때 같은 NM 을 쓰도록 Command 가 채운다)
 };
@@ -62,10 +73,11 @@ struct AnnotationSnapshot {
   std::vector<std::vector<Point>> ink;            // 사용자 좌표
   Color color;                                    // /C + /CA(a)
   bool has_color = false;
-  Color interior;                                 // /IC (Square·Circle 채움)
+  Color interior;                                 // /IC (Square·Circle 채움). 알파는 color.a 와 같다 (/CA 하나)
   bool has_interior = false;
   float border_width = 0.0f;                      // /Border 만 읽힌다 (/BS /W 는 PDFium API 로 못 읽는다 — 한계)
   bool has_border = false;
+  bool has_bs = false;                            // /BS 존재 (복원 때는 쓰지 않는다 — 삭제·재생성으로 두께를 바꾸는 근거)
   int flags = 0;
   std::string contents, author, modified, subject;  // UTF-8
 };

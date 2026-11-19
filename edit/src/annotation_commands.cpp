@@ -24,6 +24,8 @@ std::string_view add_command_id(engine::AnnotationKind kind) noexcept {
     case engine::AnnotationKind::kSquiggly: return "add_squiggly";
     case engine::AnnotationKind::kText: return "add_note";
     case engine::AnnotationKind::kInk: return "add_ink";
+    case engine::AnnotationKind::kSquare: return "add_square";
+    case engine::AnnotationKind::kCircle: return "add_circle";
     default: return "add_annotation";
   }
 }
@@ -121,6 +123,82 @@ Result<engine::ChangeSet> SetAnnotationContentsCommand::execute(engine::Editable
 Result<engine::ChangeSet> SetAnnotationContentsCommand::undo(engine::EditableDocument& doc) {
   if (!executed_) return make_error(ErrorCode::kInvalidState, "undo before execute");
   if (auto set = doc.set_annotation_contents(page_, annotation_id_, before_); !set) return std::unexpected(set.error());
+  return page_change({page_});
+}
+
+// ---------------------------------------------------------------- Border width
+
+SetAnnotationBorderWidthCommand::SetAnnotationBorderWidthCommand(int page, std::string id, double width)
+    : page_(page), annotation_id_(std::move(id)), width_(width) {}
+
+Result<engine::ChangeSet> SetAnnotationBorderWidthCommand::execute(engine::EditableDocument& doc) {
+  if (!(width_ > 0.0)) return make_error(ErrorCode::kInvalidArgument, "border width must be positive");
+  auto before = doc.snapshot_annotation(page_, annotation_id_);
+  if (!before) return std::unexpected(before.error());
+  if (!engine::has_border_width(before->kind)) return make_error(ErrorCode::kInvalidArgument, "annotation has no border width");
+  // 재실행에서는 첫 실행의 스냅샷(원래 값)을 유지한다 — 재생성 뒤의 스냅샷은 이미 새 폭이다
+  if (!executed_) before_ = *before;
+  annotation_id_ = before_.id;
+  if (before->has_bs) {
+    // /BS /W 가 /Border 를 덮으므로 /BS 없이 같은 주석을 다시 만든다 (삭제 취소와 같은 경로·같은 한계)
+    engine::AnnotationSnapshot after = *before;
+    after.border_width = static_cast<float>(width_);
+    after.has_border = true;
+    after.has_bs = false;
+    if (auto removed = doc.remove_annotation(page_, annotation_id_); !removed) return std::unexpected(removed.error());
+    if (auto restored = doc.restore_annotation(page_, after); !restored) {
+      (void)doc.restore_annotation(page_, before_);  // 보상: 지운 주석을 원래 스냅샷으로 되살린다 (실패해도 오류는 원인 그대로)
+      return std::unexpected(restored.error());
+    }
+    recreated_ = true;
+  } else {
+    if (auto set = doc.set_annotation_border_width(page_, annotation_id_, width_); !set) return std::unexpected(set.error());
+  }
+  executed_ = true;
+  return page_change({page_});
+}
+
+Result<engine::ChangeSet> SetAnnotationBorderWidthCommand::undo(engine::EditableDocument& doc) {
+  if (!executed_) return make_error(ErrorCode::kInvalidState, "undo before execute");
+  if (recreated_) {
+    // 원래 /BS 는 되살릴 수 없다: 스냅샷(/Border 값 또는 없음)으로 다시 만든다
+    if (auto removed = doc.remove_annotation(page_, annotation_id_); !removed) return std::unexpected(removed.error());
+    if (auto restored = doc.restore_annotation(page_, before_); !restored) {
+      engine::AnnotationSnapshot current = before_;  // 보상: 실행 뒤 상태(새 폭)로라도 되살린다
+      current.border_width = static_cast<float>(width_);
+      current.has_border = true;
+      current.has_bs = false;
+      (void)doc.restore_annotation(page_, current);
+      return std::unexpected(restored.error());
+    }
+    return page_change({page_});
+  }
+  const double previous = before_.has_border ? before_.border_width : 1.0;  // PDF 기본 폭
+  if (auto set = doc.set_annotation_border_width(page_, annotation_id_, previous); !set) return std::unexpected(set.error());
+  return page_change({page_});
+}
+
+// ---------------------------------------------------------------- Opacity
+
+SetAnnotationOpacityCommand::SetAnnotationOpacityCommand(int page, std::string id, std::uint8_t alpha)
+    : page_(page), annotation_id_(std::move(id)), alpha_(alpha) {}
+
+Result<engine::ChangeSet> SetAnnotationOpacityCommand::execute(engine::EditableDocument& doc) {
+  auto before = doc.snapshot_annotation(page_, annotation_id_);
+  if (!before) return std::unexpected(before.error());
+  if (!before->has_color) return make_error(ErrorCode::kInvalidArgument, "annotation has no color");
+  if (!executed_) before_ = *before;
+  annotation_id_ = before_.id;
+  engine::Color color = before_.color;
+  color.a = alpha_;
+  if (auto set = doc.set_annotation_color(page_, annotation_id_, color); !set) return std::unexpected(set.error());
+  executed_ = true;
+  return page_change({page_});
+}
+
+Result<engine::ChangeSet> SetAnnotationOpacityCommand::undo(engine::EditableDocument& doc) {
+  if (!executed_) return make_error(ErrorCode::kInvalidState, "undo before execute");
+  if (auto set = doc.set_annotation_color(page_, annotation_id_, before_.color); !set) return std::unexpected(set.error());
   return page_change({page_});
 }
 

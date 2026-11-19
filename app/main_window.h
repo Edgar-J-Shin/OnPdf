@@ -14,6 +14,7 @@
 #include <QString>
 
 #include <filesystem>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -72,6 +73,11 @@ class MainWindow : public QMainWindow {
   [[nodiscard]] QAction* delete_annotation_action() const noexcept { return delete_annotation_action_; }
   [[nodiscard]] QToolBar* annotation_toolbar() const noexcept { return annotation_toolbar_; }
   [[nodiscard]] engine::Color annotation_color() const noexcept { return annotation_color_; }
+  [[nodiscard]] QToolButton* color_button() const noexcept { return color_button_; }
+  [[nodiscard]] QToolButton* width_button() const noexcept { return width_button_; }
+  [[nodiscard]] QToolButton* opacity_button() const noexcept { return opacity_button_; }
+  [[nodiscard]] double shape_border_width() const noexcept { return shape_border_width_; }  // 새 도형·펜 두께
+  [[nodiscard]] std::uint8_t shape_alpha() const noexcept { return shape_alpha_; }          // 새 도형·펜 불투명도
   [[nodiscard]] QAction* move_up_action() const noexcept { return move_up_action_; }
   [[nodiscard]] QAction* move_down_action() const noexcept { return move_down_action_; }
   [[nodiscard]] QAction* insert_pages_action() const noexcept { return insert_pages_action_; }
@@ -89,6 +95,9 @@ class MainWindow : public QMainWindow {
   [[nodiscard]] std::vector<int> target_pages() const;
   // ---- 주석 (툴바·메뉴·뷰 신호와 같은 경로, 테스트용으로도 쓴다). 시작하면 true ----
   void set_annotation_color(engine::Color color);  // 새 주석 색. 주석이 선택돼 있으면 그 주석의 색을 바꾼다
+  // 선택한 도형·펜의 두께 / 선택한 주석의 불투명도를 Command 로 바꾼다. 선택이 없으면 새 도형·펜의 기본값만 바꾼다
+  void set_annotation_border_width(double width);
+  void set_annotation_opacity(std::uint8_t alpha);
   bool add_markup_from_selection(engine::AnnotationKind kind);
   bool delete_selected_annotation();
   // 메모 생성: contents 가 주어지면 대화상자 없이 만든다 (테스트용)
@@ -145,6 +154,8 @@ class MainWindow : public QMainWindow {
   void on_markup_requested(onpdf::engine::AnnotationKind kind, const MarkupItems& items);
   void on_note_requested(int page, onpdf::Point pt);
   void on_ink_requested(int page, const std::vector<onpdf::Point>& points, onpdf::Rect bbox);
+  void on_shape_requested(int page, onpdf::engine::AnnotationKind kind, onpdf::Rect rect);
+  void update_property_buttons();
   void on_annotation_selected(bool has, const onpdf::engine::AnnotationInfo& info);
   void on_annotation_edit_requested(int page, const onpdf::engine::AnnotationInfo& info);
   [[nodiscard]] std::string annotation_author() const;
@@ -215,8 +226,15 @@ class MainWindow : public QMainWindow {
   int merge_password_attempts_ = 0;
   QToolBar* annotation_toolbar_ = nullptr;
   QActionGroup* tool_group_ = nullptr;
-  QAction* tool_actions_[6] = {};  // AnnotationTool 순서
+  QAction* tool_actions_[kAnnotationToolCount] = {};  // AnnotationTool 순서
   QToolButton* color_button_ = nullptr;
+  QToolButton* width_button_ = nullptr;    // 두께 ▾ (도형·펜)
+  QMenu* width_menu_ = nullptr;
+  QMenu* opacity_menu_ = nullptr;
+  bool selection_status_shown_ = false;  // 상태 표시줄이 선택 정보를 보이는 중 — 해제 때 그것만 지운다 (안내 문구는 남긴다)
+  QToolButton* opacity_button_ = nullptr;  // 불투명도 ▾
+  double shape_border_width_ = 2.0;
+  std::uint8_t shape_alpha_ = 255;
   QAction* delete_annotation_action_ = nullptr;
   QAction* markup_selection_actions_[3] = {};  // 하이라이트·밑줄·취소선 (선택 영역)
   engine::Color annotation_color_{255, 255, 0, 255};

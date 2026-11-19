@@ -375,12 +375,18 @@ Result<std::vector<AnnotationInfo>> PdfiumDocument::annotations(int page_index) 
     if (info.id.empty()) info.id = "#" + std::to_string(i);
     FS_RECTF rect{};
     if (FPDFAnnot_GetRect(annot.get(), &rect)) info.rect = space.to_rect(rect.left, rect.right, rect.bottom, rect.top);
-    info.has_color = fill_color(annot.get(), info.color);
+    info.has_color = FPDFAnnot_HasKey(annot.get(), "C") && fill_color(annot.get(), info.color);
     info.contents = annot_string(annot.get(), "Contents");
     info.author = annot_string(annot.get(), "T");
     info.modified = annot_string(annot.get(), "M");
     info.flags = FPDFAnnot_GetFlags(annot.get());
     info.editable = is_editable_kind(info.kind);
+    float hr = 0, vr = 0, bw = 0;
+    info.has_border = FPDFAnnot_GetBorder(annot.get(), &hr, &vr, &bw) != 0;
+    info.border_width = info.has_border ? bw : 0.0f;
+    float ca = 1.0f;
+    if (FPDFAnnot_GetNumberValue(annot.get(), "CA", &ca)) info.opacity = std::clamp(ca, 0.0f, 1.0f);
+    info.has_bs = FPDFAnnot_HasKey(annot.get(), "BS") != 0;
     out.push_back(std::move(info));
   }
   return out;
@@ -391,6 +397,8 @@ Result<std::string> PdfiumDocument::add_annotation(int page_index, const Annotat
   if (!is_editable_kind(spec.kind)) return make_error(ErrorCode::kInvalidArgument, "unsupported annotation kind");
   if (is_markup(spec.kind) && spec.quads.empty()) return make_error(ErrorCode::kInvalidArgument, "markup needs quads");
   if (spec.kind == AnnotationKind::kInk && spec.ink.empty()) return make_error(ErrorCode::kInvalidArgument, "ink needs strokes");
+  const bool is_shape = spec.kind == AnnotationKind::kSquare || spec.kind == AnnotationKind::kCircle;
+  if (is_shape && spec.rect.empty()) return make_error(ErrorCode::kInvalidArgument, "shape needs rect");
   auto page = load_page(page_index);
   if (!page) return std::unexpected(page.error());
   const detail::PageSpace space = detail::PageSpace::of(page->get());
@@ -432,9 +440,17 @@ Result<std::string> PdfiumDocument::add_annotation(int page_index, const Annotat
         return make_error(ErrorCode::kInvalidState, "FPDFAnnot_AddInkStroke failed");
       }
     }
-    if (spec.border_width > 0 && !FPDFAnnot_SetBorder(annot.get(), 0, 0, static_cast<float>(spec.border_width))) {
-      return make_error(ErrorCode::kInvalidState, "FPDFAnnot_SetBorder failed");
-    }
+  }
+  // 선 폭: 펜·도형. /Border 로 쓴다 (PDFium 이 AP 를 만들 때 /BS /W → /Border 순으로 읽는다)
+  if ((spec.kind == AnnotationKind::kInk || is_shape) && spec.border_width > 0 &&
+      !FPDFAnnot_SetBorder(annot.get(), 0, 0, static_cast<float>(spec.border_width))) {
+    return make_error(ErrorCode::kInvalidState, "FPDFAnnot_SetBorder failed");
+  }
+  // 내부색의 알파 인자도 /CA 에 쓰이므로 테두리 색의 알파를 그대로 준다 (불투명도는 주석당 하나)
+  if (is_shape && spec.interior &&
+      !FPDFAnnot_SetColor(annot.get(), FPDFANNOT_COLORTYPE_InteriorColor, spec.interior->r, spec.interior->g,
+                          spec.interior->b, spec.color.a)) {
+    return make_error(ErrorCode::kInvalidState, "FPDFAnnot_SetColor(interior) failed");
   }
   if (!FPDFAnnot_SetRect(annot.get(), &rect)) return make_error(ErrorCode::kInvalidState, "FPDFAnnot_SetRect failed");
   if (!FPDFAnnot_SetColor(annot.get(), FPDFANNOT_COLORTYPE_Color, spec.color.r, spec.color.g, spec.color.b, spec.color.a)) {
@@ -484,11 +500,14 @@ Result<AnnotationSnapshot> PdfiumDocument::snapshot_annotation(int page_index, s
   if (!FPDFAnnot_SetAP(annot, FPDF_ANNOT_APPEARANCEMODE_NORMAL, nullptr)) {
     return make_error(ErrorCode::kInvalidState, "cannot clear appearance stream");
   }
-  snap.has_color = fill_color(annot, snap.color);
-  snap.has_interior = fill_color(annot, snap.interior, FPDFANNOT_COLORTYPE_InteriorColor);
+  // FPDFAnnot_GetColor 는 키가 없어도 기본 검정으로 성공한다 → 키 존재를 함께 본다 (없던 /IC 를 검정 채움으로 복원하지 않게)
+  snap.has_color = FPDFAnnot_HasKey(annot, "C") && fill_color(annot, snap.color);
+  snap.has_interior = FPDFAnnot_HasKey(annot, "IC") && fill_color(annot, snap.interior, FPDFANNOT_COLORTYPE_InteriorColor);
+  snap.interior.a = snap.color.a;  // 알파는 /CA 하나 — 내부색 알파는 별도 값이 아니다
   float hr = 0, vr = 0, bw = 0;
   snap.has_border = FPDFAnnot_GetBorder(annot, &hr, &vr, &bw) != 0;
   snap.border_width = bw;
+  snap.has_bs = FPDFAnnot_HasKey(annot, "BS") != 0;
   snap.flags = FPDFAnnot_GetFlags(annot);
   snap.contents = annot_string(annot, "Contents");
   snap.author = annot_string(annot, "T");
@@ -579,6 +598,26 @@ Result<void> PdfiumDocument::set_annotation_color(int page_index, std::string_vi
   if (!FPDFAnnot_SetColor(annot, FPDFANNOT_COLORTYPE_Color, color.r, color.g, color.b, color.a)) {
     return make_error(ErrorCode::kInvalidState, "FPDFAnnot_SetColor failed");
   }
+  (void)set_annot_string(annot, "M", pdf_date_now());
+  return {};
+}
+
+Result<void> PdfiumDocument::set_annotation_border_width(int page_index, std::string_view id, double width) {
+  PdfiumLibrary::assert_current_thread();
+  if (!(width > 0.0)) return make_error(ErrorCode::kInvalidArgument, "border width must be positive");
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  auto found = find_annot(page->get(), id);
+  if (!found) return std::unexpected(found.error());
+  FPDF_ANNOTATION annot = found->annot.get();
+  if (auto nm = ensure_nm(annot); !nm) return std::unexpected(nm.error());
+  // /BS /W 가 있으면 PDFium 은 /Border 를 무시하고, /BS 를 지울 API 는 없다 → 호출자가 삭제·재생성으로 우회한다
+  if (FPDFAnnot_HasKey(annot, "BS")) return make_error(ErrorCode::kInvalidArgument, "border width is fixed by /BS");
+  // FPDFAnnot_SetBorder 도 AP 를 지우지만(실측), 색 변경과 같은 규칙을 눈에 보이게 먼저 지운다
+  if (!FPDFAnnot_SetAP(annot, FPDF_ANNOT_APPEARANCEMODE_NORMAL, nullptr)) {
+    return make_error(ErrorCode::kInvalidState, "cannot clear appearance stream");
+  }
+  if (!FPDFAnnot_SetBorder(annot, 0, 0, static_cast<float>(width))) return make_error(ErrorCode::kInvalidState, "FPDFAnnot_SetBorder failed");
   (void)set_annot_string(annot, "M", pdf_date_now());
   return {};
 }

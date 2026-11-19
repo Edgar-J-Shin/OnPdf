@@ -21,7 +21,10 @@
 #include <QPrinter>
 #include <QStatusBar>
 #include <QTimer>
+#include <QToolButton>
 
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <memory>
 
@@ -309,11 +312,179 @@ TEST_F(AnnotationTest, ExistingLinksAreNotSelectable) {
   EXPECT_EQ(view()->selected_annotation()->kind, engine::AnnotationKind::kSquare);
 }
 
+// ---------------------------------------------------------------- 도형 (#39)
+
+TEST_F(AnnotationTest, SquareDragCreatesShapeAndTinyDragDoesNot) {
+  open_copy("simple.pdf");
+  ASSERT_TRUE(wait_annotations(0, 0));
+  use_tool(AnnotationTool::kSquare);
+  EXPECT_EQ(view()->tool(), AnnotationTool::kSquare);
+  send_mouse(QEvent::MouseMove, view()->page_point_to_viewport(0, {150, 450}), Qt::NoButton, Qt::NoButton);
+  EXPECT_EQ(view()->viewport()->cursor().shape(), Qt::CrossCursor);
+  // 4pt 미만 드래그는 아무것도 만들지 않는다
+  drag(view()->page_point_to_viewport(0, {150, 450}), view()->page_point_to_viewport(0, {152, 452}));
+  ASSERT_TRUE(wait_idle());
+  EXPECT_EQ(view()->annotations(0)->size(), 0u);
+  // 역방향 드래그도 정규화된다
+  drag(view()->page_point_to_viewport(0, {300, 520}), view()->page_point_to_viewport(0, {100, 440}));
+  ASSERT_TRUE(wait_annotations(0, 1));
+  const auto& a = (*view()->annotations(0))[0];
+  EXPECT_EQ(a.kind, engine::AnnotationKind::kSquare);
+  EXPECT_NEAR(a.rect.x, 100, 1.0);
+  EXPECT_NEAR(a.rect.y, 440, 1.0);
+  EXPECT_NEAR(a.rect.w, 200, 1.0);
+  EXPECT_NEAR(a.rect.h, 80, 1.0);
+  EXPECT_FLOAT_EQ(a.border_width, 2.0f);
+  EXPECT_FLOAT_EQ(a.opacity, 1.0f);
+  EXPECT_TRUE(a.flags & engine::kAnnotFlagPrint);
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("사각형 추가")));
+  EXPECT_TRUE(window_.isWindowModified());
+  ASSERT_TRUE(window_.edit_controller()->undo());
+  ASSERT_TRUE(wait_annotations(0, 0));
+  // 원
+  use_tool(AnnotationTool::kCircle);
+  drag(view()->page_point_to_viewport(0, {320, 440}), view()->page_point_to_viewport(0, {440, 560}));
+  ASSERT_TRUE(wait_annotations(0, 1));
+  EXPECT_EQ((*view()->annotations(0))[0].kind, engine::AnnotationKind::kCircle);
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("원 추가")));
+  // Escape 는 그리던 도형을 버린다 (리뷰 W3)
+  send_mouse(QEvent::MouseButtonPress, view()->page_point_to_viewport(0, {100, 600}), Qt::LeftButton, Qt::LeftButton);
+  send_mouse(QEvent::MouseMove, view()->page_point_to_viewport(0, {200, 680}), Qt::NoButton, Qt::LeftButton);
+  QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+  QApplication::sendEvent(view(), &esc);
+  send_mouse(QEvent::MouseButtonRelease, view()->page_point_to_viewport(0, {200, 680}), Qt::LeftButton, Qt::NoButton);
+  ASSERT_TRUE(wait_idle());
+  EXPECT_EQ(view()->annotations(0)->size(), 1u);
+}
+
+TEST_F(AnnotationTest, ReselectDoesNotLeakIntoNextDocument) {
+  const auto copy = open_copy("simple.pdf");
+  ASSERT_TRUE(wait_annotations(0, 0));
+  use_tool(AnnotationTool::kSquare);
+  drag(view()->page_point_to_viewport(0, {100, 440}), view()->page_point_to_viewport(0, {300, 520}));
+  ASSERT_TRUE(wait_annotations(0, 1));
+  use_tool(AnnotationTool::kSelect);
+  click(view()->page_point_to_viewport(0, {200, 480}));
+  ASSERT_TRUE(view()->selected_annotation().has_value());
+  window_.set_annotation_border_width(4.0);
+  ASSERT_TRUE(wait_idle());
+  ASSERT_TRUE(spin_until([&] { return view()->selected_annotation().has_value(); }));  // 재선택됨
+  // 저장한 파일의 사본(같은 NM)을 연다: 새 문서에서 저절로 선택되지 않는다 (리뷰 W4)
+  window_.save_action()->trigger();
+  ASSERT_TRUE(spin_until([&] { return !window_.saving() && !window_.isWindowModified(); }));
+  const auto again = dir_ / "simple-again.pdf";
+  std::filesystem::copy_file(copy, again);
+  ASSERT_TRUE(open_path(again));
+  ASSERT_TRUE(wait_annotations(0, 1));
+  EXPECT_FALSE(view()->selected_annotation().has_value());
+}
+
+TEST_F(AnnotationTest, DefaultsApplyToNewShapesAndPenOnly) {
+  open_copy("simple.pdf");
+  ASSERT_TRUE(wait_annotations(0, 0));
+  // 선택이 없을 때: 새 도형·펜의 기본값만 바뀐다
+  window_.set_annotation_border_width(8.0);
+  window_.set_annotation_opacity(128);
+  EXPECT_FALSE(window_.edit_controller()->busy());
+  EXPECT_DOUBLE_EQ(window_.shape_border_width(), 8.0);
+  EXPECT_EQ(window_.shape_alpha(), 128);
+  EXPECT_EQ(window_.width_button()->text(), QStringLiteral("8pt"));
+  EXPECT_EQ(window_.opacity_button()->text(), QStringLiteral("50%"));
+  use_tool(AnnotationTool::kPen);
+  drag(view()->page_point_to_viewport(0, {100, 400}), view()->page_point_to_viewport(0, {200, 420}));
+  ASSERT_TRUE(wait_annotations(0, 1));
+  EXPECT_FLOAT_EQ((*view()->annotations(0))[0].border_width, 8.0f);
+  EXPECT_NEAR((*view()->annotations(0))[0].opacity, 0.5, 0.01);
+  // 마크업은 기본 불투명도의 영향을 받지 않는다 (항상 100%)
+  ASSERT_TRUE(wait_text(0));
+  use_tool(AnnotationTool::kHighlight);
+  drag_first_word();
+  ASSERT_TRUE(wait_annotations(0, 2));
+  for (const auto& a : *view()->annotations(0)) {
+    if (a.kind == engine::AnnotationKind::kHighlight) EXPECT_FLOAT_EQ(a.opacity, 1.0f);
+  }
+}
+
+TEST_F(AnnotationTest, BorderWidthAndOpacityOnSelection) {
+  open_copy("simple.pdf");
+  ASSERT_TRUE(wait_annotations(0, 0));
+  use_tool(AnnotationTool::kSquare);
+  drag(view()->page_point_to_viewport(0, {100, 440}), view()->page_point_to_viewport(0, {300, 520}));
+  ASSERT_TRUE(wait_annotations(0, 1));
+  use_tool(AnnotationTool::kSelect);
+  click(view()->page_point_to_viewport(0, {200, 480}));
+  ASSERT_TRUE(view()->selected_annotation().has_value());
+  EXPECT_TRUE(window_.width_button()->isEnabled());
+  EXPECT_EQ(window_.width_button()->text(), QStringLiteral("2pt"));
+  EXPECT_TRUE(window_.statusBar()->currentMessage().contains(QStringLiteral("2pt")));
+  const double default_width = window_.shape_border_width();
+  window_.set_annotation_border_width(4.0);
+  ASSERT_TRUE(wait_idle());
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("선 두께 변경")));
+  EXPECT_DOUBLE_EQ(window_.shape_border_width(), default_width) << "선택이 있으면 기본값은 그대로";
+  ASSERT_TRUE(spin_until([&] { return idle() && view()->annotations(0) && (*view()->annotations(0))[0].border_width == 4.0f; }));
+  EXPECT_TRUE(view()->selected_annotation().has_value()) << "편집 뒤에도 같은 NM 을 다시 고른다";
+  EXPECT_EQ(window_.width_button()->text(), QStringLiteral("4pt")) << "선택 주석의 값을 보여준다";
+  ASSERT_TRUE(window_.edit_controller()->undo());
+  ASSERT_TRUE(spin_until([&] { return idle() && view()->annotations(0) && (*view()->annotations(0))[0].border_width == 2.0f; }));
+  // 불투명도
+  window_.set_annotation_opacity(128);
+  ASSERT_TRUE(wait_idle());
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("불투명도 변경")));
+  ASSERT_TRUE(spin_until([&] { return idle() && view()->annotations(0) && std::abs((*view()->annotations(0))[0].opacity - 0.5f) < 0.01f; }));
+  EXPECT_EQ(window_.opacity_button()->text(), QStringLiteral("50%"));
+  ASSERT_TRUE(window_.edit_controller()->undo());
+  ASSERT_TRUE(spin_until([&] { return idle() && view()->annotations(0) && (*view()->annotations(0))[0].opacity > 0.99f; }));
+  // 메모를 선택하면 두께 버튼은 비활성, 불투명도는 활성
+  ASSERT_TRUE(window_.add_note(0, {400, 300}, QStringLiteral("메모")));
+  ASSERT_TRUE(wait_annotations(0, 2));
+  click(view()->page_point_to_viewport(0, {400, 300}));
+  ASSERT_TRUE(view()->selected_annotation().has_value());
+  EXPECT_EQ(view()->selected_annotation()->kind, engine::AnnotationKind::kText);
+  EXPECT_FALSE(window_.width_button()->isEnabled());
+  EXPECT_TRUE(window_.opacity_button()->isEnabled());
+  window_.set_annotation_border_width(4.0);
+  EXPECT_FALSE(window_.edit_controller()->busy()) << "메모에는 두께 명령을 보내지 않는다";
+}
+
+TEST_F(AnnotationTest, BsAnnotationWidthRecreates) {
+  open_copy("annotations.pdf");
+  ASSERT_TRUE(wait_annotations(0, 6));
+  // 다른 프로그램의 Square(/BS /W 3): 쪽 포인트 y 172..312
+  click(view()->page_point_to_viewport(0, {186, 242}));
+  ASSERT_TRUE(view()->selected_annotation().has_value());
+  ASSERT_EQ(view()->selected_annotation()->kind, engine::AnnotationKind::kSquare);
+  EXPECT_TRUE(view()->selected_annotation()->has_bs);
+  EXPECT_TRUE(window_.width_button()->isEnabled());
+  const std::string id = view()->selected_annotation()->id;
+  EXPECT_EQ(window_.width_button()->text(), QStringLiteral("두께")) << "/BS /W 는 읽을 수 없어 값을 보이지 않는다";
+  window_.set_annotation_border_width(4.0);
+  ASSERT_TRUE(wait_idle());
+  EXPECT_TRUE(window_.statusBar()->currentMessage().contains(QStringLiteral("다시 만들었습니다")))
+      << "편집 완료·선택 갱신 뒤에도 안내가 남는다 (리뷰 W1)";
+  ASSERT_TRUE(spin_until([&] {
+    if (!idle() || !view()->annotations(0)) return false;
+    for (const auto& a : *view()->annotations(0)) if (a.kind == engine::AnnotationKind::kSquare) return !a.has_bs && a.border_width == 4.0f;
+    return false;
+  }));
+  ASSERT_EQ(view()->annotations(0)->size(), 6u);
+  const auto& sq = *std::find_if(view()->annotations(0)->begin(), view()->annotations(0)->end(),
+                                 [](const engine::AnnotationInfo& a) { return a.kind == engine::AnnotationKind::kSquare; });
+  EXPECT_TRUE(id.empty() || id[0] == '#' || sq.id == id) << "편집 때 NM 이 부여되고 그 뒤로 같은 NM";
+  EXPECT_NEAR(sq.opacity, 0.8, 0.01);
+  ASSERT_TRUE(window_.edit_controller()->undo());
+  ASSERT_TRUE(wait_annotations(0, 6));
+}
+
 TEST_F(AnnotationTest, PermissionDisablesAnnotationTools) {
   ASSERT_TRUE(open("encrypted-owner-only.pdf"));  // 주석 금지(비트 6)
   EXPECT_TRUE(window_.tool_action(AnnotationTool::kSelect)->isEnabled());
   EXPECT_FALSE(window_.tool_action(AnnotationTool::kHighlight)->isEnabled());
   EXPECT_FALSE(window_.tool_action(AnnotationTool::kNote)->isEnabled());
+  EXPECT_FALSE(window_.tool_action(AnnotationTool::kSquare)->isEnabled());
+  EXPECT_FALSE(window_.tool_action(AnnotationTool::kCircle)->isEnabled());
+  EXPECT_FALSE(window_.width_button()->isEnabled());
+  EXPECT_FALSE(window_.opacity_button()->isEnabled());
   EXPECT_FALSE(window_.add_note(0, {100, 100}, QStringLiteral("x")));
   ASSERT_TRUE(open("simple.pdf"));
   EXPECT_TRUE(window_.tool_action(AnnotationTool::kHighlight)->isEnabled());

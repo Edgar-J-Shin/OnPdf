@@ -1,10 +1,11 @@
 #pragma once
 
-// 주석 Command 4종. 모두 비구조 변경(ChangeSet.pages 만). 문서 안 정체성은 /NM 이라 Command 는 id 와 값만 쥔다
+// 주석 Command 6종. 모두 비구조 변경(ChangeSet.pages 만). 문서 안 정체성은 /NM 이라 Command 는 id 와 값만 쥔다
 
 #include "onpdf/core/engine/annotation.h"
 #include "onpdf/edit/command.h"
 
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
@@ -73,6 +74,41 @@ class SetAnnotationContentsCommand final : public Command {
   std::string annotation_id_;
   std::string contents_;
   std::string before_;
+  bool executed_ = false;
+};
+
+// 선 두께 변경 (Ink·Square·Circle). /BS 가 있는 주석은 PDFium 이 /Border 를 무시하므로 삭제 → 같은 NM 으로 /BS 없이
+// 재생성한다 (원래 /BS /W 값은 읽을 수 없어 취소 때 /Border 값 또는 기본 1pt 로 돌아간다 — 한계)
+class SetAnnotationBorderWidthCommand final : public Command {
+ public:
+  SetAnnotationBorderWidthCommand(int page, std::string id, double width);
+  [[nodiscard]] std::string_view id() const noexcept override { return "set_annotation_border_width"; }
+  Result<engine::ChangeSet> execute(engine::EditableDocument& doc) override;
+  Result<engine::ChangeSet> undo(engine::EditableDocument& doc) override;
+  [[nodiscard]] bool recreated() const noexcept { return recreated_; }  // /BS 주석이라 다시 만들었다
+
+ private:
+  int page_;
+  std::string annotation_id_;
+  double width_;
+  engine::AnnotationSnapshot before_;
+  bool executed_ = false;
+  bool recreated_ = false;
+};
+
+// 불투명도(/CA) 변경: PDFium 은 /CA 를 색의 알파로만 쓴다. 취소는 이전 색 전체(RGB+알파)로
+class SetAnnotationOpacityCommand final : public Command {
+ public:
+  SetAnnotationOpacityCommand(int page, std::string id, std::uint8_t alpha);
+  [[nodiscard]] std::string_view id() const noexcept override { return "set_annotation_opacity"; }
+  Result<engine::ChangeSet> execute(engine::EditableDocument& doc) override;
+  Result<engine::ChangeSet> undo(engine::EditableDocument& doc) override;
+
+ private:
+  int page_;
+  std::string annotation_id_;
+  std::uint8_t alpha_;
+  engine::AnnotationSnapshot before_;
   bool executed_ = false;
 };
 

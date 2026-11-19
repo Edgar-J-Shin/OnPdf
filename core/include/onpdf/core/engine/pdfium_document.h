@@ -60,6 +60,7 @@ class PdfiumDocument final : public EditableDocument {
   [[nodiscard]] Result<void> set_annotation_color(int page_index, std::string_view id, Color color) override;
   [[nodiscard]] Result<void> set_annotation_contents(int page_index, std::string_view id,
                                                      std::string_view utf8) override;
+  [[nodiscard]] Result<void> set_annotation_border_width(int page_index, std::string_view id, double width) override;
   [[nodiscard]] int snapshot_count() const noexcept { return static_cast<int>(snapshots_.size()); }  // 테스트용
 
   // ---- 저장 ----

@@ -186,6 +186,19 @@ TEST(RenderRegression, AnnotatedAndSavedPage) {
   ink.border_width = 2.0;
   ink.color = {200, 0, 120, 255};
   ASSERT_TRUE(doc->add_annotation(0, ink));
+  AnnotationSpec square;  // 도형 (#39): 두께 4, 반투명 빨강, 채움 없음
+  square.kind = AnnotationKind::kSquare;
+  square.rect = {80, 450, 180, 100};
+  square.border_width = 4.0;
+  square.color = {255, 0, 0, 128};
+  ASSERT_TRUE(doc->add_annotation(0, square));
+  AnnotationSpec circle;  // 두께 2, 파랑, 연한 채움
+  circle.kind = AnnotationKind::kCircle;
+  circle.rect = {300, 450, 120, 120};
+  circle.border_width = 2.0;
+  circle.color = {0, 0, 255, 255};
+  circle.interior = Color{220, 230, 255, 255};
+  ASSERT_TRUE(doc->add_annotation(0, circle));
   onpdf::test::ScopedTempDir dir;
   const auto saved_path = dir / "annotated.pdf";
   ASSERT_TRUE(engine::save_document_safely(*doc, saved_path, {}));

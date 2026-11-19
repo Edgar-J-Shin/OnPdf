@@ -54,6 +54,7 @@ class FakeDocument final : public engine::EditableDocument {
     bool has_ap = false;  // 렌더로 생긴 AP (색 변경·스냅샷이 지운다)
   };
   int fail_add_on_page = -1;  // 이 쪽에 add_annotation 을 하면 실패 (보상 삭제 테스트)
+  int fail_restores = 0;      // 다음 n 번의 restore_annotation 이 실패 (재생성 보상 테스트)
   [[nodiscard]] int annotation_count(int page) const { const auto it = annots_.find(page); return it == annots_.end() ? 0 : static_cast<int>(it->second.size()); }
   [[nodiscard]] const FakeAnnot* annotation(int page, std::string_view id) const {
     const auto it = annots_.find(page);
@@ -160,6 +161,10 @@ class FakeDocument final : public engine::EditableDocument {
       info.author = a.snap.author;
       info.flags = a.snap.flags;
       info.editable = a.snap.kind != engine::AnnotationKind::kLink && a.snap.kind != engine::AnnotationKind::kOther;
+      info.border_width = a.snap.border_width;
+      info.has_border = a.snap.has_border;
+      info.opacity = a.snap.color.a / 255.0f;
+      info.has_bs = a.snap.has_bs;
       out.push_back(std::move(info));
     }
     return out;
@@ -175,6 +180,9 @@ class FakeDocument final : public engine::EditableDocument {
     a.snap.flags = spec.flags;
     a.snap.contents = spec.contents;
     a.snap.author = spec.author;
+    a.snap.has_border = spec.border_width > 0;
+    a.snap.border_width = static_cast<float>(spec.border_width);
+    if (spec.interior) { a.snap.interior = *spec.interior; a.snap.has_interior = true; }
     a.rect = spec.rect;
     for (const auto& q : spec.quads) {
       if (a.rect.empty()) { a.rect = q; continue; }
@@ -205,6 +213,7 @@ class FakeDocument final : public engine::EditableDocument {
   }
   [[nodiscard]] Result<void> restore_annotation(int page, const engine::AnnotationSnapshot& snap) override {
     if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
+    if (fail_restores > 0) { --fail_restores; return make_error(ErrorCode::kInvalidState, "injected restore failure"); }
     FakeAnnot a;
     a.snap = snap;
     a.rect = {snap.rect[0], snap.rect[1], snap.rect[2] - snap.rect[0], snap.rect[3] - snap.rect[1]};
@@ -223,6 +232,20 @@ class FakeDocument final : public engine::EditableDocument {
     if (a == nullptr) return make_error(ErrorCode::kInvalidArgument, "annotation not found");
     a->snap.contents = std::string(utf8);
     return {};
+  }
+  [[nodiscard]] Result<void> set_annotation_border_width(int page, std::string_view id, double width) override {
+    FakeAnnot* a = find_mutable(page, id);
+    if (a == nullptr) return make_error(ErrorCode::kInvalidArgument, "annotation not found");
+    if (a->snap.has_bs) return make_error(ErrorCode::kInvalidArgument, "border width is fixed by /BS");
+    if (!(width > 0)) return make_error(ErrorCode::kInvalidArgument, "width");
+    a->has_ap = false;
+    a->snap.border_width = static_cast<float>(width);
+    a->snap.has_border = true;
+    return {};
+  }
+  // 테스트용: 다른 프로그램이 /BS /W 로 만든 주석을 흉내 낸다 (/Border 는 없음)
+  void set_bs(int page, std::string_view id) {
+    if (FakeAnnot* a = find_mutable(page, id)) { a->snap.has_bs = true; a->snap.has_border = false; a->snap.border_width = 0; }
   }
   // 테스트용: 렌더를 흉내 내 AP 를 만든다 (색 변경이 AP 를 지우는지 확인)
   void fake_render(int page) {

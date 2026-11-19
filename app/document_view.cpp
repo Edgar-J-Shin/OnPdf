@@ -77,6 +77,8 @@ void DocumentView::set_document(const engine::DocumentHandle& handle, UiDispatch
   for (auto& [page, h] : annot_requested_) h.cancel();
   annot_requested_.clear();
   selected_annot_.reset();
+  reselect_page_ = -1;
+  reselect_id_.clear();
   ink_points_.clear();
   ink_page_ = -1;
   clear_selection();
@@ -113,7 +115,18 @@ void DocumentView::invalidate_pages(const std::vector<int>& pages, bool sizes_ch
       it->second.cancel();
       annot_requested_.erase(it);
     }
-    if (selected_annot_ && selected_annot_->page == page) clear_annotation_selection();
+    if (selected_annot_ && selected_annot_->page == page) {
+      // NM 이 있는 주석은 새 목록이 오면 조용히 다시 고른다 (두께 → 불투명도처럼 연달아 바꿀 수 있게; 안내 문구를 지우지 않게
+      // 해제 신호는 내지 않는다). "#index" 는 밀릴 수 있어 해제
+      const std::string id = selected_annot_->info.id;
+      if (!id.empty() && id.front() != '#') {
+        selected_annot_.reset();
+        reselect_page_ = page;
+        reselect_id_ = id;
+      } else {
+        clear_annotation_selection();
+      }
+    }
     if (!selection_.empty() && page >= selection_.start().page && page <= selection_.end().page) selection_hit = true;
   }
   if (selection_hit) clear_selection();
@@ -139,7 +152,13 @@ void DocumentView::invalidate_pages(const std::vector<int>& pages, bool sizes_ch
     scheduler_->set_layout(layout_.get());
   }
   schedule_update();
-  request_text_indexes();
+  request_text_indexes();  // 보이는 쪽 ±1 의 주석 목록도 다시 요청한다
+  // 재선택은 지금 요청된 쪽에서만: 보이지 않는 쪽이면 한참 뒤 스크롤할 때 갑자기 선택이 생기지 않게 포기한다
+  if (reselect_page_ >= 0 && !annot_requested_.contains(reselect_page_)) {
+    reselect_page_ = -1;
+    reselect_id_.clear();
+    emit annotation_selected(false, engine::AnnotationInfo{});
+  }
   viewport()->update();
 }
 
@@ -185,6 +204,8 @@ void DocumentView::clear_document(const QString& placeholder) {
   for (auto& [page, h] : annot_requested_) h.cancel();
   annot_requested_.clear();
   selected_annot_.reset();
+  reselect_page_ = -1;
+  reselect_id_.clear();
   ink_points_.clear();
   ink_page_ = -1;
   layout_.reset();
@@ -601,6 +622,24 @@ void DocumentView::on_annotations(int page, int generation, std::shared_ptr<cons
   if (cancelled) return;
   if (!list) list = std::make_shared<const std::vector<engine::AnnotationInfo>>();  // 실패: 빈 목록으로 재요청 방지
   annot_cache_[page] = std::move(list);
+  if (reselect_page_ == page) {
+    reselect_page_ = -1;
+    const std::string id = std::move(reselect_id_);
+    reselect_id_.clear();
+    if (!selected_annot_ && tool_ == AnnotationTool::kSelect) {
+      for (const engine::AnnotationInfo& a : *annot_cache_[page]) {
+        if (a.id != id || !a.editable) continue;
+        selected_annot_ = SelectedAnnotation{page, a};
+        update_page(page);
+        break;
+      }
+    }
+    if (selected_annot_ && selected_annot_->page == page && selected_annot_->info.id == id) {
+      emit annotation_reselected(selected_annot_->info);
+    } else {
+      emit annotation_selected(false, engine::AnnotationInfo{});  // 지워졌거나 못 찾음: 버튼·메뉴 상태를 맞춘다
+    }
+  }
 }
 
 const std::vector<engine::AnnotationInfo>* DocumentView::annotations(int page) const {
@@ -642,8 +681,20 @@ void DocumentView::set_tool(AnnotationTool tool) {
     ink_points_.clear();
     ink_page_ = -1;
   }
+  cancel_shape_drag();
   update_hover(viewport()->mapFromGlobal(QCursor::pos()));
   viewport()->update();
+}
+
+onpdf::Rect DocumentView::shape_rect() const noexcept {
+  const double x0 = std::min(shape_anchor_.x, shape_corner_.x), y0 = std::min(shape_anchor_.y, shape_corner_.y);
+  const double x1 = std::max(shape_anchor_.x, shape_corner_.x), y1 = std::max(shape_anchor_.y, shape_corner_.y);
+  return {x0, y0, x1 - x0, y1 - y0};
+}
+
+void DocumentView::cancel_shape_drag() {
+  if (drag_ == Drag::kShape) drag_ = Drag::kNone;
+  shape_page_ = -1;
 }
 
 MarkupItems DocumentView::selection_markup_items() const {
@@ -666,11 +717,14 @@ std::optional<engine::AnnotationInfo> DocumentView::selected_annotation() const 
 }
 
 void DocumentView::clear_annotation_selection() {
-  if (!selected_annot_) return;
-  const int page = selected_annot_->page;
+  const bool pending = reselect_page_ >= 0;  // 조용히 재선택을 기다리던 중이면 해제 신호는 지금 낸다
+  reselect_page_ = -1;
+  reselect_id_.clear();
+  if (!selected_annot_ && !pending) return;
+  const int page = selected_annot_ ? selected_annot_->page : -1;
   selected_annot_.reset();
   emit annotation_selected(false, engine::AnnotationInfo{});
-  update_page(page);
+  if (page >= 0) update_page(page);
 }
 
 void DocumentView::paint_annotations(QPainter& painter, int page, const QRectF& page_logical) {
@@ -690,6 +744,15 @@ void DocumentView::paint_annotations(QPainter& painter, int page, const QRectF& 
     QPolygonF poly;
     for (const onpdf::Point& p : ink_points_) poly << QPointF(page_logical.x() + p.x * k, page_logical.y() + p.y * k);
     painter.drawPolyline(poly);
+  }
+  if (drag_ == Drag::kShape && shape_page_ == page) {
+    const onpdf::Rect r = shape_rect();
+    QPen pen(kInkPreview, std::max(1.0, 2.0 * k), Qt::DashLine);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+    const QRectF box(page_logical.x() + r.x * k, page_logical.y() + r.y * k, r.w * k, r.h * k);
+    if (tool_ == AnnotationTool::kCircle) painter.drawEllipse(box);
+    else painter.drawRect(box);
   }
 }
 
@@ -951,7 +1014,10 @@ void DocumentView::reveal(int page, const std::vector<onpdf::Rect>& rects) {
 void DocumentView::update_hover(QPointF viewport_pos) {
   QString target;
   Qt::CursorShape cursor = Qt::ArrowCursor;
-  if (tool_ == AnnotationTool::kNote || tool_ == AnnotationTool::kPen) cursor = Qt::CrossCursor;
+  if (tool_ == AnnotationTool::kNote || tool_ == AnnotationTool::kPen || tool_ == AnnotationTool::kSquare ||
+      tool_ == AnnotationTool::kCircle) {
+    cursor = Qt::CrossCursor;
+  }
   QString tooltip;
   if (auto hit = page_point_at(viewport_pos)) {
     const auto [page, pt] = *hit;
@@ -1040,6 +1106,10 @@ void DocumentView::keyPressEvent(QKeyEvent* event) {
       ink_points_.clear();
       viewport()->update();
     }
+    if (drag_ == Drag::kShape) {
+      cancel_shape_drag();
+      viewport()->update();
+    }
     event->accept();
     return;
   }
@@ -1089,6 +1159,15 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
       ink_page_ = page;
       ink_points_ = {clamp_to_page(page, pt)};
       drag_ = Drag::kInk;
+    }
+    return;
+  }
+  if (tool_ == AnnotationTool::kSquare || tool_ == AnnotationTool::kCircle) {
+    if (auto hit = page_point_at(event->position())) {
+      const auto [page, pt] = *hit;
+      shape_page_ = page;
+      shape_anchor_ = shape_corner_ = clamp_to_page(page, pt);
+      drag_ = Drag::kShape;
     }
     return;
   }
@@ -1168,6 +1247,21 @@ void DocumentView::mouseMoveEvent(QMouseEvent* event) {
     }
     return;
   }
+  if (drag_ == Drag::kShape) {
+    if (shape_page_ >= 0) {
+      // 이전·현재 도형 영역만 다시 그린다 (펜과 같은 이유). 시작한 쪽 좌표로 투영해 쪽 안으로 클램프
+      const onpdf::Rect before = shape_rect();
+      shape_corner_ = clamp_to_page(shape_page_, page_point_on(shape_page_, event->position()));
+      const onpdf::Rect after = shape_rect();
+      const double margin = std::max(6.0, 2.0 * layout_->scale() / dpr()) + 2.0;
+      for (const onpdf::Rect& r : {before, after}) {
+        const QPointF a = page_point_to_viewport(shape_page_, {r.x, r.y});
+        const QPointF b = page_point_to_viewport(shape_page_, {r.right(), r.bottom()});
+        viewport()->update(QRectF(a, b).normalized().adjusted(-margin, -margin, margin, margin).toAlignedRect());
+      }
+    }
+    return;
+  }
   if (drag_ == Drag::kText) {
     last_drag_pos_ = event->position();
     set_selection(selection_.anchor(), drag_position(event->position(), pending_focus_));
@@ -1214,6 +1308,19 @@ void DocumentView::mouseReleaseEvent(QMouseEvent* event) {
         y1 = std::max(y1, p.y);
       }
       emit ink_requested(page, points, onpdf::Rect{x0 - 2, y0 - 2, x1 - x0 + 4, y1 - y0 + 4});
+    }
+    return;
+  }
+  if (drag_ == Drag::kShape) {
+    drag_ = Drag::kNone;
+    const int page = shape_page_;
+    const onpdf::Rect rect = shape_rect();
+    shape_page_ = -1;
+    if (page >= 0) update_page(page);
+    // 실수로 누른 클릭(4pt 미만)은 도형을 만들지 않는다
+    if (page >= 0 && rect.w >= 4.0 && rect.h >= 4.0) {
+      emit shape_requested(page, tool_ == AnnotationTool::kSquare ? engine::AnnotationKind::kSquare : engine::AnnotationKind::kCircle,
+                           rect);
     }
     return;
   }

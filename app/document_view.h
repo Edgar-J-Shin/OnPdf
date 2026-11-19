@@ -41,7 +41,9 @@ class DocumentTileSource;
 enum class ZoomMode { kFitWidth, kFitPage, kCustom };
 
 // 주석 도구. kSelect 는 기존 동작(텍스트 선택·링크) + 주석 선택
-enum class AnnotationTool { kSelect, kHighlight, kUnderline, kStrikeOut, kNote, kPen };
+enum class AnnotationTool { kSelect, kHighlight, kUnderline, kStrikeOut, kNote, kPen, kSquare, kCircle };
+constexpr int kAnnotationToolCount = 8;
+static_assert(kAnnotationToolCount == static_cast<int>(AnnotationTool::kCircle) + 1, "도구를 추가하면 수를 맞춘다");
 // 마크업 요청: (쪽, 줄별 사각형(쪽 포인트))
 using MarkupItems = std::vector<std::pair<int, std::vector<onpdf::Rect>>>;
 
@@ -129,7 +131,10 @@ class DocumentView : public QAbstractScrollArea {
   void markup_requested(onpdf::engine::AnnotationKind kind, const onpdf::app::MarkupItems& items);
   void note_requested(int page, onpdf::Point pt);  // 쪽 포인트 (쪽 안으로 클램프됨)
   void ink_requested(int page, const std::vector<onpdf::Point>& points, onpdf::Rect bbox);
+  void shape_requested(int page, onpdf::engine::AnnotationKind kind, onpdf::Rect rect);  // 쪽 포인트, 4pt 이상
   void annotation_selected(bool has, const onpdf::engine::AnnotationInfo& info);
+  // 편집 뒤 같은 NM 을 다시 골랐다 (사용자 조작이 아니므로 상태 표시줄 안내를 덮지 않는다)
+  void annotation_reselected(const onpdf::engine::AnnotationInfo& info);
   void annotation_delete_requested(int page, const QString& id);
   void annotation_edit_requested(int page, const onpdf::engine::AnnotationInfo& info);
 
@@ -212,7 +217,7 @@ class DocumentView : public QAbstractScrollArea {
   std::unordered_map<int, std::shared_ptr<const view::PageTextIndex>> text_cache_;
   std::unordered_map<int, engine::TaskHandle> text_requested_;  // 쪽 → 취소 핸들
   view::TextSelection selection_;
-  enum class Drag { kNone, kText, kMaybeLink, kInk } drag_ = Drag::kNone;
+  enum class Drag { kNone, kText, kMaybeLink, kInk, kShape } drag_ = Drag::kNone;
   // 주석 (메인 스레드 전용)
   AnnotationTool tool_ = AnnotationTool::kSelect;
   std::unordered_map<int, std::shared_ptr<const std::vector<engine::AnnotationInfo>>> annot_cache_;
@@ -222,8 +227,14 @@ class DocumentView : public QAbstractScrollArea {
     engine::AnnotationInfo info;
   };
   std::optional<SelectedAnnotation> selected_annot_;
+  int reselect_page_ = -1;    // 편집으로 목록이 바뀐 뒤 같은 NM 을 다시 고른다 (속성을 연달아 바꿀 수 있게)
+  std::string reselect_id_;
   int ink_page_ = -1;
   std::vector<onpdf::Point> ink_points_;  // 그리는 중인 펜 스트로크 (쪽 포인트)
+  int shape_page_ = -1;                   // 그리는 중인 도형 (쪽 포인트)
+  onpdf::Point shape_anchor_{}, shape_corner_{};
+  [[nodiscard]] onpdf::Rect shape_rect() const noexcept;
+  void cancel_shape_drag();
   QPointF press_pos_;
   std::optional<view::Link> pressed_link_;
   QString hovered_target_;
