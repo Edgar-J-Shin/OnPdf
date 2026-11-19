@@ -77,6 +77,8 @@ void DocumentView::set_document(const engine::DocumentHandle& handle, UiDispatch
   for (auto& [page, h] : annot_requested_) h.cancel();
   annot_requested_.clear();
   selected_annot_.reset();
+  reselect_page_ = -1;
+  reselect_id_.clear();
   ink_points_.clear();
   ink_page_ = -1;
   clear_selection();
@@ -114,12 +116,15 @@ void DocumentView::invalidate_pages(const std::vector<int>& pages, bool sizes_ch
       annot_requested_.erase(it);
     }
     if (selected_annot_ && selected_annot_->page == page) {
-      // NM 이 있는 주석은 새 목록이 오면 다시 고른다 (두께 → 불투명도처럼 연달아 바꿀 수 있게). "#index" 는 밀릴 수 있어 해제
+      // NM 이 있는 주석은 새 목록이 오면 조용히 다시 고른다 (두께 → 불투명도처럼 연달아 바꿀 수 있게; 안내 문구를 지우지 않게
+      // 해제 신호는 내지 않는다). "#index" 는 밀릴 수 있어 해제
       const std::string id = selected_annot_->info.id;
-      clear_annotation_selection();  // 보류 중인 재선택도 지운다
       if (!id.empty() && id.front() != '#') {
+        selected_annot_.reset();
         reselect_page_ = page;
         reselect_id_ = id;
+      } else {
+        clear_annotation_selection();
       }
     }
     if (!selection_.empty() && page >= selection_.start().page && page <= selection_.end().page) selection_hit = true;
@@ -147,7 +152,13 @@ void DocumentView::invalidate_pages(const std::vector<int>& pages, bool sizes_ch
     scheduler_->set_layout(layout_.get());
   }
   schedule_update();
-  request_text_indexes();
+  request_text_indexes();  // 보이는 쪽 ±1 의 주석 목록도 다시 요청한다
+  // 재선택은 지금 요청된 쪽에서만: 보이지 않는 쪽이면 한참 뒤 스크롤할 때 갑자기 선택이 생기지 않게 포기한다
+  if (reselect_page_ >= 0 && !annot_requested_.contains(reselect_page_)) {
+    reselect_page_ = -1;
+    reselect_id_.clear();
+    emit annotation_selected(false, engine::AnnotationInfo{});
+  }
   viewport()->update();
 }
 
@@ -193,6 +204,8 @@ void DocumentView::clear_document(const QString& placeholder) {
   for (auto& [page, h] : annot_requested_) h.cancel();
   annot_requested_.clear();
   selected_annot_.reset();
+  reselect_page_ = -1;
+  reselect_id_.clear();
   ink_points_.clear();
   ink_page_ = -1;
   layout_.reset();
@@ -618,9 +631,13 @@ void DocumentView::on_annotations(int page, int generation, std::shared_ptr<cons
         if (a.id != id || !a.editable) continue;
         selected_annot_ = SelectedAnnotation{page, a};
         update_page(page);
-        emit annotation_selected(true, a);
         break;
       }
+    }
+    if (selected_annot_ && selected_annot_->page == page && selected_annot_->info.id == id) {
+      emit annotation_reselected(selected_annot_->info);
+    } else {
+      emit annotation_selected(false, engine::AnnotationInfo{});  // 지워졌거나 못 찾음: 버튼·메뉴 상태를 맞춘다
     }
   }
 }
@@ -700,13 +717,14 @@ std::optional<engine::AnnotationInfo> DocumentView::selected_annotation() const 
 }
 
 void DocumentView::clear_annotation_selection() {
+  const bool pending = reselect_page_ >= 0;  // 조용히 재선택을 기다리던 중이면 해제 신호는 지금 낸다
   reselect_page_ = -1;
   reselect_id_.clear();
-  if (!selected_annot_) return;
-  const int page = selected_annot_->page;
+  if (!selected_annot_ && !pending) return;
+  const int page = selected_annot_ ? selected_annot_->page : -1;
   selected_annot_.reset();
   emit annotation_selected(false, engine::AnnotationInfo{});
-  update_page(page);
+  if (page >= 0) update_page(page);
 }
 
 void DocumentView::paint_annotations(QPainter& painter, int page, const QRectF& page_logical) {
@@ -1086,6 +1104,10 @@ void DocumentView::keyPressEvent(QKeyEvent* event) {
     if (drag_ == Drag::kInk) {
       drag_ = Drag::kNone;
       ink_points_.clear();
+      viewport()->update();
+    }
+    if (drag_ == Drag::kShape) {
+      cancel_shape_drag();
       viewport()->update();
     }
     event->accept();

@@ -347,6 +347,36 @@ TEST_F(AnnotationTest, SquareDragCreatesShapeAndTinyDragDoesNot) {
   ASSERT_TRUE(wait_annotations(0, 1));
   EXPECT_EQ((*view()->annotations(0))[0].kind, engine::AnnotationKind::kCircle);
   EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("원 추가")));
+  // Escape 는 그리던 도형을 버린다 (리뷰 W3)
+  send_mouse(QEvent::MouseButtonPress, view()->page_point_to_viewport(0, {100, 600}), Qt::LeftButton, Qt::LeftButton);
+  send_mouse(QEvent::MouseMove, view()->page_point_to_viewport(0, {200, 680}), Qt::NoButton, Qt::LeftButton);
+  QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+  QApplication::sendEvent(view(), &esc);
+  send_mouse(QEvent::MouseButtonRelease, view()->page_point_to_viewport(0, {200, 680}), Qt::LeftButton, Qt::NoButton);
+  ASSERT_TRUE(wait_idle());
+  EXPECT_EQ(view()->annotations(0)->size(), 1u);
+}
+
+TEST_F(AnnotationTest, ReselectDoesNotLeakIntoNextDocument) {
+  const auto copy = open_copy("simple.pdf");
+  ASSERT_TRUE(wait_annotations(0, 0));
+  use_tool(AnnotationTool::kSquare);
+  drag(view()->page_point_to_viewport(0, {100, 440}), view()->page_point_to_viewport(0, {300, 520}));
+  ASSERT_TRUE(wait_annotations(0, 1));
+  use_tool(AnnotationTool::kSelect);
+  click(view()->page_point_to_viewport(0, {200, 480}));
+  ASSERT_TRUE(view()->selected_annotation().has_value());
+  window_.set_annotation_border_width(4.0);
+  ASSERT_TRUE(wait_idle());
+  ASSERT_TRUE(spin_until([&] { return view()->selected_annotation().has_value(); }));  // 재선택됨
+  // 저장한 파일의 사본(같은 NM)을 연다: 새 문서에서 저절로 선택되지 않는다 (리뷰 W4)
+  window_.save_action()->trigger();
+  ASSERT_TRUE(spin_until([&] { return !window_.saving() && !window_.isWindowModified(); }));
+  const auto again = dir_ / "simple-again.pdf";
+  std::filesystem::copy_file(copy, again);
+  ASSERT_TRUE(open_path(again));
+  ASSERT_TRUE(wait_annotations(0, 1));
+  EXPECT_FALSE(view()->selected_annotation().has_value());
 }
 
 TEST_F(AnnotationTest, DefaultsApplyToNewShapesAndPenOnly) {
@@ -427,9 +457,11 @@ TEST_F(AnnotationTest, BsAnnotationWidthRecreates) {
   EXPECT_TRUE(view()->selected_annotation()->has_bs);
   EXPECT_TRUE(window_.width_button()->isEnabled());
   const std::string id = view()->selected_annotation()->id;
+  EXPECT_EQ(window_.width_button()->text(), QStringLiteral("두께")) << "/BS /W 는 읽을 수 없어 값을 보이지 않는다";
   window_.set_annotation_border_width(4.0);
-  EXPECT_TRUE(window_.statusBar()->currentMessage().contains(QStringLiteral("다시 만들었습니다")));
   ASSERT_TRUE(wait_idle());
+  EXPECT_TRUE(window_.statusBar()->currentMessage().contains(QStringLiteral("다시 만들었습니다")))
+      << "편집 완료·선택 갱신 뒤에도 안내가 남는다 (리뷰 W1)";
   ASSERT_TRUE(spin_until([&] {
     if (!idle() || !view()->annotations(0)) return false;
     for (const auto& a : *view()->annotations(0)) if (a.kind == engine::AnnotationKind::kSquare) return !a.has_bs && a.border_width == 4.0f;

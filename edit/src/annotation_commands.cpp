@@ -128,13 +128,6 @@ Result<engine::ChangeSet> SetAnnotationContentsCommand::undo(engine::EditableDoc
 
 // ---------------------------------------------------------------- Border width
 
-namespace {
-bool has_border_width(engine::AnnotationKind kind) noexcept {
-  return kind == engine::AnnotationKind::kInk || kind == engine::AnnotationKind::kSquare ||
-         kind == engine::AnnotationKind::kCircle;
-}
-}  // namespace
-
 SetAnnotationBorderWidthCommand::SetAnnotationBorderWidthCommand(int page, std::string id, double width)
     : page_(page), annotation_id_(std::move(id)), width_(width) {}
 
@@ -142,7 +135,7 @@ Result<engine::ChangeSet> SetAnnotationBorderWidthCommand::execute(engine::Edita
   if (!(width_ > 0.0)) return make_error(ErrorCode::kInvalidArgument, "border width must be positive");
   auto before = doc.snapshot_annotation(page_, annotation_id_);
   if (!before) return std::unexpected(before.error());
-  if (!has_border_width(before->kind)) return make_error(ErrorCode::kInvalidArgument, "annotation has no border width");
+  if (!engine::has_border_width(before->kind)) return make_error(ErrorCode::kInvalidArgument, "annotation has no border width");
   // 재실행에서는 첫 실행의 스냅샷(원래 값)을 유지한다 — 재생성 뒤의 스냅샷은 이미 새 폭이다
   if (!executed_) before_ = *before;
   annotation_id_ = before_.id;
@@ -153,7 +146,10 @@ Result<engine::ChangeSet> SetAnnotationBorderWidthCommand::execute(engine::Edita
     after.has_border = true;
     after.has_bs = false;
     if (auto removed = doc.remove_annotation(page_, annotation_id_); !removed) return std::unexpected(removed.error());
-    if (auto restored = doc.restore_annotation(page_, after); !restored) return std::unexpected(restored.error());
+    if (auto restored = doc.restore_annotation(page_, after); !restored) {
+      (void)doc.restore_annotation(page_, before_);  // 보상: 지운 주석을 원래 스냅샷으로 되살린다 (실패해도 오류는 원인 그대로)
+      return std::unexpected(restored.error());
+    }
     recreated_ = true;
   } else {
     if (auto set = doc.set_annotation_border_width(page_, annotation_id_, width_); !set) return std::unexpected(set.error());
@@ -167,7 +163,14 @@ Result<engine::ChangeSet> SetAnnotationBorderWidthCommand::undo(engine::Editable
   if (recreated_) {
     // 원래 /BS 는 되살릴 수 없다: 스냅샷(/Border 값 또는 없음)으로 다시 만든다
     if (auto removed = doc.remove_annotation(page_, annotation_id_); !removed) return std::unexpected(removed.error());
-    if (auto restored = doc.restore_annotation(page_, before_); !restored) return std::unexpected(restored.error());
+    if (auto restored = doc.restore_annotation(page_, before_); !restored) {
+      engine::AnnotationSnapshot current = before_;  // 보상: 실행 뒤 상태(새 폭)로라도 되살린다
+      current.border_width = static_cast<float>(width_);
+      current.has_border = true;
+      current.has_bs = false;
+      (void)doc.restore_annotation(page_, current);
+      return std::unexpected(restored.error());
+    }
     return page_change({page_});
   }
   const double previous = before_.has_border ? before_.border_width : 1.0;  // PDF 기본 폭

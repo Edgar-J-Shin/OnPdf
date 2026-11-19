@@ -43,6 +43,11 @@ struct AnnotationInfo {
   bool has_bs = false;                            // /BS 가 있는 주석: 두께는 삭제·재생성으로만 바꿀 수 있다
 };
 
+// 선 두께(/Border)가 의미 있는 종류: 펜·사각형·원 (edit 의 Command 와 app 의 메뉴가 같은 기준을 쓴다)
+[[nodiscard]] constexpr bool has_border_width(AnnotationKind kind) noexcept {
+  return kind == AnnotationKind::kInk || kind == AnnotationKind::kSquare || kind == AnnotationKind::kCircle;
+}
+
 // 생성 명세 (Command 가 값으로 보관). 좌표는 쪽 포인트
 struct AnnotationSpec {
   AnnotationKind kind = AnnotationKind::kHighlight;

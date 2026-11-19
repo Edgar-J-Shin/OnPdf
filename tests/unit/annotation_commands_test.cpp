@@ -255,8 +255,75 @@ TEST(ShapeCommands, ExecuteUndoRedoOnPdfium) {
   EXPECT_EQ(after->color, before->color);
   ASSERT_TRUE(bs.undo(*other));
   EXPECT_EQ(other->annotations(0)->size(), 6u);
+  {
+    // 취소 뒤: 같은 NM 으로 존재, 색·채움·내용 보존 (원래 /BS /W 3 은 복원 불가 — 폭 없음)
+    auto undone = other->snapshot_annotation(0, before->id);
+    ASSERT_TRUE(undone) << undone.error().message;
+    EXPECT_EQ(undone->kind, AnnotationKind::kSquare);
+    EXPECT_EQ(undone->color, before->color);
+    EXPECT_EQ(undone->interior, before->interior);
+    EXPECT_EQ(undone->contents, before->contents);
+    EXPECT_FALSE(undone->has_bs);
+    EXPECT_FALSE(undone->has_border);
+  }
   ASSERT_TRUE(bs.execute(*other));
   EXPECT_EQ(other->annotations(0)->size(), 6u);
+}
+
+// 마크업 불투명도: 검정 하이라이트 /CA 50% → PDFium 이 만든 AP 로 글자 영역에 흰 배경이 비친다
+TEST(SetAnnotationOpacityCommand, MarkupOpacityAffectsRenderOnPdfium) {
+  auto doc = engine::PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc);
+  auto text = doc->load_text(0);
+  ASSERT_TRUE(text);
+  AnnotationSpec hl;
+  hl.kind = AnnotationKind::kHighlight;
+  hl.quads = text->selection_rects({0, std::min(8, text->char_count())});
+  hl.color = {0, 0, 0, 255};  // 100% 면 글자가 완전히 덮인다
+  auto id = doc->add_annotation(0, hl);
+  ASSERT_TRUE(id);
+  const Rect box = hl.quads.front();
+  auto light_pixels = [&] {
+    engine::RenderOptions o;
+    o.scale = 1.0f;
+    auto bmp = doc->render_page(0, o);
+    if (!bmp) return -1;
+    int light = 0;
+    for (int y = static_cast<int>(box.y); y < static_cast<int>(box.bottom()); ++y) {
+      for (int x = static_cast<int>(box.x); x < static_cast<int>(box.right()); ++x) {
+        const auto* p = bmp->pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(bmp->stride) +
+                        static_cast<std::size_t>(x) * 4;
+        if (p[0] > 100) ++light;
+      }
+    }
+    return light;
+  };
+  const int opaque = light_pixels();
+  ASSERT_GE(opaque, 0);
+  SetAnnotationOpacityCommand half(0, *id, 128);
+  ASSERT_TRUE(half.execute(*doc));
+  EXPECT_GT(light_pixels(), opaque);
+  ASSERT_TRUE(half.undo(*doc));
+  EXPECT_EQ(light_pixels(), opaque);
+}
+
+TEST(SetAnnotationBorderWidthCommand, RestoreFailureIsCompensatedOnFake) {
+  FakeDocument doc({{612, 792}});
+  auto id = doc.add_annotation(0, square({10, 10, 100, 50}));
+  ASSERT_TRUE(id);
+  doc.set_bs(0, *id);
+  doc.fail_restores = 1;  // remove 는 성공, restore 는 실패 → 보상으로 원래 스냅샷 복원
+  SetAnnotationBorderWidthCommand cmd(0, *id, 4.0);
+  EXPECT_FALSE(cmd.execute(doc));
+  ASSERT_NE(doc.annotation(0, *id), nullptr) << "주석이 사라지지 않는다";
+  EXPECT_TRUE(doc.annotation(0, *id)->snap.has_bs);
+  EXPECT_FALSE(doc.annotation(0, *id)->snap.has_border);
+  // 취소 중 실패도 보상 (실행 뒤 상태로라도 남긴다)
+  ASSERT_TRUE(cmd.execute(doc));
+  doc.fail_restores = 1;
+  EXPECT_FALSE(cmd.undo(doc));
+  ASSERT_NE(doc.annotation(0, *id), nullptr);
+  EXPECT_FLOAT_EQ(doc.annotation(0, *id)->snap.border_width, 4.0f);
 }
 
 // CLAUDE.md: 실제 PDFium 에서도 실행 → 취소 → 재실행

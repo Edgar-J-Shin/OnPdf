@@ -229,6 +229,9 @@ class MainWindow : public QMainWindow {
   QAction* tool_actions_[kAnnotationToolCount] = {};  // AnnotationTool 순서
   QToolButton* color_button_ = nullptr;
   QToolButton* width_button_ = nullptr;    // 두께 ▾ (도형·펜)
+  QMenu* width_menu_ = nullptr;
+  QMenu* opacity_menu_ = nullptr;
+  bool selection_status_shown_ = false;  // 상태 표시줄이 선택 정보를 보이는 중 — 해제 때 그것만 지운다 (안내 문구는 남긴다)
   QToolButton* opacity_button_ = nullptr;  // 불투명도 ▾
   double shape_border_width_ = 2.0;
   std::uint8_t shape_alpha_ = 255;

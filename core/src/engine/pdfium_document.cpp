@@ -613,6 +613,7 @@ Result<void> PdfiumDocument::set_annotation_border_width(int page_index, std::st
   if (auto nm = ensure_nm(annot); !nm) return std::unexpected(nm.error());
   // /BS /W 가 있으면 PDFium 은 /Border 를 무시하고, /BS 를 지울 API 는 없다 → 호출자가 삭제·재생성으로 우회한다
   if (FPDFAnnot_HasKey(annot, "BS")) return make_error(ErrorCode::kInvalidArgument, "border width is fixed by /BS");
+  // FPDFAnnot_SetBorder 도 AP 를 지우지만(실측), 색 변경과 같은 규칙을 눈에 보이게 먼저 지운다
   if (!FPDFAnnot_SetAP(annot, FPDF_ANNOT_APPEARANCEMODE_NORMAL, nullptr)) {
     return make_error(ErrorCode::kInvalidState, "cannot clear appearance stream");
   }

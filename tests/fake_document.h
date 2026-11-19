@@ -54,6 +54,7 @@ class FakeDocument final : public engine::EditableDocument {
     bool has_ap = false;  // 렌더로 생긴 AP (색 변경·스냅샷이 지운다)
   };
   int fail_add_on_page = -1;  // 이 쪽에 add_annotation 을 하면 실패 (보상 삭제 테스트)
+  int fail_restores = 0;      // 다음 n 번의 restore_annotation 이 실패 (재생성 보상 테스트)
   [[nodiscard]] int annotation_count(int page) const { const auto it = annots_.find(page); return it == annots_.end() ? 0 : static_cast<int>(it->second.size()); }
   [[nodiscard]] const FakeAnnot* annotation(int page, std::string_view id) const {
     const auto it = annots_.find(page);
@@ -212,6 +213,7 @@ class FakeDocument final : public engine::EditableDocument {
   }
   [[nodiscard]] Result<void> restore_annotation(int page, const engine::AnnotationSnapshot& snap) override {
     if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
+    if (fail_restores > 0) { --fail_restores; return make_error(ErrorCode::kInvalidState, "injected restore failure"); }
     FakeAnnot a;
     a.snap = snap;
     a.rect = {snap.rect[0], snap.rect[1], snap.rect[2] - snap.rect[0], snap.rect[3] - snap.rect[1]};
