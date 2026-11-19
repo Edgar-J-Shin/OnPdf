@@ -265,6 +265,66 @@ TEST(Roundtrip, AnnotationsSurviveSave) {
 }
 
 // 기존 문서의 주석을 고치고(색·삭제) 저장해도 나머지 주석·링크가 그대로다
+// 도형(#39): 추가 + 두께·불투명도 변경 뒤 저장 → 다시 열기 → 종류·Rect·/Border·/CA·채움 일치
+TEST(Roundtrip, ShapesSurviveSave) {
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc);
+  engine::AnnotationSpec square;
+  square.kind = engine::AnnotationKind::kSquare;
+  square.rect = {100, 100, 200, 80};
+  square.border_width = 2.0;
+  square.color = {255, 0, 0, 255};
+  square.interior = engine::Color{255, 230, 230, 255};
+  engine::AnnotationSpec circle;
+  circle.kind = engine::AnnotationKind::kCircle;
+  circle.rect = {320, 100, 120, 120};
+  circle.border_width = 2.0;
+  circle.color = {0, 0, 255, 255};
+  edit::AddAnnotationsCommand add({{0, square}, {1, circle}});
+  ASSERT_TRUE(add.execute(*doc));
+  RenderOptions render;
+  render.scale = 0.5f;
+  ASSERT_TRUE(doc->render_page(0, render));  // AP 가 생긴 상태에서 속성 변경 (앱 흐름)
+  const std::string sid = (*doc->annotations(0))[0].id;
+  edit::SetAnnotationBorderWidthCommand width(0, sid, 6.0);
+  ASSERT_TRUE(width.execute(*doc));
+  edit::SetAnnotationOpacityCommand opacity(0, sid, 128);
+  ASSERT_TRUE(opacity.execute(*doc));
+  ASSERT_TRUE(doc->render_page(0, render));
+  ASSERT_TRUE(doc->render_page(1, render));
+  ScopedTempDir dir;
+  const auto target = dir / "shapes.pdf";
+  ASSERT_TRUE(save_document_safely(*doc, target, {}));
+  auto reopened = PdfiumDocument::open(target);
+  ASSERT_TRUE(reopened);
+  auto p0 = reopened->annotations(0);
+  auto p1 = reopened->annotations(1);
+  ASSERT_TRUE(p0 && p1);
+  ASSERT_EQ(p0->size(), 1u);
+  ASSERT_EQ(p1->size(), 1u);
+  const auto& s = (*p0)[0];
+  EXPECT_EQ(s.kind, engine::AnnotationKind::kSquare);
+  EXPECT_EQ(s.id, sid);
+  EXPECT_NEAR(s.rect.x, 100, 0.5);
+  EXPECT_NEAR(s.rect.w, 200, 0.5);
+  EXPECT_NEAR(s.rect.h, 80, 0.5);
+  EXPECT_FLOAT_EQ(s.border_width, 6.0f);
+  EXPECT_NEAR(s.opacity, 128.0 / 255.0, 0.01);
+  EXPECT_TRUE(s.flags & engine::kAnnotFlagPrint);
+  auto snap = reopened->snapshot_annotation(0, sid);
+  ASSERT_TRUE(snap);
+  EXPECT_EQ(snap->color, (engine::Color{255, 0, 0, 128}));
+  EXPECT_TRUE(snap->has_interior);
+  EXPECT_EQ(snap->interior, (engine::Color{255, 230, 230, 128})) << "내부색 알파 = /CA";
+  const auto& c = (*p1)[0];
+  EXPECT_EQ(c.kind, engine::AnnotationKind::kCircle);
+  EXPECT_NEAR(c.rect.x, 320, 0.5);
+  EXPECT_FLOAT_EQ(c.border_width, 2.0f);
+  EXPECT_FLOAT_EQ(c.opacity, 1.0f);
+  auto check = engine::QpdfTools::check(target, "");
+  EXPECT_TRUE(check) << (check ? "" : check.error().message);
+}
+
 TEST(Roundtrip, EditingExistingAnnotationsKeepsOthers) {
   auto doc = PdfiumDocument::open(testdata("annotations.pdf"));
   ASSERT_TRUE(doc);

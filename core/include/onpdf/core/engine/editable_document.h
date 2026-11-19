@@ -90,6 +90,9 @@ class EditableDocument {
   [[nodiscard]] virtual Result<void> set_annotation_color(int page_index, std::string_view id, Color color) = 0;
   [[nodiscard]] virtual Result<void> set_annotation_contents(int page_index, std::string_view id,
                                                              std::string_view utf8) = 0;
+  // AP 를 지우고 /Border 폭을 쓴다 (Ink·Square·Circle). /BS 가 있는 주석은 거절한다 — PDFium 은 /BS /W 를 우선하고
+  // /BS 를 지울 API 가 없다 (Command 가 삭제·재생성으로 우회)
+  [[nodiscard]] virtual Result<void> set_annotation_border_width(int page_index, std::string_view id, double width) = 0;
 };
 
 }  // namespace onpdf::engine

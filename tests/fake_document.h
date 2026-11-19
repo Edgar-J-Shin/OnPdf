@@ -160,6 +160,10 @@ class FakeDocument final : public engine::EditableDocument {
       info.author = a.snap.author;
       info.flags = a.snap.flags;
       info.editable = a.snap.kind != engine::AnnotationKind::kLink && a.snap.kind != engine::AnnotationKind::kOther;
+      info.border_width = a.snap.border_width;
+      info.has_border = a.snap.has_border;
+      info.opacity = a.snap.color.a / 255.0f;
+      info.has_bs = a.snap.has_bs;
       out.push_back(std::move(info));
     }
     return out;
@@ -175,6 +179,9 @@ class FakeDocument final : public engine::EditableDocument {
     a.snap.flags = spec.flags;
     a.snap.contents = spec.contents;
     a.snap.author = spec.author;
+    a.snap.has_border = spec.border_width > 0;
+    a.snap.border_width = static_cast<float>(spec.border_width);
+    if (spec.interior) { a.snap.interior = *spec.interior; a.snap.has_interior = true; }
     a.rect = spec.rect;
     for (const auto& q : spec.quads) {
       if (a.rect.empty()) { a.rect = q; continue; }
@@ -223,6 +230,20 @@ class FakeDocument final : public engine::EditableDocument {
     if (a == nullptr) return make_error(ErrorCode::kInvalidArgument, "annotation not found");
     a->snap.contents = std::string(utf8);
     return {};
+  }
+  [[nodiscard]] Result<void> set_annotation_border_width(int page, std::string_view id, double width) override {
+    FakeAnnot* a = find_mutable(page, id);
+    if (a == nullptr) return make_error(ErrorCode::kInvalidArgument, "annotation not found");
+    if (a->snap.has_bs) return make_error(ErrorCode::kInvalidArgument, "border width is fixed by /BS");
+    if (!(width > 0)) return make_error(ErrorCode::kInvalidArgument, "width");
+    a->has_ap = false;
+    a->snap.border_width = static_cast<float>(width);
+    a->snap.has_border = true;
+    return {};
+  }
+  // 테스트용: 다른 프로그램이 /BS /W 로 만든 주석을 흉내 낸다 (/Border 는 없음)
+  void set_bs(int page, std::string_view id) {
+    if (FakeAnnot* a = find_mutable(page, id)) { a->snap.has_bs = true; a->snap.has_border = false; a->snap.border_width = 0; }
   }
   // 테스트용: 렌더를 흉내 내 AP 를 만든다 (색 변경이 AP 를 지우는지 확인)
   void fake_render(int page) {

@@ -240,5 +240,101 @@ TEST(Annotations, InkAndContents) {
   EXPECT_FALSE(doc->add_annotation(0, bad));
 }
 
+// 도형(#39): /Border 폭·/IC·불투명도가 쓰이고, 회전 쪽에서도 Rect 가 입력한 쪽 포인트로 돌아온다
+TEST(Annotations, SquareAndCircleCarryBorderAndInterior) {
+  for (int rotation : {0, 1}) {
+    auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+    ASSERT_TRUE(doc);
+    if (rotation != 0) ASSERT_TRUE(doc->set_page_rotation(0, rotation));
+    AnnotationSpec square;
+    square.kind = AnnotationKind::kSquare;
+    square.rect = {100, 150, 200, 80};
+    square.border_width = 4.0;
+    square.color = {255, 0, 0, 128};
+    square.interior = Color{255, 230, 230, 255};
+    auto sid = doc->add_annotation(0, square);
+    ASSERT_TRUE(sid) << sid.error().message;
+    AnnotationSpec circle;
+    circle.kind = AnnotationKind::kCircle;
+    circle.rect = {320, 150, 120, 120};
+    circle.border_width = 1.0;
+    circle.color = {0, 0, 255, 255};
+    auto cid = doc->add_annotation(0, circle);
+    ASSERT_TRUE(cid) << cid.error().message;
+
+    auto list = doc->annotations(0);
+    ASSERT_TRUE(list);
+    const AnnotationInfo* s = find_id(*list, *sid);
+    ASSERT_NE(s, nullptr);
+    EXPECT_EQ(s->kind, AnnotationKind::kSquare);
+    EXPECT_NEAR(s->rect.x, 100, 0.01) << "rotation " << rotation;
+    EXPECT_NEAR(s->rect.y, 150, 0.01);
+    EXPECT_NEAR(s->rect.w, 200, 0.01);
+    EXPECT_NEAR(s->rect.h, 80, 0.01);
+    EXPECT_TRUE(s->has_border);
+    EXPECT_FLOAT_EQ(s->border_width, 4.0f);
+    EXPECT_NEAR(s->opacity, 128.0 / 255.0, 0.01);
+    EXPECT_FALSE(s->has_bs);
+    EXPECT_TRUE(s->editable);
+    auto snap = doc->snapshot_annotation(0, *sid);
+    ASSERT_TRUE(snap);
+    EXPECT_TRUE(snap->has_interior);
+    EXPECT_EQ(snap->interior, (Color{255, 230, 230, 128})) << "내부색 알파 = /CA";
+    EXPECT_EQ(snap->color, (Color{255, 0, 0, 128}));
+    const AnnotationInfo* c = find_id(*list, *cid);
+    ASSERT_NE(c, nullptr);
+    EXPECT_EQ(c->kind, AnnotationKind::kCircle);
+    EXPECT_FLOAT_EQ(c->border_width, 1.0f);
+    EXPECT_FLOAT_EQ(c->opacity, 1.0f);
+    EXPECT_FALSE(doc->snapshot_annotation(0, *cid)->has_interior) << "/IC 가 없으면 채움 없음 (GetColor 의 기본 검정에 속지 않는다)";
+    // 렌더: 사각형 안쪽이 채움(반투명 연분홍)으로 흰색이 아니다. 원 안쪽은 채움이 없어 흰색이 남는다
+    RenderOptions options;
+    options.scale = 1.0f;
+    auto bmp = doc->render_page(0, options);
+    ASSERT_TRUE(bmp);
+    const auto not_white = [](int r, int g, int b) { return !(r > 250 && g > 250 && b > 250); };
+    EXPECT_GT(fraction_in(*bmp, {106, 156, 188, 68}, 1.0, not_white), 0.95) << "rotation " << rotation;
+    EXPECT_LT(fraction_in(*bmp, {360, 190, 40, 40}, 1.0, not_white), 0.5) << "원 가운데는 채움이 없다";
+  }
+  AnnotationSpec no_rect;
+  no_rect.kind = AnnotationKind::kSquare;
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc);
+  EXPECT_FALSE(doc->add_annotation(0, no_rect));
+}
+
+TEST(Annotations, BorderWidthSetterClearsApAndRejectsBs) {
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc);
+  AnnotationSpec square;
+  square.kind = AnnotationKind::kSquare;
+  square.rect = {100, 100, 100, 100};
+  square.border_width = 2.0;
+  auto id = doc->add_annotation(0, square);
+  ASSERT_TRUE(id);
+  RenderOptions options;
+  options.scale = 0.5f;
+  ASSERT_TRUE(doc->render_page(0, options));  // AP 생성
+  EXPECT_FALSE(find_id(*doc->annotations(0), *id)->has_color) << "AP 가 있으면 색을 못 읽는다";
+  ASSERT_TRUE(doc->set_annotation_border_width(0, *id, 6.0));
+  auto snap = doc->snapshot_annotation(0, *id);
+  ASSERT_TRUE(snap);
+  EXPECT_FLOAT_EQ(snap->border_width, 6.0f);
+  EXPECT_FALSE(doc->set_annotation_border_width(0, *id, 0.0));
+  // 다른 프로그램이 /BS /W 로 만든 사각형: has_bs, setter 거절 (Command 가 삭제·재생성으로 우회한다)
+  auto other = PdfiumDocument::open(testdata("annotations.pdf"));
+  ASSERT_TRUE(other);
+  auto list = other->annotations(0);
+  ASSERT_TRUE(list);
+  ASSERT_EQ((*list)[1].kind, AnnotationKind::kSquare);
+  EXPECT_TRUE((*list)[1].has_bs);
+  EXPECT_FALSE((*list)[1].has_border) << "/BS 만 있고 /Border 는 없다";
+  EXPECT_NEAR((*list)[1].opacity, 0.8, 0.001) << "/CA 는 AP 와 무관하게 읽힌다";
+  auto rejected = other->set_annotation_border_width(0, "#1", 5.0);
+  ASSERT_FALSE(rejected);
+  EXPECT_EQ(rejected.error().code, ErrorCode::kInvalidArgument);
+  EXPECT_TRUE(other->snapshot_annotation(0, "#1")->has_bs);
+}
+
 }  // namespace
 }  // namespace onpdf::engine
