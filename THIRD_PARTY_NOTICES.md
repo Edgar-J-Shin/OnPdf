@@ -47,7 +47,7 @@ OnPdf 는 Apache License 2.0 으로 배포되며, 아래 제3자 구성 요소�
 
 ### libjpeg-turbo (qpdf 의존)
 - 출처: https://libjpeg-turbo.org (vcpkg)
-- 라이선스: IJG License 및 BSD-3-Clause
+- 라이선스: IJG License 및 BSD-3-Clause (SIMD 코드 일부는 zlib License)
 
 ## 개발·테스트에만 쓰는 구성 요소 (배포물에 포함되지 않음)
 

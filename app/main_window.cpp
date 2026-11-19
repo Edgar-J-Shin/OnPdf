@@ -767,6 +767,8 @@ void MainWindow::on_annotation_edit_requested(int page, const engine::Annotation
 
 namespace {
 
+QString q_filename(const std::filesystem::path& p) { return QString::fromStdString(onpdf::path_to_utf8(p.filename())); }
+
 QString structure_error_text(const onpdf::Error& e) {
   switch (e.code) {
     case ErrorCode::kPasswordRequired: return MainWindow::tr("암호가 필요한 문서가 있습니다: %1").arg(QString::fromStdString(e.message));
@@ -786,12 +788,20 @@ void MainWindow::show_structure_progress(const QString& title) {
   structure_progress_->setObjectName(QStringLiteral("structure_progress"));
   structure_progress_->setWindowTitle(title);
   structure_progress_->setWindowModality(Qt::NonModal);  // 모달 진행 창은 setValue 마다 이벤트를 재진입 처리한다 (인쇄와 같은 이유)
-  structure_progress_->setMinimumDuration(300);
+  structure_progress_->setMinimumDuration(0);
   structure_progress_->setAutoClose(false);
   structure_progress_->setAutoReset(false);
+  structure_progress_->setRange(0, 0);  // 입력을 읽는 동안은 진행률이 없다 → busy 표시 (리뷰 I9)
+  structure_progress_->setLabelText(tr("%1 (준비 중…)").arg(title));
+  structure_progress_->show();
   QProgressDialog* progress = structure_progress_;
-  connect(structure_job_, &StructureJob::progress, progress, [progress](int percent) { progress->setValue(percent); },
-          Qt::QueuedConnection);
+  connect(structure_job_, &StructureJob::progress, progress, [progress, title](int percent) {
+    if (progress->maximum() == 0) {
+      progress->setRange(0, 100);
+      progress->setLabelText(title);
+    }
+    progress->setValue(percent);
+  }, Qt::QueuedConnection);
   connect(progress, &QProgressDialog::canceled, this, [this] {
     structure_job_->cancel();
     show_transient(tr("작업이 끝나면 결과를 버립니다…"));
@@ -804,27 +814,9 @@ void MainWindow::on_merge_action() {
   const QStringList files = QFileDialog::getOpenFileNames(this, tr("병합할 PDF (고른 순서대로 합칩니다)"), start_dir,
                                                           tr("PDF 문서 (*.pdf)"));
   if (files.isEmpty()) return;
-  // 쪽 수·암호 확인 (qpdf 가 헤더만 읽어 빠르다). 암호가 필요하면 파일마다 묻는다
+  // 파일은 작업 스레드에서 읽는다 (큰 파일을 메인에서 열면 UI 가 멈춘다). 암호가 필요하면 결과로 돌아와 묻고 다시 시도한다
   std::vector<engine::StructureInput> inputs;
-  for (const QString& file : files) {
-    engine::StructureInput input{onpdf::path_from_utf8(file.toUtf8().toStdString()), ""};
-    for (int attempt = 0; attempt < 5; ++attempt) {  // 암호는 다섯 번까지만 묻는다
-      auto count = engine::QpdfTools::page_count(input.path, input.password);
-      if (count) break;
-      if (count.error().code != ErrorCode::kPasswordRequired) {
-        QMessageBox::warning(this, tr("병합"), tr("%1 을(를) 열 수 없습니다: %2").arg(QFileInfo(file).fileName(), QString::fromStdString(count.error().message)));
-        return;
-      }
-      QInputDialog dialog(this);
-      dialog.setObjectName(QStringLiteral("merge_password"));
-      dialog.setWindowTitle(tr("암호"));
-      dialog.setLabelText(tr("%1 은(는) 암호로 보호되어 있습니다. 암호를 입력하세요.").arg(QFileInfo(file).fileName()));
-      dialog.setTextEchoMode(QLineEdit::Password);
-      if (dialog.exec() != QDialog::Accepted || dialog.textValue().isEmpty()) return;
-      input.password = dialog.textValue().toStdString();
-    }
-    inputs.push_back(std::move(input));
-  }
+  for (const QString& file : files) inputs.push_back({onpdf::path_from_utf8(file.toUtf8().toStdString()), ""});
   const QFileInfo first(files.first());
   const QString suggested = first.absolutePath() + QLatin1Char('/') + first.completeBaseName() + tr("-병합.pdf");
   const QString output = QFileDialog::getSaveFileName(this, tr("병합 결과 저장"), suggested, tr("PDF 문서 (*.pdf)"));
@@ -845,6 +837,8 @@ bool MainWindow::merge_files(std::vector<engine::StructureInput> inputs, const Q
   structure_kind_ = StructureKind::kMerge;
   structure_outputs_ = {out};
   structure_folder_ = QFileInfo(output).absolutePath();
+  pending_merge_inputs_ = inputs;
+  pending_merge_output_ = output;
   show_structure_progress(tr("병합 중…"));
   const bool started = structure_job_->start([inputs = std::move(inputs), out](const engine::ProgressFn& progress) -> StructureJob::Outcome {
     int expected = 0;
@@ -964,11 +958,35 @@ void MainWindow::on_structure_finished(bool cancelled) {
   structure_kind_ = StructureKind::kNone;
   update_edit_actions();
   if (cancelled) {
+    merge_password_attempts_ = 0;
     // qpdf 작업은 중단할 수 없어 끝까지 돈다. 결과 파일은 지우지 않는다 — 사용자가 덮어쓰기로 고른 기존 파일이나
     // 이전 분할 결과를 지워 버릴 수 있기 때문 (리뷰 C2). 성공했으면 알리기만, 실패했으면 원래 아무것도 없다
     show_transient(outcome ? tr("취소하기 전에 작업이 끝나 파일이 만들어졌습니다") : tr("취소했습니다"));
     return;
   }
+  if (!outcome && kind == StructureKind::kMerge && outcome.error().code == ErrorCode::kPasswordRequired &&
+      merge_password_attempts_ < 5) {
+    // 어느 입력인지는 메시지 앞의 경로로 찾는다 ("<파일>: ..."). 묻고 같은 병합을 다시 시도한다 (리뷰 I4·W1)
+    const std::string& message = outcome.error().message;
+    for (auto& input : pending_merge_inputs_) {
+      const std::string path = onpdf::path_to_utf8(input.path);
+      if (message.rfind(path, 0) != 0) continue;
+      QInputDialog dialog(this);
+      dialog.setObjectName(QStringLiteral("merge_password"));
+      dialog.setWindowTitle(tr("암호"));
+      dialog.setLabelText(tr("%1 은(는) 암호로 보호되어 있습니다. 암호를 입력하세요.").arg(q_filename(input.path)));
+      dialog.setTextEchoMode(QLineEdit::Password);
+      if (dialog.exec() != QDialog::Accepted || dialog.textValue().isEmpty()) {
+        show_transient(tr("병합을 취소했습니다"));
+        return;
+      }
+      input.password = dialog.textValue().toStdString();
+      ++merge_password_attempts_;
+      merge_files(pending_merge_inputs_, pending_merge_output_);
+      return;
+    }
+  }
+  merge_password_attempts_ = 0;
   if (!outcome) {
     QMessageBox box(QMessageBox::Warning, kind == StructureKind::kMerge ? tr("병합하지 못했습니다") : tr("분할하지 못했습니다"),
                     tr("%1\n\n만들어진 파일은 없습니다.").arg(structure_error_text(outcome.error())), QMessageBox::Ok, this);

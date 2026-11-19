@@ -14,6 +14,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QEventLoop>
+#include <QInputDialog>
 #include <QMessageBox>
 #include <QStatusBar>
 #include <QTimer>
@@ -66,6 +67,21 @@ void answer_box(const char* object_name, QMessageBox::ButtonRole role, QString* 
 
 QString q(const std::filesystem::path& p) { return QString::fromStdString(onpdf::path_to_utf8(p)); }
 
+// 이름이 object_name 인 입력 대화상자가 뜨면 text 를 넣고 확인한다
+void answer_input(const char* object_name, const QString& text, bool* answered) {
+  auto* poll = new QTimer();
+  poll->setInterval(10);
+  QObject::connect(poll, &QTimer::timeout, poll, [poll, object_name, text, answered] {
+    auto* dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
+    if (dialog == nullptr || dialog->objectName() != QString::fromLatin1(object_name)) return;
+    *answered = true;
+    dialog->setTextValue(text);
+    dialog->accept();
+    poll->deleteLater();
+  });
+  poll->start();
+}
+
 class MergeSplitTest : public ::testing::Test {
  protected:
   MergeSplitTest() : worker_(options()), window_(worker_, dispatcher_) {
@@ -113,13 +129,30 @@ TEST_F(MergeSplitTest, MergeOpensResultWithPrimaryOutline) {
 
 TEST_F(MergeSplitTest, MergeFailureIsExplainedAndLeavesNoFile) {
   const auto out = dir_ / "merged.pdf";
+  // 틀린 암호 → 작업 결과로 돌아와 그 파일의 암호를 묻는다. 취소하면 병합이 끝나고 파일은 없다
+  bool asked = false;
+  auto* poll = new QTimer();
+  poll->setInterval(10);
+  QObject::connect(poll, &QTimer::timeout, poll, [poll, &asked] {
+    auto* dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
+    if (dialog == nullptr || dialog->objectName() != QStringLiteral("merge_password")) return;
+    asked = true;
+    EXPECT_TRUE(dialog->labelText().contains(QStringLiteral("encrypted-aes256.pdf")));
+    dialog->reject();
+    poll->deleteLater();
+  });
+  poll->start();
+  ASSERT_TRUE(window_.merge_files({{testdata("simple.pdf"), ""}, {testdata("encrypted-aes256.pdf"), "wrong"}}, q(out)));
+  ASSERT_TRUE(spin_until([&] { return asked && !window_.structure_job()->active(); }));
+  EXPECT_TRUE(window_.statusBar()->currentMessage().contains(QStringLiteral("취소")));
+  EXPECT_FALSE(std::filesystem::exists(out));
+  // 암호와 무관한 실패(손상 파일)는 안내 상자
   QString message;
   bool answered = false;
   answer_box("structure_failed", QMessageBox::AcceptRole, &message, &answered);
-  ASSERT_TRUE(window_.merge_files({{testdata("simple.pdf"), ""}, {testdata("encrypted-aes256.pdf"), "wrong"}}, q(out)));
+  ASSERT_TRUE(window_.merge_files({{testdata("simple.pdf"), ""}, {testdata("truncated.pdf"), ""}}, q(out)));
   ASSERT_TRUE(spin_until([&] { return answered && !window_.structure_job()->active(); }));
-  EXPECT_TRUE(message.contains(QStringLiteral("암호"))) << message.toStdString();
-  EXPECT_TRUE(message.contains(QStringLiteral("encrypted-aes256.pdf"))) << message.toStdString();
+  EXPECT_TRUE(message.contains(QStringLiteral("truncated.pdf"))) << message.toStdString();
   EXPECT_FALSE(std::filesystem::exists(out));
   // 입력 = 출력은 시작조차 하지 않는다
   const auto copy = dir_ / "a.pdf";
@@ -201,6 +234,17 @@ TEST_F(MergeSplitTest, SplitUsesSessionPasswordForEncryptedDocument) {
   ASSERT_TRUE(spin_until([&] { return done && !window_.structure_job()->active(); }));
   EXPECT_TRUE(std::filesystem::exists(out_dir / "locked-1.pdf"));
   EXPECT_TRUE(std::filesystem::exists(out_dir / "locked-2.pdf"));
+}
+
+// 암호 없는 입력으로 시작하면 작업 결과(kPasswordRequired)로 돌아와 묻고 다시 시도한다 — 메인 스레드는 파일을 읽지 않는다 (리뷰 I4)
+TEST_F(MergeSplitTest, MergeAsksPasswordFromJobResultAndRetries) {
+  const auto out = dir_ / "retry.pdf";
+  bool asked = false;
+  answer_input("merge_password", QStringLiteral("user"), &asked);
+  ASSERT_TRUE(window_.merge_files({{testdata("simple.pdf"), ""}, {testdata("encrypted-aes256.pdf"), ""}}, q(out)));
+  ASSERT_TRUE(spin_until([&] { return asked; }));
+  ASSERT_TRUE(spin_until([&] { return window_.windowTitle().contains(QStringLiteral("retry.pdf")) && window_.document_view()->has_document(); }));
+  EXPECT_EQ(window_.document_view()->page_count(), 4);
 }
 
 TEST_F(MergeSplitTest, SplitAsksToSaveModifiedDocumentFirst) {

@@ -210,6 +210,9 @@ class MainWindow : public QMainWindow {
   std::vector<std::filesystem::path> structure_outputs_;  // 진행 중 작업의 출력 (취소·실패 시 정리, 성공 시 열기)
   enum class StructureKind { kNone, kMerge, kSplit } structure_kind_ = StructureKind::kNone;
   QString structure_folder_;
+  std::vector<engine::StructureInput> pending_merge_inputs_;  // 암호를 물어 다시 시도할 병합
+  QString pending_merge_output_;
+  int merge_password_attempts_ = 0;
   QToolBar* annotation_toolbar_ = nullptr;
   QActionGroup* tool_group_ = nullptr;
   QAction* tool_actions_[6] = {};  // AnnotationTool 순서
