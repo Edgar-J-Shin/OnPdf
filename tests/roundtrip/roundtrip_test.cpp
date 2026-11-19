@@ -5,6 +5,7 @@
 #include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/engine/save.h"
 #include "onpdf/edit/add_text_command.h"
+#include "onpdf/edit/object_commands.h"
 #include "onpdf/edit/text_box_commands.h"
 #include "onpdf/edit/annotation_commands.h"
 #include "onpdf/edit/delete_pages.h"
@@ -393,7 +394,7 @@ TEST(Roundtrip, EditedTextSurvivesSave) {
   spec.face = *face;
   edit::AddTextCommand add(spec);
   ASSERT_TRUE(add.execute(*doc));
-  edit::MoveTextBoxCommand move(0, add.object_ids(), {40, 25});
+  edit::MoveObjectsCommand move(0, add.object_ids(), {40, 25});
   ASSERT_TRUE(move.execute(*doc));
   edit::ReplaceTextBoxCommand replace(0, add.box_id(), *face, std::string("저장 열기\n둘째 줄\n셋째"), 24.0, std::nullopt);
   ASSERT_TRUE(replace.execute(*doc));

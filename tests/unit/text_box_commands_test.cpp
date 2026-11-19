@@ -1,6 +1,7 @@
 // 텍스트 상자 Command (#47): 이동·삭제·수정 실행 → 취소 → 재실행 (가짜 + PDFium), id·상자·폰트 캐시 재사용, 보상
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/edit/add_text_command.h"
+#include "onpdf/edit/object_commands.h"
 #include "onpdf/edit/text_box_commands.h"
 
 #include "../fake_document.h"
@@ -37,8 +38,8 @@ TEST(TextBoxCommands, MoveExecuteUndoRedoOnFake) {
   ASSERT_TRUE(add.execute(doc));
   const auto ids = add.object_ids();
   const double y0 = doc.text_objects_on(0)[0].line.origin.y;
-  MoveTextBoxCommand move(0, ids, {10, 20});
-  EXPECT_EQ(move.id(), "move_text");
+  MoveObjectsCommand move(0, ids, {10, 20});
+  EXPECT_EQ(move.id(), "move_object");
   EXPECT_FALSE(move.undo(doc));
   ASSERT_TRUE(move.execute(doc));
   EXPECT_DOUBLE_EQ(doc.text_objects_on(0)[0].line.origin.x, 82.0);
@@ -49,7 +50,7 @@ TEST(TextBoxCommands, MoveExecuteUndoRedoOnFake) {
   EXPECT_DOUBLE_EQ(doc.text_objects_on(0)[0].line.origin.y, y0);
   ASSERT_TRUE(move.execute(doc));
   EXPECT_DOUBLE_EQ(doc.text_objects_on(0)[0].line.origin.x, 82.0);
-  MoveTextBoxCommand missing(0, {"nope"}, {1, 1});
+  MoveObjectsCommand missing(0, {"nope"}, {1, 1});
   EXPECT_FALSE(missing.execute(doc));
 }
 
@@ -161,7 +162,7 @@ TEST(TextBoxCommands, ExecuteUndoRedoOnPdfium) {
   auto original = doc->render_page(0, render);
   ASSERT_TRUE(original);
   // 이동
-  MoveTextBoxCommand move(0, ids, {50, 30});
+  MoveObjectsCommand move(0, ids, {50, 30});
   ASSERT_TRUE(move.execute(*doc));
   auto list = doc->text_objects(0);
   ASSERT_EQ(list->size(), 2u);

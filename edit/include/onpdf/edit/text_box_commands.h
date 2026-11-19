@@ -31,21 +31,6 @@ struct TextBoxContent {
 [[nodiscard]] Result<engine::TextObjectsSpec> build_text_objects_spec(const TextBoxSpec& spec, const std::string& box,
                                                                       const std::vector<std::string>& ids);
 
-// 이동: 쪽 포인트 Δ. 취소 = −Δ
-class MoveTextBoxCommand final : public Command {
- public:
-  MoveTextBoxCommand(int page, std::vector<std::string> ids, Point delta);
-  [[nodiscard]] std::string_view id() const noexcept override { return "move_text"; }
-  Result<engine::ChangeSet> execute(engine::EditableDocument& doc) override;
-  Result<engine::ChangeSet> undo(engine::EditableDocument& doc) override;
-
- private:
-  int page_;
-  std::vector<std::string> ids_;
-  Point delta_;
-  bool executed_ = false;
-};
-
 // 삭제: 실행 전 내용을 모아 두고, 취소 때 같은 줄 id·상자 id 로 다시 만든다 (같은 글자 집합 → 폰트 캐시 재사용)
 class RemoveTextBoxCommand final : public Command {
  public:

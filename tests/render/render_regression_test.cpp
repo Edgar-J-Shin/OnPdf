@@ -5,6 +5,7 @@
 
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/edit/add_text_command.h"
+#include "onpdf/edit/object_commands.h"
 #include "onpdf/edit/text_box_commands.h"
 #include "onpdf/core/engine/save.h"
 #include "onpdf/core/image/png_io.h"
@@ -271,7 +272,7 @@ TEST(RenderRegression, TextEditedAndSavedPage) {
   spec.face = *face;
   edit::AddTextCommand add(spec);
   ASSERT_TRUE(add.execute(*doc));
-  edit::MoveTextBoxCommand move(0, add.object_ids(), {60, 40});
+  edit::MoveObjectsCommand move(0, add.object_ids(), {60, 40});
   ASSERT_TRUE(move.execute(*doc));
   edit::ReplaceTextBoxCommand replace(0, add.box_id(), *face, std::string("저장 열기"), 36.0, engine::Color{200, 0, 0, 255});
   ASSERT_TRUE(replace.execute(*doc));

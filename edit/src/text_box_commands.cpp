@@ -112,24 +112,6 @@ Result<TextBoxContent> collect_text_box(engine::EditableDocument& doc, int page,
   return content;
 }
 
-// ---------------------------------------------------------------- Move
-
-MoveTextBoxCommand::MoveTextBoxCommand(int page, std::vector<std::string> ids, Point delta)
-    : page_(page), ids_(std::move(ids)), delta_(delta) {}
-
-Result<engine::ChangeSet> MoveTextBoxCommand::execute(engine::EditableDocument& doc) {
-  if (ids_.empty()) return make_error(ErrorCode::kInvalidArgument, "no ids");
-  if (auto moved = doc.move_page_objects(page_, ids_, delta_); !moved) return std::unexpected(moved.error());
-  executed_ = true;
-  return page_change(page_);
-}
-
-Result<engine::ChangeSet> MoveTextBoxCommand::undo(engine::EditableDocument& doc) {
-  if (!executed_) return make_error(ErrorCode::kInvalidState, "undo before execute");
-  if (auto moved = doc.move_page_objects(page_, ids_, {-delta_.x, -delta_.y}); !moved) return std::unexpected(moved.error());
-  return page_change(page_);
-}
-
 // ---------------------------------------------------------------- Remove
 
 RemoveTextBoxCommand::RemoveTextBoxCommand(int page, std::string box, std::shared_ptr<const FontFace> face)

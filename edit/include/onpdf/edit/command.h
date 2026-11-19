@@ -24,6 +24,9 @@ class Command {
   virtual Result<engine::ChangeSet> undo(engine::EditableDocument& doc) = 0;
   // 실행 취소 스택에서 밀려나 더 쓰이지 않을 때 워커에서 호출된다: 문서에 보관한 스냅샷을 해제한다. 기본은 빈 구현
   virtual void discard(engine::EditableDocument& doc) noexcept { (void)doc; }
+  // 방금 실행된 next 를 이 Command 에 합칠 수 있으면 합치고 true (예: 화살표 키 연속 이동, #49).
+  // true 면 스택은 next 를 따로 올리지 않는다 — 이 Command 하나의 undo 가 둘 다 되돌려야 한다. 기본은 false
+  virtual bool merge_with(const Command& next) { (void)next; return false; }
 };
 
 }  // namespace onpdf::edit

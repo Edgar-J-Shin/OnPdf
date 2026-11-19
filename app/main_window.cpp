@@ -8,6 +8,7 @@
 #include "onpdf/core/page_ranges.h"
 #include "onpdf/edit/add_text_command.h"
 #include "onpdf/edit/annotation_commands.h"
+#include "onpdf/edit/object_commands.h"
 #include "onpdf/edit/text_box_commands.h"
 #include "onpdf/edit/delete_pages.h"
 #include "onpdf/edit/insert_pages.h"
@@ -384,7 +385,7 @@ QString MainWindow::command_label(std::string_view id) const {
   if (id == "add_square") return tr("사각형 추가");
   if (id == "add_circle") return tr("원 추가");
   if (id == "add_text") return tr("텍스트 추가");
-  if (id == "move_text") return tr("텍스트 이동");
+  if (id == "move_object") return tr("객체 이동");
   if (id == "remove_text") return tr("텍스트 삭제");
   if (id == "replace_text") return tr("텍스트 수정");
   if (id == "set_annotation_border_width") return tr("선 두께 변경");
@@ -975,7 +976,7 @@ void MainWindow::on_text_box_selected(bool has, const DocumentView::SelectedText
 void MainWindow::on_text_move_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta) {
   if (!text_edits_allowed_ || ids.empty()) return;
   if (!warn_signature_once()) return;
-  edit_->run(std::make_shared<edit::MoveTextBoxCommand>(page, ids, delta));
+  edit_->run(std::make_shared<edit::MoveObjectsCommand>(page, ids, delta));
 }
 
 void MainWindow::on_text_delete_requested(int, const QString&) { delete_selected_text_box(); }
