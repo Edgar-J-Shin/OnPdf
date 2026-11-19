@@ -137,6 +137,8 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(view_, &DocumentView::text_edit_requested, this, &MainWindow::on_text_edit_requested);
   connect(view_, &DocumentView::image_requested, this, &MainWindow::on_image_requested);
   connect(view_, &DocumentView::object_resize_requested, this, &MainWindow::on_object_resize_requested);
+  connect(view_, &DocumentView::text_width_requested, this, &MainWindow::on_text_width_requested);
+  connect(view_, &DocumentView::object_nudge_requested, this, &MainWindow::on_object_nudge_requested);
   connect(view_, &DocumentView::ink_requested, this, &MainWindow::on_ink_requested);
   connect(view_, &DocumentView::shape_requested, this, &MainWindow::on_shape_requested);
   connect(view_, &DocumentView::annotation_selected, this, &MainWindow::on_annotation_selected);
@@ -150,6 +152,7 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(edit_, &EditController::state_changed, this, [this] {
     update_edit_actions();
     update_title();
+    flush_pending_nudge();
   });
   connect(edit_, &EditController::failed, this, &MainWindow::on_edit_failed);
 
@@ -233,6 +236,10 @@ void MainWindow::build_menus() {
   QMenu* edit = menuBar()->addMenu(tr("편집(&E)"));
   undo_action_ = edit->addAction(tr("실행 취소(&U)"), QKeySequence::Undo, this, [this] { edit_->undo(); });
   redo_action_ = edit->addAction(tr("다시 실행(&R)"), QKeySequence::Redo, this, [this] { edit_->redo(); });
+  edit->addSeparator();
+  paste_action_ = edit->addAction(tr("이미지 붙여넣기(&V)"), QKeySequence::Paste, this, [this] { paste_image(); });
+  paste_action_->setObjectName(QStringLiteral("paste_image"));
+  paste_action_->setStatusTip(tr("클립보드의 이미지를 현재 쪽 가운데에 놓는다"));
   edit->addSeparator();
   copy_action_ = edit->addAction(tr("복사(&C)"), QKeySequence::Copy, this, &MainWindow::on_copy);
   copy_action_->setEnabled(false);
@@ -394,6 +401,7 @@ QString MainWindow::command_label(std::string_view id) const {
   if (id == "move_object") return tr("객체 이동");
   if (id == "remove_text") return tr("텍스트 삭제");
   if (id == "replace_text") return tr("텍스트 수정");
+  if (id == "resize_text") return tr("텍스트 폭 변경");
   if (id == "set_annotation_border_width") return tr("선 두께 변경");
   if (id == "set_annotation_opacity") return tr("불투명도 변경");
   if (id == "remove_annotation") return tr("주석 삭제");
@@ -458,7 +466,9 @@ void MainWindow::update_edit_actions() {
     const bool text_ok = can_edit_contents && text_font_ != nullptr;
     text_edits_allowed_ = idle && text_ok;
     content_edits_allowed_ = idle && can_edit_contents;
+    if (paste_action_ != nullptr) paste_action_->setEnabled(can_edit_contents);
     view_->set_text_editable(content_edits_allowed_);  // 이동·크기 조절 (글꼴과 무관)
+    view_->set_nudge_enabled(can_edit_contents);  // 화살표는 바쁜 동안에도 받아 모은다
     if (QAction* image_tool = tool_actions_[static_cast<int>(AnnotationTool::kImage)]; image_tool != nullptr) {
       image_tool->setEnabled(can_edit_contents);
       image_tool->setStatusTip(has_pages && !can_edit_contents ? tr("이 문서는 내용 수정이 허용되지 않습니다") : QString());
@@ -1067,6 +1077,55 @@ bool MainWindow::run_add_image(int page, engine::ImageSpec spec) {
   }
   last_image_command_ = std::move(command);
   return true;
+}
+
+void MainWindow::on_object_nudge_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta) {
+  if (!view_->has_document() || !session_.handle().info().permissions.modify_contents) return;
+  if (pending_nudge_ && (pending_nudge_->page != page || pending_nudge_->ids != ids)) pending_nudge_.reset();
+  if (!pending_nudge_) pending_nudge_ = PendingNudge{page, ids, {0.0, 0.0}};
+  pending_nudge_->delta.x += delta.x;
+  pending_nudge_->delta.y += delta.y;
+  flush_pending_nudge();
+}
+
+void MainWindow::flush_pending_nudge() {
+  if (!pending_nudge_ || !content_edits_allowed_ || edit_->busy()) return;  // 끝나면 state_changed 에서 다시
+  const PendingNudge nudge = std::move(*pending_nudge_);
+  pending_nudge_.reset();
+  if (nudge.delta.x == 0.0 && nudge.delta.y == 0.0) return;
+  if (!warn_signature_once()) return;
+  edit_->run(std::make_shared<edit::MoveObjectsCommand>(nudge.page, nudge.ids, nudge.delta, true));
+}
+
+bool MainWindow::paste_image() {
+  if (!content_edits_allowed_ || !view_->has_document()) return false;
+  const QMimeData* mime = QApplication::clipboard()->mimeData();
+  const int page = std::max(0, view_->current_page());
+  const engine::PageSize size = session_.handle().info().page_sizes.at(static_cast<std::size_t>(page));
+  const onpdf::Point center{size.width / 2, size.height / 2};
+  if (mime != nullptr && mime->hasImage()) {
+    const QImage image = qvariant_cast<QImage>(mime->imageData());
+    if (!image.isNull()) return add_image(image, page, center, true);
+  }
+  if (mime != nullptr && mime->hasUrls()) {
+    for (const QUrl& url : mime->urls()) {
+      const QString path = url.toLocalFile();
+      if (looks_like_image_file(path)) return add_image_file(path, page, center, true);
+    }
+  }
+  show_transient(tr("클립보드에 이미지가 없습니다"));
+  return false;
+}
+
+void MainWindow::on_text_width_requested(int page, const QString& box, double left_x, double width) {
+  if (!text_edits_allowed_ || text_font_ == nullptr) return;  // 재배치에 글꼴이 필요하다
+  auto selected = view_->selected_text_box();
+  if (!selected || selected->box != box.toStdString()) return;
+  if (!warn_signature_once()) return;
+  std::optional<double> origin_x;
+  if (std::abs(left_x - selected->bbox.x) >= 0.5) origin_x = left_x;
+  edit_->run(std::make_shared<edit::ReplaceTextBoxCommand>(page, box.toStdString(), text_font_, std::nullopt, std::nullopt,
+                                                           std::nullopt, width, origin_x));
 }
 
 void MainWindow::on_object_resize_requested(int page, const QString& id, onpdf::Rect before, onpdf::Rect after) {

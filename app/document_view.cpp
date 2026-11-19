@@ -833,8 +833,16 @@ std::string DocumentView::text_box_id_at(int page, onpdf::Point pt) const {
 }
 
 int DocumentView::handle_at(QPointF viewport_pos) const {
-  if (!selected_text_ || selected_text_->kind != engine::ObjectKind::kImage || layout_ == nullptr) return -1;
+  if (!selected_text_ || layout_ == nullptr) return -1;
   const onpdf::Rect& b = selected_text_->bbox;
+  if (selected_text_->kind == engine::ObjectKind::kText) {  // 좌우 폭 핸들
+    const onpdf::Point sides[2] = {{b.x, b.y + b.h / 2}, {b.right(), b.y + b.h / 2}};
+    for (int i = 0; i < 2; ++i) {
+      const QPointF c = page_point_to_viewport(selected_text_->page, sides[i]);
+      if (std::abs(c.x() - viewport_pos.x()) <= 6.0 && std::abs(c.y() - viewport_pos.y()) <= 6.0) return 4 + i;
+    }
+    return -1;
+  }
   const onpdf::Point corners[4] = {{b.x, b.y}, {b.right(), b.y}, {b.x, b.bottom()}, {b.right(), b.bottom()}};
   for (int i = 0; i < 4; ++i) {
     const QPointF c = page_point_to_viewport(selected_text_->page, corners[i]);
@@ -845,6 +853,12 @@ int DocumentView::handle_at(QPointF viewport_pos) const {
 
 onpdf::Rect DocumentView::resized_rect(onpdf::Point pt, bool keep_aspect) const {
   const onpdf::Rect& b = selected_text_->bbox;
+  if (resize_handle_ >= 4) {  // 텍스트 상자 폭: 반대쪽 고정, 최소 24pt
+    constexpr double kMinWidth = 24.0;
+    if (resize_handle_ == 5) return {b.x, b.y, std::max(kMinWidth, pt.x - b.x), b.h};
+    const double x = std::min(pt.x, b.right() - kMinWidth);
+    return {x, b.y, b.right() - x, b.h};
+  }
   // 반대 모서리 고정
   const double ax = (resize_handle_ == 0 || resize_handle_ == 2) ? b.right() : b.x;
   const double ay = (resize_handle_ == 0 || resize_handle_ == 1) ? b.bottom() : b.y;
@@ -994,13 +1008,15 @@ void DocumentView::paint_annotations(QPainter& painter, int page, const QRectF& 
       painter.setPen(QPen(kAnnotationOutline, 1, Qt::DashLine));
       painter.drawRect(box.translated(move_delta_.x * k, move_delta_.y * k));
     }
-    if (selected_text_->kind == engine::ObjectKind::kImage) {
-      // 모서리 핸들 4개 (논리 8px)
+    {
+      // 핸들 (논리 8px): 이미지 = 모서리 4개, 텍스트 상자 = 좌우 2개 (폭)
       painter.setPen(QPen(Qt::white, 1));
       painter.setBrush(kAnnotationOutline);
-      for (const QPointF c : {box.topLeft(), box.topRight(), box.bottomLeft(), box.bottomRight()}) {
-        painter.drawRect(QRectF(c.x() - 4, c.y() - 4, 8, 8));
-      }
+      const QPointF mid_left(box.left(), box.center().y()), mid_right(box.right(), box.center().y());
+      const bool image = selected_text_->kind == engine::ObjectKind::kImage;
+      const std::vector<QPointF> handles = image ? std::vector<QPointF>{box.topLeft(), box.topRight(), box.bottomLeft(), box.bottomRight()}
+                                                 : std::vector<QPointF>{mid_left, mid_right};
+      for (const QPointF& c : handles) painter.drawRect(QRectF(c.x() - 4, c.y() - 4, 8, 8));
       painter.setBrush(Qt::NoBrush);
       if (drag_ == Drag::kResize) {
         const onpdf::Rect& p = resize_preview_;
@@ -1301,7 +1317,7 @@ void DocumentView::update_hover(QPointF viewport_pos) {
         cursor = Qt::PointingHandCursor;
         if (a->kind == engine::AnnotationKind::kText && !a->contents.empty()) tooltip = QString::fromStdString(a->contents);
       } else if (const int handle = text_editable_ ? handle_at(viewport_pos) : -1; handle >= 0) {
-        cursor = (handle == 0 || handle == 3) ? Qt::SizeFDiagCursor : Qt::SizeBDiagCursor;
+        cursor = handle >= 4 ? Qt::SizeHorCursor : (handle == 0 || handle == 3) ? Qt::SizeFDiagCursor : Qt::SizeBDiagCursor;
       } else if (selected_text_ && selected_text_->page == page && selected_text_->bbox.contains(pt)) {
         cursor = text_editable_ ? Qt::SizeAllCursor : Qt::ArrowCursor;  // 선택한 상자 안: 끌어 옮길 수 있다 (권한 있을 때)
       } else if (!text_box_id_at(page, pt).empty()) {  // 커서 판정은 bbox 만 (리뷰 I1)
@@ -1379,6 +1395,26 @@ void DocumentView::wheelEvent(QWheelEvent* event) {
 
 void DocumentView::keyPressEvent(QKeyEvent* event) {
   QScrollBar* v = verticalScrollBar();
+  // 화살표: 선택한 객체를 1pt(Shift 10pt) 옮긴다 (#49). 선택이 없으면 기존 스크롤
+  if (selected_text_ && nudge_enabled_ &&
+      (event->key() == Qt::Key_Left || event->key() == Qt::Key_Right || event->key() == Qt::Key_Up || event->key() == Qt::Key_Down)) {
+    const double step = (event->modifiers() & Qt::ShiftModifier) ? 10.0 : 1.0;
+    onpdf::Point delta{event->key() == Qt::Key_Left ? -step : event->key() == Qt::Key_Right ? step : 0.0,
+                       event->key() == Qt::Key_Up ? -step : event->key() == Qt::Key_Down ? step : 0.0};
+    const engine::PageSize size = layout_->page_size_pt(selected_text_->page);
+    const onpdf::Rect& b = selected_text_->bbox;
+    delta.x = std::clamp(delta.x, -b.x, std::max(-b.x, size.width - b.right()));
+    delta.y = std::clamp(delta.y, -b.y, std::max(-b.y, size.height - b.bottom()));
+    if (delta.x != 0.0 || delta.y != 0.0) {
+      // 보이는 선택 테두리를 바로 옮겨 연타가 누적되게 한다 (목록이 새로 오면 실제 값으로 바뀐다)
+      selected_text_->bbox.x += delta.x;
+      selected_text_->bbox.y += delta.y;
+      update_page(selected_text_->page);
+      emit object_nudge_requested(selected_text_->page, selected_text_->ids, delta);
+    }
+    event->accept();
+    return;
+  }
   if (event->key() == Qt::Key_Escape) {
     clear_selection();
     clear_annotation_selection();
@@ -1493,7 +1529,14 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
     if (selected_annot_) clear_annotation_selection();
     if (auto hit = page_point_at(event->position())) {
       const auto [page, pt] = *hit;
-      // 선택한 이미지의 모서리 핸들: 크기 조절 (#49)
+      // 선택한 상자의 두 번 클릭은 핸들보다 먼저: 폭 핸들이 상자 안쪽 가장자리와 겹친다 (#49)
+      if (click_count_ == 2 && selected_text_ && selected_text_->page == page && selected_text_->bbox.contains(pt) &&
+          selected_text_->kind == engine::ObjectKind::kText) {
+        emit text_edit_requested(page, *selected_text_);
+        drag_ = Drag::kNone;
+        return;
+      }
+      // 선택한 객체의 핸들: 이미지 모서리 = 크기, 텍스트 좌우 = 폭 (#49)
       if (const int handle = text_editable_ ? handle_at(event->position()) : -1; handle >= 0) {
         resize_handle_ = handle;
         resize_preview_ = selected_text_->bbox;
@@ -1678,13 +1721,18 @@ void DocumentView::mouseReleaseEvent(QMouseEvent* event) {
   }
   if (drag_ == Drag::kResize) {
     drag_ = Drag::kNone;
-    resize_handle_ = -1;
+    const int handle = std::exchange(resize_handle_, -1);
     if (selected_text_) {
       update_page(selected_text_->page);
       const onpdf::Rect& b = selected_text_->bbox;
       const onpdf::Rect& r = resize_preview_;
       if (std::abs(r.x - b.x) >= 1 || std::abs(r.y - b.y) >= 1 || std::abs(r.w - b.w) >= 1 || std::abs(r.h - b.h) >= 1) {
-        emit object_resize_requested(selected_text_->page, QString::fromStdString(selected_text_->box), b, r);
+        const QString key = QString::fromStdString(selected_text_->box);
+        if (handle >= 4) {
+          emit text_width_requested(selected_text_->page, key, r.x, r.w);
+        } else {
+          emit object_resize_requested(selected_text_->page, key, b, r);
+        }
       }
     }
     return;

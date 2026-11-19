@@ -103,6 +103,8 @@ class DocumentView : public QAbstractScrollArea {
   void clear_text_box_selection();
   // 내용 수정 권한·바쁨에 따라 상자 이동 드래그·커서를 막는다 (선택·정보 표시는 그대로). 썸네일 set_editable 과 같은 역할
   void set_text_editable(bool editable);
+  // 화살표 이동은 권한만 본다: 바쁜 동안 누른 키는 MainWindow 가 모아 두었다가 실행한다 (#49)
+  void set_nudge_enabled(bool enabled) { nudge_enabled_ = enabled; }
   [[nodiscard]] bool text_editable() const noexcept { return text_editable_; }
 
   void set_zoom_mode(ZoomMode mode);
@@ -177,6 +179,8 @@ class DocumentView : public QAbstractScrollArea {
   void text_edit_requested(int page, const SelectedTextBox& box);  // 두 번 클릭
   void image_requested(int page, onpdf::Point pt);                   // 이미지 도구 클릭 (쪽 포인트, 클램프됨) — #49
   void object_resize_requested(int page, const QString& id, onpdf::Rect before, onpdf::Rect after);  // 이미지 핸들
+  void text_width_requested(int page, const QString& box, double left_x, double width);              // 텍스트 상자 폭 핸들
+  void object_nudge_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta);    // 화살표 키 (쪽 포인트)
   void annotation_edit_requested(int page, const onpdf::engine::AnnotationInfo& info);
 
  protected:
@@ -284,13 +288,14 @@ class DocumentView : public QAbstractScrollArea {
     std::vector<engine::TextObjectInfo> texts;    // 텍스트만 (기존 접근자 text_objects 용)
   };
   std::unordered_map<int, std::shared_ptr<const ObjectCache>> text_box_cache_;
-  int resize_handle_ = -1;           // 0 좌상 · 1 우상 · 2 좌하 · 3 우하 (#49)
+  int resize_handle_ = -1;           // 이미지: 0 좌상 · 1 우상 · 2 좌하 · 3 우하 / 텍스트 상자: 4 왼쪽 · 5 오른쪽 (#49)
   onpdf::Rect resize_preview_{};     // 크기 조절 미리보기 (쪽 포인트)
   [[nodiscard]] int handle_at(QPointF viewport_pos) const;  // 선택한 이미지의 핸들 (없으면 -1)
   [[nodiscard]] onpdf::Rect resized_rect(onpdf::Point pt, bool keep_aspect) const;
   std::unordered_map<int, engine::TaskHandle> text_box_requested_;
   std::optional<SelectedTextBox> selected_text_;
   bool text_editable_ = false;
+  bool nudge_enabled_ = false;
   int reselect_text_page_ = -1;
   std::string reselect_text_box_;
   bool reselect_announce_ = false;  // select_after_refresh: 조용한 재선택이 아니라 새 선택으로 알린다 (상태 표시줄)

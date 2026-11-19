@@ -13,6 +13,8 @@
 #include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
+#include <QClipboard>
+#include <QMimeData>
 #include <QElapsedTimer>
 #include <QFileDialog>
 #include <QImage>
@@ -270,6 +272,58 @@ TEST_F(ImageToolTest, UnreadableFileIsExplainedAndPermissionGates) {
   ASSERT_TRUE(wait_idle());
   EXPECT_FALSE(window_.tool_action(AnnotationTool::kImage)->isEnabled());
   EXPECT_FALSE(window_.add_image_file(write_png("x.png"), 0, {10, 10}, false));
+}
+
+// 클립보드 붙여넣기 (#49): 현재 쪽 가운데, 투명도 유지
+TEST_F(ImageToolTest, PasteFromClipboardCentersOnCurrentPage) {
+  open_copy("simple.pdf");
+  ASSERT_TRUE(wait_images(0, 0));
+  QImage image(100, 60, QImage::Format_ARGB32);
+  image.fill(Qt::transparent);
+  QApplication::clipboard()->setImage(image);
+  ASSERT_TRUE(window_.paste_action()->isEnabled());
+  window_.paste_action()->trigger();
+  ASSERT_TRUE(wait_images(0, 1));
+  const auto pasted = images(0)[0];
+  EXPECT_NEAR(pasted.bbox.x + pasted.bbox.w / 2, 306, 1.0) << "쪽 가운데";
+  EXPECT_NEAR(pasted.bbox.y + pasted.bbox.h / 2, 396, 1.0);
+  EXPECT_NEAR(pasted.bbox.w, 100, 0.5);
+  // 이미지가 없으면 안내만
+  QApplication::clipboard()->setText(QStringLiteral("text only"));
+  EXPECT_FALSE(window_.paste_image());
+  EXPECT_TRUE(window_.statusBar()->currentMessage().contains(QStringLiteral("클립보드")));
+}
+
+// 화살표 키 (#49): 1pt·Shift 10pt, 연타는 실행 취소 한 단계, 선택 없으면 이동 없음
+TEST_F(ImageToolTest, ArrowKeysNudgeAndMergeIntoOneUndo) {
+  open_copy("simple.pdf");
+  ASSERT_TRUE(wait_images(0, 0));
+  ASSERT_TRUE(window_.add_image_file(write_png("n.png", 40, 40), 0, {200, 300}, false));
+  ASSERT_TRUE(wait_images(0, 1));
+  ASSERT_TRUE(spin_until([&] { return view()->selected_object().has_value(); }));
+  auto press = [&](Qt::Key key, Qt::KeyboardModifiers mods = Qt::NoModifier) {
+    QKeyEvent ev(QEvent::KeyPress, key, mods);
+    QApplication::sendEvent(view(), &ev);
+  };
+  press(Qt::Key_Right);
+  press(Qt::Key_Right);
+  press(Qt::Key_Down, Qt::ShiftModifier);
+  const bool moved = spin_until([&] {
+    return idle() && !images(0).empty() && std::abs(images(0)[0].bbox.x - 202) < 0.5 && std::abs(images(0)[0].bbox.y - 310) < 0.5;
+  });
+  ASSERT_TRUE(moved) << "bbox " << images(0)[0].bbox.x << "," << images(0)[0].bbox.y << " undo "
+                     << window_.undo_action()->text().toStdString();
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("객체 이동")));
+  ASSERT_TRUE(window_.edit_controller()->undo());
+  ASSERT_TRUE(spin_until([&] {
+    return idle() && !images(0).empty() && std::abs(images(0)[0].bbox.x - 200) < 0.5 && std::abs(images(0)[0].bbox.y - 300) < 0.5;
+  })) << "연타 3번이 한 번의 실행 취소로";
+  // 선택 해제 뒤 화살표는 객체를 옮기지 않는다
+  QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+  QApplication::sendEvent(view(), &esc);
+  press(Qt::Key_Right);
+  ASSERT_TRUE(wait_idle());
+  EXPECT_NEAR(images(0)[0].bbox.x, 200, 0.5);
 }
 
 }  // namespace

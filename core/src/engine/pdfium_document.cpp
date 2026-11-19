@@ -771,6 +771,11 @@ Result<TextObjectsResult> PdfiumDocument::add_text_objects(int page_index, const
                                       static_cast<unsigned long>(line.text.size()))) {
       return fail("cannot set mark text");
     }
+    if (spec.write_box && i == 0 && spec.width > 0.0) {
+      char width[32];
+      std::snprintf(width, sizeof width, "%.3f", spec.width);
+      if (!FPDFPageObjMark_SetStringParam(doc_.get(), obj.get(), mark, "width", width)) return fail("cannot set mark width");
+    }
     if (spec.write_box && i == 0 && !spec.box_text.empty() &&
         !FPDFPageObjMark_SetBlobParam(doc_.get(), obj.get(), mark, "box_text",
                                       reinterpret_cast<const unsigned char*>(spec.box_text.data()),
@@ -833,6 +838,7 @@ Result<std::vector<TextObjectInfo>> PdfiumDocument::text_objects(int page_index)
     if (info.box.empty()) info.box = id;  // #47 이전 객체: 줄 하나가 상자 하나
     info.text = mark_blob(mark, "text");
     info.box_text = mark_blob(mark, "box_text");
+    if (const std::string width = mark_string(mark, "width"); !width.empty()) info.width = std::strtod(width.c_str(), nullptr);
     if (info.text.empty()) {
       if (!text_page) text_page.reset(FPDFText_LoadPage(page->get()));
       if (text_page) {

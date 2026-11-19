@@ -115,6 +115,9 @@ class MainWindow : public QMainWindow {
   // 파일을 읽어 page 의 origin 에 놓는다 (center 면 가운데로). 대화상자 없이 (테스트·드롭·도구가 부른다). 시작하면 true
   bool add_image_file(const QString& path, int page, onpdf::Point origin, bool center);
   bool add_image(const QImage& image, int page, onpdf::Point origin, bool center);
+  // 클립보드의 이미지(또는 이미지 파일 URL)를 현재 쪽 가운데에 놓는다. 시작하면 true
+  bool paste_image();
+  [[nodiscard]] QAction* paste_action() const noexcept { return paste_action_; }
   [[nodiscard]] bool has_text_font() const noexcept { return text_font_ != nullptr; }
   [[nodiscard]] double text_size() const noexcept { return text_size_; }
   void set_text_size(double size);
@@ -174,6 +177,9 @@ class MainWindow : public QMainWindow {
   void on_text_box_selected(bool has, const DocumentView::SelectedTextBox& box);
   void on_image_requested(int page, onpdf::Point pt);
   void on_object_resize_requested(int page, const QString& id, onpdf::Rect before, onpdf::Rect after);
+  void on_text_width_requested(int page, const QString& box, double left_x, double width);
+  void on_object_nudge_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta);
+  void flush_pending_nudge();
   bool run_add_image(int page, engine::ImageSpec spec);
   void on_text_move_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta);
   void on_text_delete_requested(int page, const QString& box);
@@ -283,6 +289,14 @@ class MainWindow : public QMainWindow {
   };
   std::optional<PendingImage> pending_image_;
   std::shared_ptr<edit::AddImageCommand> last_image_command_;
+  // 화살표 연타: 편집 중(busy)이면 모았다가 끝나면 한 번에 보낸다 (스택에서는 키보드 이동끼리 합쳐진다)
+  struct PendingNudge {
+    int page = 0;
+    std::vector<std::string> ids;
+    onpdf::Point delta;
+  };
+  std::optional<PendingNudge> pending_nudge_;
+  QAction* paste_action_ = nullptr;
   engine::Color text_color_{0, 0, 0, 255};  // 새 텍스트 색 (기본 검정; 색 팔레트가 주석 색과 함께 바꾼다)
   bool updating_actions_ = false;          // update_edit_actions 재진입 차단
   struct PendingInsert {

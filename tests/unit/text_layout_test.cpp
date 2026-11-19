@@ -36,5 +36,36 @@ TEST(TextLayout, BaselinesAndBox) {
   EXPECT_TRUE(layout_text(**face, "", 20.0, {0, 0}).lines.empty());
 }
 
+// 폭 줄바꿈 (#49): 공백 경계, 줄 끝 공백 버림, 긴 단어는 글자 단위, '\n' 은 그대로
+TEST(TextLayout, WrapsWithinWidth) {
+  auto face = FontFace::load(testdata("fonts") / "NotoSansKR-subset.ttf");
+  ASSERT_TRUE(face);
+  const double word = (*face)->shape("ABC", 20.0).width;
+  const double space = (*face)->shape(" ", 20.0).width;
+  // "ABC ABC ABC" 를 두 단어 폭에 → 2줄 ("ABC ABC" / "ABC")
+  TextLayout l = layout_text(**face, "ABC ABC ABC", 20.0, {0, 0}, 1.2, 2 * word + space + 0.5);
+  ASSERT_EQ(l.lines.size(), 2u);
+  EXPECT_EQ(l.lines[0].text, "ABC ABC");
+  EXPECT_EQ(l.lines[1].text, "ABC") << "이어진 줄의 앞 공백·줄 끝 공백은 버린다";
+  EXPECT_LE(l.lines[0].width, 2 * word + space + 0.5);
+  EXPECT_DOUBLE_EQ(l.bbox.w, 2 * word + space + 0.5) << "폭이 정해지면 상자 폭 = 폭";
+  // 한 단어가 폭보다 길면 글자 단위
+  l = layout_text(**face, "ABCDEFGH", 20.0, {0, 0}, 1.2, word);
+  ASSERT_GE(l.lines.size(), 2u);
+  for (const auto& line : l.lines) EXPECT_LE(line.width, word + 0.01);
+  std::string joined;
+  for (const auto& line : l.lines) joined += line.text;
+  EXPECT_EQ(joined, "ABCDEFGH") << "글자를 잃지 않는다";
+  // 한글 어절 + 개행
+  l = layout_text(**face, "한글 텍스트 추가\n둘째", 20.0, {0, 0}, 1.2, (*face)->shape("한글 텍스트", 20.0).width + 1);
+  ASSERT_EQ(l.lines.size(), 3u);
+  EXPECT_EQ(l.lines[0].text, "한글 텍스트");
+  EXPECT_EQ(l.lines[1].text, "추가");
+  EXPECT_EQ(l.lines[2].text, "둘째");
+  EXPECT_DOUBLE_EQ(l.lines[2].baseline_origin.y, l.ascent + 2 * 1.2 * 20.0);
+  // 폭 0 = 줄바꿈 없음
+  EXPECT_EQ(layout_text(**face, "ABC ABC ABC", 20.0, {0, 0}).lines.size(), 1u);
+}
+
 }  // namespace
 }  // namespace onpdf::edit

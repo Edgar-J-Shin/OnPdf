@@ -437,5 +437,26 @@ TEST_F(TextToolTest, SavedBoxReopensEditable) {
   ASSERT_TRUE(wait_text_boxes(0, 1));
 }
 
+// 텍스트 상자 폭 핸들 (#49): 오른쪽 핸들을 끌면 줄이 늘고, 실행 취소로 원래 줄
+TEST_F(TextToolTest, WidthHandleWrapsText) {
+  open_copy("simple.pdf");
+  ASSERT_TRUE(spin_until([&] { return view()->text_index(0) != nullptr; }));
+  ASSERT_TRUE(window_.add_text(0, {100, 300}, QStringLiteral("한글 텍스트 추가 검증")));
+  ASSERT_TRUE(wait_text_boxes(0, 1));
+  const auto box = (*view()->text_objects(0))[0];
+  click(view()->page_point_to_viewport(0, {box.bbox.x + 5, box.bbox.y + box.bbox.h / 2}));
+  ASSERT_TRUE(view()->selected_text_box().has_value());
+  const auto sel = *view()->selected_text_box();
+  settle_clicks();
+  // 오른쪽 핸들(세로 가운데)을 폭의 절반으로
+  drag(view()->page_point_to_viewport(0, {sel.bbox.right(), sel.bbox.y + sel.bbox.h / 2}),
+       view()->page_point_to_viewport(0, {sel.bbox.x + sel.bbox.w / 2, sel.bbox.y + sel.bbox.h / 2}));
+  ASSERT_TRUE(spin_until([&] { return idle() && view()->text_objects(0) && view()->text_objects(0)->size() >= 2; })) << "줄이 늘어난다";
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("텍스트 폭 변경")));
+  EXPECT_GT((*view()->text_objects(0))[0].width, 0.0);
+  ASSERT_TRUE(window_.edit_controller()->undo());
+  ASSERT_TRUE(spin_until([&] { return idle() && view()->text_objects(0) && view()->text_objects(0)->size() == 1; }));
+}
+
 }  // namespace
 }  // namespace onpdf::app
