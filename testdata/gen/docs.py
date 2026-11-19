@@ -597,6 +597,12 @@ def make_signed_dummy() -> bytes:
     return w.write(root=root, info=info, file_id=g.file_id_for("signed-dummy.pdf"))
 
 
+def make_perm_modify_only() -> bytes:
+    """내용 수정(비트 4)만 허용, 주석(비트 6)·조립 없음 — 텍스트 도구 게이트 테스트 (#45)."""
+    return make_simple(encrypt=g.Encryption("", "owner", permissions=-3896), title="Permissions: modify contents only",
+                       file_id_name="perm-modify-only.pdf")
+
+
 def make_perm_assemble_only() -> bytes:
     # 소유자 암호만(R3). P=-12: 내용 수정(비트 4)만 금지, 쪽 조립(비트 11)·주석(비트 6) 허용 → 쪽 회전 가능
     return make_simple(encrypt=g.Encryption("", "owner", permissions=-12), title="Permissions: assemble only",

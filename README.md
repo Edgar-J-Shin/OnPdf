@@ -36,6 +36,7 @@ PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편
 ```bash
 # 사전 준비: cmake ≥ 3.25, ninja, vcpkg (full clone) + export VCPKG_ROOT=<vcpkg 경로>
 python3 third_party/fetch_pdfium.py          # PDFium 바이너리 다운로드 (third_party/pdfium/<platform>/)
+python3 third_party/fetch_fonts.py           # 번들 글꼴 Noto Sans KR 다운로드 (third_party/fonts/, 텍스트 추가 도구)
 cmake --preset dev
 cmake --build --preset dev
 ctest --preset dev

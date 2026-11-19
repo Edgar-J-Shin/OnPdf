@@ -4,6 +4,7 @@
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/engine/save.h"
+#include "onpdf/edit/add_text_command.h"
 #include "onpdf/edit/annotation_commands.h"
 #include "onpdf/edit/delete_pages.h"
 #include "onpdf/edit/insert_pages.h"
@@ -323,6 +324,58 @@ TEST(Roundtrip, ShapesSurviveSave) {
   EXPECT_FLOAT_EQ(c.opacity, 1.0f);
   auto check = engine::QpdfTools::check(target, "");
   EXPECT_TRUE(check) << (check ? "" : check.error().message);
+}
+
+// 텍스트 추가(#45): 저장 → 다시 열기(내장 폰트만) → 추출 == 입력, 렌더 == 저장 전, 마크 id 보존, qpdf. 평문·회전·서명(증분)·암호
+TEST(Roundtrip, AddedTextSurvivesSave) {
+  auto face = edit::FontFace::load(testdata("fonts") / "NotoSansKR-subset.ttf");
+  ASSERT_TRUE(face);
+  struct Case { const char* file; const char* password; bool rotate; bool incremental; };
+  const Case cases[] = {{"simple.pdf", "", false, false}, {"simple.pdf", "", true, false},
+                        {"signed-dummy.pdf", "", false, true}, {"encrypted-aes256.pdf", "owner", false, false}};
+  for (const Case& c : cases) {
+    auto doc = PdfiumDocument::open(testdata(c.file), c.password);
+    ASSERT_TRUE(doc) << c.file;
+    if (c.rotate) ASSERT_TRUE(doc->set_page_rotation(0, 1));
+    const std::string text = "한글 텍스트 추가 검증 임베딩 왕복\nOnPdf 2026 (M3)";
+    edit::TextBoxSpec spec;
+    spec.page = 0;
+    spec.origin = {60, 120};
+    spec.size = 18;
+    spec.utf8 = text;
+    spec.face = *face;
+    edit::AddTextCommand add(spec);
+    ASSERT_TRUE(add.execute(*doc)) << c.file;
+    RenderOptions render;
+    render.scale = 1.0f;
+    auto before = doc->render_page(0, render);
+    ASSERT_TRUE(before);
+    const auto before_objects = *doc->text_objects(0);
+    ScopedTempDir dir;
+    const auto target = dir / "text.pdf";
+    engine::SaveOptions options;
+    options.incremental = c.incremental;
+    auto saved = save_document_safely(*doc, target, options);
+    ASSERT_TRUE(saved) << c.file << ": " << saved.error().message;
+    auto reopened = PdfiumDocument::open(target, c.password);
+    ASSERT_TRUE(reopened) << c.file;
+    auto index = reopened->load_text(0);
+    ASSERT_TRUE(index);
+    EXPECT_NE(index->all_text().find("한글 텍스트 추가 검증 임베딩 왕복"), std::string::npos) << c.file << ": " << index->all_text();
+    EXPECT_NE(index->all_text().find("OnPdf 2026 (M3)"), std::string::npos) << c.file;
+    auto after = reopened->render_page(0, render);
+    ASSERT_TRUE(after);
+    ASSERT_EQ(after->pixels.size(), before->pixels.size());
+    int diff = 0;
+    for (std::size_t i = 0; i < before->pixels.size(); ++i) diff += before->pixels[i] != after->pixels[i];
+    EXPECT_EQ(diff, 0) << c.file << ": 저장 전후 렌더가 같아야 한다";
+    const auto after_objects = *reopened->text_objects(0);
+    ASSERT_EQ(after_objects.size(), before_objects.size()) << c.file;
+    for (std::size_t i = 0; i < before_objects.size(); ++i) EXPECT_EQ(after_objects[i].id, before_objects[i].id);
+    auto check = engine::QpdfTools::check(target, c.password);
+    EXPECT_TRUE(check) << c.file << ": " << (check ? "" : check.error().message);
+    if (c.incremental) EXPECT_GT(reopened->signature_count(), 0) << "서명이 보존된다";
+  }
 }
 
 TEST(Roundtrip, EditingExistingAnnotationsKeepsOthers) {

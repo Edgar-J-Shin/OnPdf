@@ -4,6 +4,7 @@
 // 비교 허용치는 tests/test_support.h 의 expect_bitmap_matches_png 참고.
 
 #include "onpdf/core/engine/pdfium_document.h"
+#include "onpdf/edit/add_text_command.h"
 #include "onpdf/core/engine/save.h"
 #include "onpdf/core/image/png_io.h"
 
@@ -214,6 +215,72 @@ TEST(RenderRegression, AnnotatedAndSavedPage) {
     GTEST_SKIP() << "reference updated: " << expected_path;
   }
   onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "simple-p0-annotated.png");
+}
+
+// 텍스트 추가(#45): 서브셋 임베딩 폰트만으로(시스템 폰트 없음) 한글·영문이 그려진다. 저장 → 다시 열어 렌더
+TEST(RenderRegression, TextAddedAndSavedPage) {
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc) << doc.error().message;
+  auto face = edit::FontFace::load(testdata("fonts") / "NotoSansKR-subset.ttf");
+  ASSERT_TRUE(face);
+  edit::TextBoxSpec big;
+  big.page = 0;
+  big.origin = {72, 420};
+  big.size = 24;
+  big.color = {0, 0, 0, 255};
+  big.utf8 = "한글 텍스트 추가\n둘째 줄 임베딩";
+  big.face = *face;
+  edit::AddTextCommand add_big(big);
+  ASSERT_TRUE(add_big.execute(*doc));
+  edit::TextBoxSpec small = big;
+  small.origin = {72, 520};
+  small.size = 12;
+  small.color = {200, 0, 0, 255};
+  small.utf8 = "OnPdf 2026 빨강 12pt";
+  edit::AddTextCommand add_small(small);
+  ASSERT_TRUE(add_small.execute(*doc));
+  onpdf::test::ScopedTempDir dir;
+  const auto saved_path = dir / "text-added.pdf";
+  ASSERT_TRUE(engine::save_document_safely(*doc, saved_path, {}));
+  auto reopened = PdfiumDocument::open(saved_path);
+  ASSERT_TRUE(reopened) << reopened.error().message;
+  RenderOptions options;
+  options.scale = 1.0f;
+  auto actual = reopened->render_page(0, options);
+  ASSERT_TRUE(actual) << actual.error().message;
+  const auto expected_path = testdata("expected") / "simple-p0-text-added.png";
+  if (update_references()) {
+    ASSERT_TRUE(image::write_png(*actual, expected_path));
+    GTEST_SKIP() << "reference updated: " << expected_path;
+  }
+  onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "simple-p0-text-added.png");
+}
+
+// 회전(90°)된 쪽에 넣은 텍스트: 화면 기준으로 바로 선다
+TEST(RenderRegression, RotatedPageTextAdded) {
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc) << doc.error().message;
+  ASSERT_TRUE(doc->set_page_rotation(0, 1));
+  auto face = edit::FontFace::load(testdata("fonts") / "NotoSansKR-subset.ttf");
+  ASSERT_TRUE(face);
+  edit::TextBoxSpec spec;
+  spec.page = 0;
+  spec.origin = {100, 100};
+  spec.size = 24;
+  spec.utf8 = "회전 쪽 텍스트";
+  spec.face = *face;
+  edit::AddTextCommand add(spec);
+  ASSERT_TRUE(add.execute(*doc));
+  RenderOptions options;
+  options.scale = 1.0f;
+  auto actual = doc->render_page(0, options);
+  ASSERT_TRUE(actual) << actual.error().message;
+  const auto expected_path = testdata("expected") / "rotated-p0-text-added.png";
+  if (update_references()) {
+    ASSERT_TRUE(image::write_png(*actual, expected_path));
+    GTEST_SKIP() << "reference updated: " << expected_path;
+  }
+  onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "rotated-p0-text-added.png");
 }
 
 // 회전(90°)된 쪽의 하이라이트: 글자 위에 정확히 놓인다

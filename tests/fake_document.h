@@ -55,6 +55,56 @@ class FakeDocument final : public engine::EditableDocument {
   };
   int fail_add_on_page = -1;  // 이 쪽에 add_annotation 을 하면 실패 (보상 삭제 테스트)
   int fail_restores = 0;      // 다음 n 번의 restore_annotation 이 실패 (재생성 보상 테스트)
+  // ---- 텍스트 객체 (가짜: 줄 스펙과 폰트 key 를 그대로 보관) ----
+  struct FakeTextObject {
+    std::string id;
+    engine::TextLineSpec line;
+    std::string font_key;
+  };
+  int fail_add_text_on_page = -1;
+  [[nodiscard]] const std::vector<FakeTextObject>& text_objects_on(int page) const {
+    static const std::vector<FakeTextObject> kEmpty;
+    const auto it = texts_.find(page);
+    return it == texts_.end() ? kEmpty : it->second;
+  }
+  [[nodiscard]] int font_count() const noexcept { return static_cast<int>(font_keys_.size()); }
+  [[nodiscard]] Result<std::vector<std::string>> add_text_objects(int page, const engine::TextObjectsSpec& spec) override {
+    if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
+    if (page == fail_add_text_on_page) return make_error(ErrorCode::kInvalidState, "injected failure");
+    if (spec.lines.empty() || spec.font.key.empty()) return make_error(ErrorCode::kInvalidArgument, "spec");
+    if (!spec.ids.empty() && spec.ids.size() != spec.lines.size()) return make_error(ErrorCode::kInvalidArgument, "ids");
+    font_keys_[spec.font.key] = spec.font.ttf.size();
+    std::vector<std::string> ids;
+    for (std::size_t i = 0; i < spec.lines.size(); ++i) {
+      FakeTextObject t;
+      t.id = spec.ids.empty() ? "fake-text-" + std::to_string(next_text_++) : spec.ids[i];
+      t.line = spec.lines[i];
+      t.font_key = spec.font.key;
+      texts_[page].push_back(std::move(t));
+      ids.push_back(texts_[page].back().id);
+    }
+    return ids;
+  }
+  [[nodiscard]] Result<void> remove_text_objects(int page, const std::vector<std::string>& ids) override {
+    auto& list = texts_[page];
+    for (const auto& id : ids) {
+      if (std::none_of(list.begin(), list.end(), [&](const FakeTextObject& t) { return t.id == id; })) {
+        return make_error(ErrorCode::kInvalidArgument, "text object not found: " + id);
+      }
+    }
+    for (const auto& id : ids) {
+      list.erase(std::remove_if(list.begin(), list.end(), [&](const FakeTextObject& t) { return t.id == id; }), list.end());
+    }
+    return {};
+  }
+  [[nodiscard]] Result<std::vector<engine::TextObjectInfo>> text_objects(int page) const override {
+    if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
+    std::vector<engine::TextObjectInfo> out;
+    for (const auto& t : text_objects_on(page)) {
+      out.push_back({t.id, {t.line.origin.x, t.line.origin.y - t.line.font_size, 100.0, t.line.font_size * 1.2}});
+    }
+    return out;
+  }
   [[nodiscard]] int annotation_count(int page) const { const auto it = annots_.find(page); return it == annots_.end() ? 0 : static_cast<int>(it->second.size()); }
   [[nodiscard]] const FakeAnnot* annotation(int page, std::string_view id) const {
     const auto it = annots_.find(page);
@@ -278,6 +328,9 @@ class FakeDocument final : public engine::EditableDocument {
   engine::SnapshotId next_ = 1;
   std::map<int, std::vector<FakeAnnot>> annots_;
   int next_nm_ = 1;
+  std::map<int, std::vector<FakeTextObject>> texts_;
+  std::map<std::string, std::size_t> font_keys_;  // key → ttf 크기
+  int next_text_ = 1;
 };
 
 }  // namespace onpdf::test

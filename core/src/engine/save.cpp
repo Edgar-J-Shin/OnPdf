@@ -13,6 +13,7 @@
 #include <optional>
 #include <random>
 #include <fstream>
+#include <set>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -83,6 +84,14 @@ Result<void> verify_saved(const PdfiumDocument& source, const std::filesystem::p
     if (auto loaded = reopened->page_rotation(i); !loaded) {
       return std::unexpected(verify_error("cannot load page " + std::to_string(i + 1)));
     }
+    // OnPdf 가 넣은 텍스트 객체(마크 id)가 저장 뒤에도 같은 집합이어야 한다 (#45)
+    auto before_text = source.text_objects(i);
+    auto after_text = reopened->text_objects(i);
+    if (!before_text || !after_text) return std::unexpected(verify_error("cannot list text objects on page " + std::to_string(i + 1)));
+    std::set<std::string> before_ids, after_ids;
+    for (const auto& t : *before_text) before_ids.insert(t.id);
+    for (const auto& t : *after_text) after_ids.insert(t.id);
+    if (before_ids != after_ids) return std::unexpected(verify_error("text objects changed on page " + std::to_string(i + 1)));
   }
   if (incremental) {
     const auto& original = source.original_bytes();
