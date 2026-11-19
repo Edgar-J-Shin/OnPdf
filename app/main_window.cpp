@@ -436,6 +436,7 @@ void MainWindow::update_edit_actions() {
   if (QAction* text_tool = tool_actions_[static_cast<int>(AnnotationTool::kText)]; text_tool != nullptr) {
     const bool can_edit_contents = has_pages && session_.handle().info().permissions.modify_contents;
     const bool text_ok = can_edit_contents && text_font_ != nullptr;
+    text_edits_allowed_ = idle && text_ok;
     text_tool->setEnabled(text_ok);
     text_tool->setStatusTip(!has_pages ? QString()
                             : !can_edit_contents ? tr("이 문서는 내용 수정이 허용되지 않습니다")
@@ -797,6 +798,7 @@ void MainWindow::set_annotation_color(engine::Color color) {
     return;
   }
   annotation_color_ = color;
+  text_color_ = color;  // 새 텍스트도 같은 색 (기본값만 다르다: 텍스트는 검정)
   update_color_icon();
 }
 
@@ -880,12 +882,12 @@ void MainWindow::set_text_size(double size) {
 }
 
 void MainWindow::on_text_requested(int page, onpdf::Point pt) {
-  if (!annotation_edits_allowed_ || text_font_ == nullptr) return;
+  if (!text_edits_allowed_ || text_font_ == nullptr) return;
   for (;;) {
     AnnotationDialog dialog(tr("텍스트"), QString(), this);
     dialog.setObjectName(QStringLiteral("text_input"));
     if (dialog.exec() != QDialog::Accepted) return;
-    const QString text = dialog.text();
+    const QString text = dialog.text().normalized(QString::NormalizationForm_C);  // NFD 입력(macOS 파일명 등)은 NFC 로 (리뷰 W3)
     if (text.trimmed().isEmpty()) return;  // 빈 텍스트는 만들지 않는다
     const std::u32string missing = text_font_->missing(text.toUtf8().toStdString());
     if (missing.empty()) {
@@ -902,17 +904,16 @@ void MainWindow::on_text_requested(int page, onpdf::Point pt) {
 }
 
 bool MainWindow::add_text(int page, onpdf::Point pt, const QString& utf8) {
-  if (!annotation_edits_allowed_ || !view_->has_document() || text_font_ == nullptr) return false;
-  if (!session_.handle().info().permissions.modify_contents) return false;
+  if (!text_edits_allowed_ || !view_->has_document() || text_font_ == nullptr) return false;
   if (utf8.trimmed().isEmpty()) return false;
   if (!warn_signature_once()) return false;
   edit::TextBoxSpec spec;
   spec.page = page;
   spec.origin = pt;
   spec.size = text_size_;
-  spec.color = annotation_color_;
+  spec.color = text_color_;
   spec.color.a = 255;
-  spec.utf8 = utf8.toUtf8().toStdString();
+  spec.utf8 = utf8.normalized(QString::NormalizationForm_C).toUtf8().toStdString();
   spec.face = text_font_;
   return edit_->run(std::make_shared<edit::AddTextCommand>(std::move(spec)));
 }

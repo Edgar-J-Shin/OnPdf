@@ -222,6 +222,24 @@ TEST_F(TextToolTest, PermissionAndFontGateTheTool) {
   EXPECT_TRUE(window_.tool_action(AnnotationTool::kText)->statusTip().contains(QStringLiteral("글꼴")));
 }
 
+// 내용 수정(비트 4)만 있는 문서: 텍스트 도구는 켜지고 주석 도구는 꺼진다. 요청 게이트도 비트 4 (리뷰 W2)
+TEST_F(TextToolTest, ModifyOnlyPermissionEnablesTextButNotAnnotations) {
+  const auto copy = open_copy("perm-modify-only.pdf");
+  ASSERT_TRUE(spin_until([&] { return view()->text_index(0) != nullptr; }));
+  EXPECT_TRUE(window_.tool_action(AnnotationTool::kText)->isEnabled());
+  EXPECT_FALSE(window_.tool_action(AnnotationTool::kHighlight)->isEnabled());
+  EXPECT_FALSE(window_.add_note(0, {100, 100}, QStringLiteral("x")));
+  // NFD 입력은 NFC 로 정규화돼 들어간다 (리뷰 W3)
+  QString failure;
+  QObject::connect(window_.edit_controller(), &EditController::failed, &window_, [&](onpdf::ErrorCode, const QString& m) { failure = m; });
+  ASSERT_TRUE(window_.add_text(0, {72, 300}, QString::fromUtf8("\xE1\x84\x92\xE1\x85\xA1\xE1\x86\xAB \xE1\x84\x80\xE1\x85\xB3\xE1\x86\xAF")));  // 한글 (NFD)
+  const QString nfd = QString::fromUtf8("\xE1\x84\x92\xE1\x85\xA1\xE1\x86\xAB");
+  EXPECT_EQ(nfd.normalized(QString::NormalizationForm_C), QStringLiteral("한")) << "Qt NFC 가 한글 자모를 합성한다";
+  ASSERT_TRUE(wait_idle());
+  EXPECT_TRUE(window_.edit_controller()->can_undo()) << "명령이 스택에 올라갔다";
+  ASSERT_TRUE(wait_text_contains(0, QStringLiteral("한 글"))) << "failed: " << failure.toStdString();  // 입력은 "한 글" (NFD, 공백 포함)
+}
+
 TEST_F(TextToolTest, SavedTextReopens) {
   const auto copy = open_copy("simple.pdf");
   ASSERT_TRUE(spin_until([&] { return view()->text_index(0) != nullptr; }));

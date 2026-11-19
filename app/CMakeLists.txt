@@ -40,7 +40,7 @@ if(EXISTS "${ONPDF_BUNDLED_FONT}")
   add_custom_command(TARGET onpdf_app POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:onpdf_app>/fonts"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ONPDF_BUNDLED_FONT}" "${CMAKE_SOURCE_DIR}/third_party/fonts/OFL-NotoSansKR.txt" "$<TARGET_FILE_DIR:onpdf_app>/fonts/"
-    COMMENT "Copying bundled font (Noto Sans KR, OFL)")
+    COMMENT "Copying bundled font (Noto Sans KR, OFL)" VERBATIM)
 else()
   message(WARNING "번들 글꼴이 없습니다: python3 third_party/fetch_fonts.py 를 먼저 실행하세요 (텍스트 추가 도구가 비활성됩니다)")
 endif()

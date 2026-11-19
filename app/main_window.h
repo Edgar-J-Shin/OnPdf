@@ -255,6 +255,8 @@ class MainWindow : public QMainWindow {
   QAction* markup_selection_actions_[3] = {};  // 하이라이트·밑줄·취소선 (선택 영역)
   engine::Color annotation_color_{255, 255, 0, 255};
   bool annotation_edits_allowed_ = false;  // idle && 권한. 도구 선택은 권한만 보고, 실제 편집 요청은 이것으로 막는다
+  bool text_edits_allowed_ = false;        // idle && 내용 수정 권한(비트 4) && 번들 글꼴 (리뷰 W2)
+  engine::Color text_color_{0, 0, 0, 255};  // 새 텍스트 색 (기본 검정; 색 팔레트가 주석 색과 함께 바꾼다)
   bool updating_actions_ = false;          // update_edit_actions 재진입 차단
   struct PendingInsert {
     QString path;

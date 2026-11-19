@@ -17,6 +17,7 @@ AnnotationDialog::AnnotationDialog(const QString& title, const QString& text, QW
   edit_->setObjectName(QStringLiteral("note_text"));
   edit_->setPlainText(text);
   edit_->setPlaceholderText(tr("메모 내용"));
+  edit_->setTabChangesFocus(true);  // Tab 은 포커스 이동 — 글꼴에 탭 글리프가 없다 (리뷰 W1)
   column->addWidget(edit_, 1);
   auto* row = new QHBoxLayout();
   row->addStretch(1);

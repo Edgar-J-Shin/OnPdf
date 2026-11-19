@@ -26,6 +26,7 @@ GENERATED = {
     "korean-system-font.pdf": docs.make_korean_system_font,
     "encrypted-rc4-user.pdf": docs.make_encrypted_rc4_user,
     "encrypted-owner-only.pdf": docs.make_encrypted_owner_only,
+    "perm-modify-only.pdf": docs.make_perm_modify_only,
     "scanned.pdf": docs.make_scanned,
     "form-acro.pdf": docs.make_form_acro,
     "bookmarks.pdf": docs.make_bookmarks,

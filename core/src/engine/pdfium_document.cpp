@@ -716,7 +716,10 @@ Result<void> PdfiumDocument::remove_text_objects(int page_index, const std::vect
   // 전부 찾은 뒤에만 지운다 (부분 삭제 방지)
   std::vector<FPDF_PAGEOBJECT> found;
   const int count = FPDFPage_CountObjects(page->get());
-  for (const std::string& id : ids) {
+  std::vector<std::string> unique_ids(ids);  // 중복 id 는 한 번만 (두 번째 RemoveObject 가 실패해 반만 지우지 않게, 리뷰 I11)
+  std::sort(unique_ids.begin(), unique_ids.end());
+  unique_ids.erase(std::unique(unique_ids.begin(), unique_ids.end()), unique_ids.end());
+  for (const std::string& id : unique_ids) {
     FPDF_PAGEOBJECT hit = nullptr;
     for (int i = count - 1; i >= 0 && hit == nullptr; --i) {
       FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page->get(), i);

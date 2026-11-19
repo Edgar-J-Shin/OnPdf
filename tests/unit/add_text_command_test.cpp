@@ -65,9 +65,12 @@ TEST(AddTextCommand, RejectsEmptyAndPropagatesFailure) {
   TextBoxSpec no_font = box(0, "x");
   no_font.face = nullptr;
   EXPECT_FALSE(AddTextCommand(no_font).execute(doc));
+  AddTextCommand tab(box(0, "a\tb"));
+  EXPECT_TRUE(tab.execute(doc)) << "탭은 공백으로 (리뷰 W1)";
+  const std::size_t before_emoji = doc.text_objects_on(0).size();
   AddTextCommand emoji(box(0, "한글 😀"));
   EXPECT_FALSE(emoji.execute(doc)) << "글꼴에 없는 글자(.notdef)는 거절";
-  EXPECT_TRUE(doc.text_objects_on(0).empty());
+  EXPECT_EQ(doc.text_objects_on(0).size(), before_emoji);
   doc.fail_add_text_on_page = 0;
   AddTextCommand failing(box(0, "한글"));
   EXPECT_FALSE(failing.execute(doc));
@@ -100,13 +103,31 @@ TEST(AddTextCommand, ExecuteUndoRedoOnPdfium) {
   ASSERT_EQ(doc->text_objects(0)->size(), 2u);
   EXPECT_EQ((*doc->text_objects(0))[0].id, cmd.object_ids()[0]) << "재실행은 같은 id";
   EXPECT_EQ(doc->font_cache_size(), 1) << "같은 서브셋은 폰트 객체 재사용";
+  // NFD 입력(초성·중성·종성)도 추출은 입력 그대로 (ToUnicode 다중 코드, 리뷰 W3)
+  AddTextCommand nfd(box(0, "\xE1\x84\x92\xE1\x85\xA1\xE1\x86\xAB" " x", {72, 500}));
+  ASSERT_TRUE(nfd.execute(*doc));
+  EXPECT_NE(doc->load_text(0)->all_text().find("\xE1\x84\x92\xE1\x85\xA1\xE1\x86\xAB"), std::string::npos) << doc->load_text(0)->all_text();
+  ASSERT_TRUE(nfd.undo(*doc));
   // 다른 글자 집합 → 새 폰트, 같은 집합 → 재사용
+  const int cached = doc->font_cache_size();  // NFD 상자의 폰트도 캐시에 남는다 (취소해도 사전은 유지)
   AddTextCommand other(box(0, "둘째 줄", {72, 400}));
   ASSERT_TRUE(other.execute(*doc));
-  EXPECT_EQ(doc->font_cache_size(), 2);
+  EXPECT_EQ(doc->font_cache_size(), cached + 1);
   AddTextCommand same(box(0, "둘째 줄", {72, 450}));
   ASSERT_TRUE(same.execute(*doc));
-  EXPECT_EQ(doc->font_cache_size(), 2);
+  EXPECT_EQ(doc->font_cache_size(), cached + 1);
+}
+
+// 암호(소유자) 문서에서도 추가·추출된다
+TEST(AddTextCommand, WorksOnOwnerEncryptedDocument) {
+  auto doc = engine::PdfiumDocument::open(testdata("perm-modify-only.pdf"));
+  ASSERT_TRUE(doc) << doc.error().message;
+  AddTextCommand cmd(box(0, "한글 텍스트", {72, 300}));
+  auto change = cmd.execute(*doc);
+  ASSERT_TRUE(change) << change.error().message;
+  auto index = doc->load_text(0);
+  ASSERT_TRUE(index);
+  EXPECT_NE(index->all_text().find("한글 텍스트"), std::string::npos) << index->all_text();
 }
 
 // 회전 쪽: 쪽 포인트로 넣은 글이 회전 0 과 같은 자리·같은 크기로 추출된다 (화면 기준 바로 선 글)

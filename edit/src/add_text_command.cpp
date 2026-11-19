@@ -8,9 +8,10 @@
 namespace onpdf::edit {
 namespace {
 
-bool is_blank(char32_t c) { return c == U' ' || c == U'\t' || c == 0xA0; }
 bool visible(const LaidOutLine& line) {
-  return std::any_of(line.glyphs.begin(), line.glyphs.end(), [](const ShapedGlyph& g) { return !is_blank(g.codepoint); });
+  return std::any_of(line.glyphs.begin(), line.glyphs.end(), [](const ShapedGlyph& g) {
+    return !std::all_of(g.text.begin(), g.text.end(), is_layout_whitespace);
+  });
 }
 
 Result<engine::ChangeSet> page_change(int page) {
@@ -46,7 +47,7 @@ Result<engine::ChangeSet> AddTextCommand::execute(engine::EditableDocument& doc)
   spec.font.key = subset->key;
   spec.font.ttf = std::move(subset->ttf);
   spec.font.cid_to_gid = std::move(subset->cid_to_gid);
-  std::vector<std::pair<std::uint32_t, char32_t>> cid_to_unicode;
+  std::vector<std::pair<std::uint32_t, std::u32string>> cid_to_unicode;
   std::vector<std::size_t> line_index;  // 객체를 만든 줄의 layout 인덱스 (재실행 id 매칭)
   for (std::size_t i = 0; i < layout.lines.size(); ++i) {
     const auto& line = layout.lines[i];
@@ -58,7 +59,7 @@ Result<engine::ChangeSet> AddTextCommand::execute(engine::EditableDocument& doc)
     for (const auto& g : line.glyphs) {
       const std::uint32_t cid = subset->old_to_new.at(g.gid);
       ls.cids.push_back(cid);
-      cid_to_unicode.emplace_back(cid, g.codepoint);
+      cid_to_unicode.emplace_back(cid, g.text);
     }
     spec.lines.push_back(std::move(ls));
     line_index.push_back(i);

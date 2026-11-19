@@ -43,9 +43,9 @@ std::string fnv1a_hex(const std::vector<std::uint8_t>& bytes) {
   return hex;
 }
 
-bool is_layout_whitespace(char32_t c) { return c == U' ' || c == U'\t' || c == U'\n' || c == U'\r' || c == 0xA0; }
-
 }  // namespace
+
+bool is_layout_whitespace(char32_t c) noexcept { return c == U' ' || c == U'\t' || c == U'\n' || c == U'\r' || c == 0xA0; }
 
 struct FontFace::Impl {
   std::vector<std::uint8_t> bytes;  // blob 이 참조한다 (선언 순서: bytes 가 blob 보다 오래 산다)
@@ -85,6 +85,7 @@ Result<std::shared_ptr<const FontFace>> FontFace::load_from_memory(std::vector<s
   if (!impl->blob || hb_blob_get_length(impl->blob.get()) == 0) return make_error(ErrorCode::kInvalidFormat, "cannot read font data");
   impl->face.reset(hb_face_create(impl->blob.get(), 0));
   if (!impl->face || hb_face_get_glyph_count(impl->face.get()) == 0) return make_error(ErrorCode::kInvalidFormat, "not a font");
+  (void)hb_language_get_default();  // 첫 호출이 스레드 안전하지 않다 — 워커가 shape 에서 처음 부르기 전에 여기서(리뷰 I9)
   hb_ot_var_axis_info_t axis{};  // 출력 인자는 널이면 안 된다 (HarfBuzz 가 무조건 쓴다)
   impl->has_wght = hb_ot_var_find_axis_info(impl->face.get(), kWghtTag, &axis) != 0;
   return std::shared_ptr<const FontFace>(new FontFace(std::move(impl)));
@@ -121,20 +122,34 @@ ShapedText FontFace::shape(std::string_view utf8, double size_pt) const {
   unsigned n = 0;
   const hb_glyph_info_t* infos = hb_buffer_get_glyph_infos(buffer.get(), &n);
   const hb_glyph_position_t* positions = hb_buffer_get_glyph_positions(buffer.get(), &n);
-  // cluster(바이트 오프셋) → 코드 포인트
-  const auto codepoint_at = [&](unsigned byte_offset) -> char32_t {
-    if (byte_offset >= utf8.size()) return U'�';
-    const std::u32string one = decode_utf8(utf8.substr(byte_offset, 4));
-    return one.empty() ? U'�' : one.front();
+  // 클러스터(바이트 오프셋) 구간 → 입력 글자들. 다음 클러스터 시작은 자기보다 큰 가장 작은 오프셋 (방향 무관)
+  std::vector<unsigned> starts;
+  for (unsigned i = 0; i < n; ++i) starts.push_back(infos[i].cluster);
+  std::sort(starts.begin(), starts.end());
+  starts.erase(std::unique(starts.begin(), starts.end()), starts.end());
+  const auto text_of = [&](unsigned cluster) -> std::u32string {
+    if (cluster >= utf8.size()) return U"\uFFFD";
+    const auto next = std::upper_bound(starts.begin(), starts.end(), cluster);
+    const unsigned end = next == starts.end() ? static_cast<unsigned>(utf8.size()) : *next;
+    return decode_utf8(utf8.substr(cluster, end - cluster));
   };
+  // 글리프 없는 레이아웃 공백(탭·NBSP 등)은 공백 글리프로 (리뷰 W1). 탭은 공백 4칸
+  hb_codepoint_t space_gid = 0;
+  const bool has_space = hb_font_get_nominal_glyph(font.get(), U' ', &space_gid) != 0;
+  const double space_advance = has_space ? hb_font_get_glyph_h_advance(font.get(), space_gid) * scale : 0.25 * size_pt;
   out.glyphs.reserve(n);
   for (unsigned i = 0; i < n; ++i) {
     ShapedGlyph g;
     g.gid = infos[i].codepoint;
-    g.codepoint = codepoint_at(infos[i].cluster);
+    g.text = text_of(infos[i].cluster);
     g.x_advance = positions[i].x_advance * scale;
+    const bool blank = !g.text.empty() && std::all_of(g.text.begin(), g.text.end(), is_layout_whitespace);
+    if (g.gid == 0 && blank && has_space) {
+      g.gid = space_gid;
+      g.x_advance = space_advance * (g.text.front() == U'\t' ? 4.0 : 1.0);
+    }
     out.width += g.x_advance;
-    out.glyphs.push_back(g);
+    out.glyphs.push_back(std::move(g));
   }
   return out;
 }
@@ -158,8 +173,11 @@ Result<FontSubset> FontFace::subset(const std::vector<std::uint32_t>& gids) cons
   hb_set_t* glyph_set = hb_subset_input_glyph_set(input.get());
   hb_set_add(glyph_set, 0);  // .notdef
   for (std::uint32_t gid : gids) hb_set_add(glyph_set, gid);
-  // GID 를 촘촘히 재배치(RETAIN_GIDS 아님) → CIDToGIDMap 이 작다. 힌팅은 버린다
-  hb_subset_input_set_flags(input.get(), HB_SUBSET_FLAGS_NO_HINTING | HB_SUBSET_FLAGS_DESUBROUTINIZE);
+  // GID 를 촘촘히 재배치(RETAIN_GIDS 아님) → CIDToGIDMap 이 작다. 힌팅은 버린다.
+  // 레이아웃 클로저·GSUB/GPOS/GDEF 는 뺀다: PDF 뷰어는 임베딩 폰트를 재배치하지 않는다 (리뷰 I3, −25%)
+  hb_subset_input_set_flags(input.get(), HB_SUBSET_FLAGS_NO_HINTING | HB_SUBSET_FLAGS_DESUBROUTINIZE | HB_SUBSET_FLAGS_NO_LAYOUT_CLOSURE);
+  hb_set_t* drop = hb_subset_input_set(input.get(), HB_SUBSET_SETS_DROP_TABLE_TAG);
+  for (hb_tag_t tag : {HB_TAG('G', 'S', 'U', 'B'), HB_TAG('G', 'P', 'O', 'S'), HB_TAG('G', 'D', 'E', 'F')}) hb_set_add(drop, tag);
   if (impl_->has_wght && !hb_subset_input_pin_axis_location(input.get(), impl_->face.get(), kWghtTag, kWeight)) {
     return make_error(ErrorCode::kInvalidState, "cannot pin weight axis");
   }
@@ -189,11 +207,11 @@ Result<FontSubset> FontFace::subset(const std::vector<std::uint32_t>& gids) cons
   return out;
 }
 
-std::string make_to_unicode_cmap(std::vector<std::pair<std::uint32_t, char32_t>> cid_to_unicode) {
+std::string make_to_unicode_cmap(std::vector<std::pair<std::uint32_t, std::u32string>> cid_to_unicode) {
   std::stable_sort(cid_to_unicode.begin(), cid_to_unicode.end(),
                    [](const auto& a, const auto& b) { return a.first < b.first; });
-  // 같은 CID 는 먼저 나온 코드만 (공백/NBSP 같은 공유 글리프: 입력에 나온 쪽)
-  std::vector<std::pair<std::uint32_t, char32_t>> unique;
+  // 같은 CID 는 먼저 나온 문자열만 (공백/NBSP 같은 공유 글리프: 입력에 나온 쪽)
+  std::vector<std::pair<std::uint32_t, std::u32string>> unique;
   for (const auto& e : cid_to_unicode) {
     if (!unique.empty() && unique.back().first == e.first) continue;
     unique.push_back(e);
@@ -207,15 +225,20 @@ std::string make_to_unicode_cmap(std::vector<std::pair<std::uint32_t, char32_t>>
     const std::size_t end = std::min(unique.size(), i + 100);
     s += std::to_string(end - i) + " beginbfchar\n";
     for (std::size_t k = i; k < end; ++k) {
-      char line[40];
-      const char32_t cp = unique[k].second;
-      if (cp >= 0x10000) {
-        const char32_t v = cp - 0x10000;
-        std::snprintf(line, sizeof line, "<%04X> <%04X%04X>\n", unique[k].first, 0xD800 + (v >> 10), 0xDC00 + (v & 0x3FF));
-      } else {
-        std::snprintf(line, sizeof line, "<%04X> <%04X>\n", unique[k].first, static_cast<unsigned>(cp));
+      char head[16];
+      std::snprintf(head, sizeof head, "<%04X> <", unique[k].first);
+      s += head;
+      for (const char32_t cp : unique[k].second) {  // UTF-16BE, 여러 코드 허용 (NFD·결합 문자·합자)
+        char unit[12];
+        if (cp >= 0x10000) {
+          const char32_t v = cp - 0x10000;
+          std::snprintf(unit, sizeof unit, "%04X%04X", 0xD800 + (v >> 10), 0xDC00 + (v & 0x3FF));
+        } else {
+          std::snprintf(unit, sizeof unit, "%04X", static_cast<unsigned>(cp));
+        }
+        s += unit;
       }
-      s += line;
+      s += ">\n";
     }
     s += "endbfchar\n";
   }

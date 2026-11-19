@@ -33,10 +33,10 @@ TextObjectsSpec spec_for(const std::string& text, Point origin, double size, Col
   line.origin = {origin.x, origin.y + shaped.ascent};
   line.font_size = size;
   line.color = color;
-  std::vector<std::pair<std::uint32_t, char32_t>> cu;
+  std::vector<std::pair<std::uint32_t, std::u32string>> cu;
   for (const auto& g : shaped.glyphs) {
     line.cids.push_back(subset->old_to_new.at(g.gid));
-    cu.emplace_back(subset->old_to_new.at(g.gid), g.codepoint);
+    cu.emplace_back(subset->old_to_new.at(g.gid), g.text);
   }
   spec.font.to_unicode_cmap = edit::make_to_unicode_cmap(cu);
   spec.lines.push_back(line);
@@ -111,7 +111,7 @@ TEST(TextObjects, RemoveFindsByMarkAndPreservesOriginalContent) {
   EXPECT_FALSE(doc->remove_text_objects(0, {"onpdf-text-ffffffffffffffff"})) << "없는 id";
   EXPECT_FALSE(doc->remove_text_objects(0, {ids->front(), "onpdf-text-ffffffffffffffff"})) << "하나라도 없으면 전부 거절";
   EXPECT_EQ(doc->text_objects(0)->size(), 1u) << "부분 삭제 없음";
-  ASSERT_TRUE(doc->remove_text_objects(0, *ids));
+  ASSERT_TRUE(doc->remove_text_objects(0, {ids->front(), ids->front()})) << "중복 id 는 한 번만 지운다 (리뷰 I11)";
   EXPECT_TRUE(doc->text_objects(0)->empty());
   auto after = doc->render_page(0, options);
   ASSERT_TRUE(after);

@@ -19,7 +19,7 @@ namespace onpdf::edit {
 
 struct ShapedGlyph {
   std::uint32_t gid = 0;     // 원본 폰트의 글리프 ID
-  char32_t codepoint = 0;    // 그 글리프를 만든 입력 글자 (ToUnicode 용; 합자는 첫 글자)
+  std::u32string text;       // 그 글리프를 만든 입력 글자들 (클러스터 전체: NFD 한글·결합 문자·합자도 ToUnicode 에 그대로)
   double x_advance = 0.0;    // pt
 };
 
@@ -49,7 +49,8 @@ class FontFace {
   [[nodiscard]] static Result<std::shared_ptr<const FontFace>> load(const std::filesystem::path& path);
   [[nodiscard]] static Result<std::shared_ptr<const FontFace>> load_from_memory(std::vector<std::uint8_t> bytes);
 
-  // 한 줄(개행 없음)을 size_pt 로 배치. 변형 폰트는 wght=400 으로 고정
+  // 한 줄(개행 없음)을 size_pt 로 배치. 변형 폰트는 wght=400 으로 고정.
+  // 탭·NBSP 처럼 글리프가 없는 레이아웃 공백은 공백 글리프로 바꾼다 (탭 = 공백 4칸)
   [[nodiscard]] ShapedText shape(std::string_view utf8, double size_pt) const;
   // 글리프가 없는 글자 (공백·탭·개행 제외, 중복 제거, 입력 순서)
   [[nodiscard]] std::u32string missing(std::string_view utf8) const;
@@ -65,8 +66,10 @@ class FontFace {
   std::unique_ptr<Impl> impl_;
 };
 
-// ToUnicode CMap (bfchar, CID 오름차순, 같은 CID 는 먼저 나온 코드). 서로게이트 쌍은 4바이트 hex
-[[nodiscard]] std::string make_to_unicode_cmap(std::vector<std::pair<std::uint32_t, char32_t>> cid_to_unicode);
+// ToUnicode CMap (bfchar, CID 오름차순, 같은 CID 는 먼저 나온 문자열). dst 는 UTF-16BE (여러 코드·서로게이트 허용)
+[[nodiscard]] std::string make_to_unicode_cmap(std::vector<std::pair<std::uint32_t, std::u32string>> cid_to_unicode);
+// 레이아웃 공백 (공백·탭·NBSP·CR·LF)
+[[nodiscard]] bool is_layout_whitespace(char32_t c) noexcept;
 
 // UTF-8 → 코드 포인트 (잘못된 바이트는 U+FFFD)
 [[nodiscard]] std::u32string decode_utf8(std::string_view utf8);

@@ -52,7 +52,7 @@ OnPdf 는 Apache License 2.0 으로 배포되며, 아래 제3자 구성 요소�
 ### HarfBuzz
 - 출처: https://github.com/harfbuzz/harfbuzz (vcpkg 포트 15.1.0, `freetype` feature 끔)
 - 라이선스: MIT ("Old MIT"). 전체 문구는 배포본의 `COPYING`
-- 용도: 새 텍스트의 글자 배치·측정과 서브셋 임베딩(hb-subset). 정적 링크(edit 계층)
+- 용도: 새 텍스트의 글자 배치·측정과 서브셋 임베딩(hb-subset). macOS·Linux 는 정적 링크(edit 계층), Windows 는 vcpkg 기본 triplet 이라 `harfbuzz*.dll` 로 함께 배포
 
 ### Noto Sans KR (번들 글꼴)
 - 출처: https://github.com/google/fonts/tree/main/ofl/notosanskr (`third_party/fonts-version.txt` 의 커밋으로 고정, `third_party/fetch_fonts.py`)
