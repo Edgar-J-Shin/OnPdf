@@ -58,32 +58,52 @@ class FakeDocument final : public engine::EditableDocument {
   // ---- 텍스트 객체 (가짜: 줄 스펙과 폰트 key 를 그대로 보관) ----
   struct FakeTextObject {
     std::string id;
+    std::string box;
+    std::string box_text;  // 첫 줄에만
     engine::TextLineSpec line;
     std::string font_key;
   };
   int fail_add_text_on_page = -1;
+  int fail_next_add_text = 0;  // 다음 n 번의 add_text_objects 가 실패 (수정 보상 테스트)
   [[nodiscard]] const std::vector<FakeTextObject>& text_objects_on(int page) const {
     static const std::vector<FakeTextObject> kEmpty;
     const auto it = texts_.find(page);
     return it == texts_.end() ? kEmpty : it->second;
   }
   [[nodiscard]] int font_count() const noexcept { return static_cast<int>(font_keys_.size()); }
-  [[nodiscard]] Result<std::vector<std::string>> add_text_objects(int page, const engine::TextObjectsSpec& spec) override {
+  [[nodiscard]] Result<engine::TextObjectsResult> add_text_objects(int page, const engine::TextObjectsSpec& spec) override {
     if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
     if (page == fail_add_text_on_page) return make_error(ErrorCode::kInvalidState, "injected failure");
+    if (fail_next_add_text > 0) { --fail_next_add_text; return make_error(ErrorCode::kInvalidState, "injected add failure"); }
     if (spec.lines.empty() || spec.font.key.empty()) return make_error(ErrorCode::kInvalidArgument, "spec");
     if (!spec.ids.empty() && spec.ids.size() != spec.lines.size()) return make_error(ErrorCode::kInvalidArgument, "ids");
     font_keys_[spec.font.key] = spec.font.ttf.size();
-    std::vector<std::string> ids;
+    engine::TextObjectsResult result;
+    result.box = spec.box.empty() ? "fake-box-" + std::to_string(next_text_++) : spec.box;
     for (std::size_t i = 0; i < spec.lines.size(); ++i) {
       FakeTextObject t;
       t.id = spec.ids.empty() ? "fake-text-" + std::to_string(next_text_++) : spec.ids[i];
+      t.box = spec.write_box ? result.box : t.id;
       t.line = spec.lines[i];
+      if (spec.write_box && i == 0) t.box_text = spec.box_text;
+      if (!spec.write_box) t.line.text.clear();
       t.font_key = spec.font.key;
       texts_[page].push_back(std::move(t));
-      ids.push_back(texts_[page].back().id);
+      result.ids.push_back(texts_[page].back().id);
     }
-    return ids;
+    return result;
+  }
+  [[nodiscard]] Result<void> move_text_objects(int page, const std::vector<std::string>& ids, onpdf::Point delta) override {
+    auto& list = texts_[page];
+    for (const auto& id : ids) {
+      if (std::none_of(list.begin(), list.end(), [&](const FakeTextObject& t) { return t.id == id; })) {
+        return make_error(ErrorCode::kInvalidArgument, "text object not found: " + id);
+      }
+    }
+    for (auto& t : list) {
+      if (std::find(ids.begin(), ids.end(), t.id) != ids.end()) { t.line.origin.x += delta.x; t.line.origin.y += delta.y; }
+    }
+    return {};
   }
   [[nodiscard]] Result<void> remove_text_objects(int page, const std::vector<std::string>& ids) override {
     auto& list = texts_[page];
@@ -101,7 +121,16 @@ class FakeDocument final : public engine::EditableDocument {
     if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
     std::vector<engine::TextObjectInfo> out;
     for (const auto& t : text_objects_on(page)) {
-      out.push_back({t.id, {t.line.origin.x, t.line.origin.y - t.line.font_size, 100.0, t.line.font_size * 1.2}});
+      engine::TextObjectInfo info;
+      info.id = t.id;
+      info.box = t.box;
+      info.text = t.line.text;
+      info.box_text = t.box_text;
+      info.font_size = t.line.font_size;
+      info.color = t.line.color;
+      info.baseline_origin = t.line.origin;
+      info.bbox = {t.line.origin.x, t.line.origin.y - t.line.font_size, 100.0, t.line.font_size * 1.2};
+      out.push_back(std::move(info));
     }
     return out;
   }

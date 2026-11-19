@@ -108,6 +108,7 @@ class MainWindow : public QMainWindow {
   // 텍스트 상자 생성: 대화상자 없이 (테스트용·on_text_requested 가 부른다). 시작하면 true
   bool add_text(int page, onpdf::Point pt, const QString& utf8);
   bool set_text_font(const QString& path);  // 번들 폰트 교체 (테스트: 저장소 서브셋 폰트)
+  bool delete_selected_text_box();         // 선택한 텍스트 상자 삭제 (Delete 키·툴바와 같은 경로). 시작하면 true
   [[nodiscard]] bool has_text_font() const noexcept { return text_font_ != nullptr; }
   [[nodiscard]] double text_size() const noexcept { return text_size_; }
   void set_text_size(double size);
@@ -164,6 +165,11 @@ class MainWindow : public QMainWindow {
   void on_markup_requested(onpdf::engine::AnnotationKind kind, const MarkupItems& items);
   void on_note_requested(int page, onpdf::Point pt);
   void on_text_requested(int page, onpdf::Point pt);
+  void on_text_box_selected(bool has, const DocumentView::SelectedTextBox& box);
+  void on_text_move_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta);
+  void on_text_delete_requested(int page, const QString& box);
+  void on_text_edit_requested(int page, const DocumentView::SelectedTextBox& box);
+  bool replace_selected_text(std::optional<QString> utf8, std::optional<double> size, std::optional<engine::Color> color);
   void load_bundled_text_font();
   void on_ink_requested(int page, const std::vector<onpdf::Point>& points, onpdf::Rect bbox);
   void on_shape_requested(int page, onpdf::engine::AnnotationKind kind, onpdf::Rect rect);
@@ -251,6 +257,7 @@ class MainWindow : public QMainWindow {
   QString text_font_path_;
   QComboBox* text_size_combo_ = nullptr;
   double text_size_ = 24.0;
+  bool syncing_text_size_ = false;  // 선택한 상자의 크기를 콤보에 비출 때 기본값·Command 를 건드리지 않는다
   QAction* delete_annotation_action_ = nullptr;
   QAction* markup_selection_actions_[3] = {};  // 하이라이트·밑줄·취소선 (선택 영역)
   engine::Color annotation_color_{255, 255, 0, 255};

@@ -31,11 +31,13 @@ class AddTextCommand final : public Command {
   Result<engine::ChangeSet> execute(engine::EditableDocument& doc) override;
   Result<engine::ChangeSet> undo(engine::EditableDocument& doc) override;
   [[nodiscard]] const std::vector<std::string>& object_ids() const noexcept { return ids_; }
+  [[nodiscard]] const std::string& box_id() const noexcept { return box_; }
   [[nodiscard]] const TextBoxSpec& spec() const noexcept { return spec_; }
 
  private:
   TextBoxSpec spec_;
   std::vector<std::string> ids_;  // 실행 뒤 줄별 객체 id
+  std::string box_;               // 실행 뒤 상자 id (재실행은 같은 상자)
   bool executed_ = false;
 };
 

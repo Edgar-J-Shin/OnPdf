@@ -61,9 +61,10 @@ class PdfiumDocument final : public EditableDocument {
   [[nodiscard]] Result<void> set_annotation_contents(int page_index, std::string_view id,
                                                      std::string_view utf8) override;
   [[nodiscard]] Result<void> set_annotation_border_width(int page_index, std::string_view id, double width) override;
-  [[nodiscard]] Result<std::vector<std::string>> add_text_objects(int page_index, const TextObjectsSpec& spec) override;
+  [[nodiscard]] Result<TextObjectsResult> add_text_objects(int page_index, const TextObjectsSpec& spec) override;
   [[nodiscard]] Result<void> remove_text_objects(int page_index, const std::vector<std::string>& ids) override;
   [[nodiscard]] Result<std::vector<TextObjectInfo>> text_objects(int page_index) const override;
+  [[nodiscard]] Result<void> move_text_objects(int page_index, const std::vector<std::string>& ids, Point delta_pt) override;
   [[nodiscard]] int snapshot_count() const noexcept { return static_cast<int>(snapshots_.size()); }  // 테스트용
   [[nodiscard]] int font_cache_size() const noexcept { return static_cast<int>(fonts_.size()); }     // 테스트용
 

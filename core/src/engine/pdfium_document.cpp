@@ -9,6 +9,7 @@
 #include <fpdf_doc.h>
 #include <fpdf_signature.h>
 #include <fpdf_save.h>
+#include <fpdf_text.h>
 #include <fpdf_edit.h>
 #include <fpdf_ppo.h>
 #include <fpdfview.h>
@@ -306,17 +307,11 @@ std::string pdf_date_now() {
   return buf;
 }
 
-// 텍스트 객체 id: 주석 /NM 과 같은 난수 형식
-std::string new_text_id() {
-  std::random_device random;
-  const std::uint64_t nonce = (static_cast<std::uint64_t>(random()) << 32) ^ static_cast<std::uint64_t>(random());
-  char hex[17];
-  std::snprintf(hex, sizeof hex, "%016llx", static_cast<unsigned long long>(nonce));
-  return std::string("onpdf-text-") + hex;
-}
+std::string new_text_id() { return make_text_object_id(); }
+std::string new_box_id() { return make_text_box_id(); }
 
-// 쪽 객체의 OnPdf 마크 id (없으면 빈 문자열). 파라미터 값은 UTF-16LE 로 돌아온다
-std::string text_object_id_of(FPDF_PAGEOBJECT obj) {
+// 쪽 객체의 OnPdf 마크 (없으면 nullptr)
+FPDF_PAGEOBJECTMARK onpdf_mark_of(FPDF_PAGEOBJECT obj) {
   const int marks = FPDFPageObj_CountMarks(obj);
   for (int m = 0; m < marks; ++m) {
     FPDF_PAGEOBJECTMARK mark = FPDFPageObj_GetMark(obj, static_cast<unsigned long>(m));
@@ -324,15 +319,32 @@ std::string text_object_id_of(FPDF_PAGEOBJECT obj) {
     unsigned char name[32] = {};  // UTF-16LE
     unsigned long name_len = 0;
     if (!FPDFPageObjMark_GetName(mark, reinterpret_cast<FPDF_WCHAR*>(name), sizeof name, &name_len) || name_len > sizeof name) continue;
-    if (detail::utf16le_to_utf8(name, name_len) != "OnPdf") continue;
-    unsigned long bytes = 0;
-    if (!FPDFPageObjMark_GetParamStringValue(mark, "id", nullptr, 0, &bytes) || bytes == 0) continue;
-    std::vector<unsigned char> buffer(bytes);
-    if (!FPDFPageObjMark_GetParamStringValue(mark, "id", reinterpret_cast<FPDF_WCHAR*>(buffer.data()), bytes, &bytes)) continue;
-    return detail::utf16le_to_utf8(buffer.data(), bytes);
+    if (detail::utf16le_to_utf8(name, name_len) == "OnPdf") return mark;
   }
-  return {};
+  return nullptr;
 }
+
+// 마크의 문자열 파라미터 (ASCII 전용: id·box). 값은 UTF-16LE 로 돌아온다
+std::string mark_string(FPDF_PAGEOBJECTMARK mark, const char* key) {
+  unsigned long bytes = 0;
+  if (mark == nullptr || !FPDFPageObjMark_GetParamStringValue(mark, key, nullptr, 0, &bytes) || bytes == 0) return {};
+  std::vector<unsigned char> buffer(bytes);
+  if (!FPDFPageObjMark_GetParamStringValue(mark, key, reinterpret_cast<FPDF_WCHAR*>(buffer.data()), bytes, &bytes)) return {};
+  return detail::utf16le_to_utf8(buffer.data(), bytes);
+}
+
+// 마크의 블롭 파라미터 (원문 UTF-8 — 문자열 파라미터는 비ASCII 를 PDFDocEncoding 으로 오해하고 UTF-16 은 NUL 에서 잘린다)
+std::string mark_blob(FPDF_PAGEOBJECTMARK mark, const char* key) {
+  unsigned long bytes = 0;
+  if (mark == nullptr || !FPDFPageObjMark_GetParamBlobValue(mark, key, nullptr, 0, &bytes) || bytes == 0) return {};
+  std::string out(bytes, '\0');
+  if (!FPDFPageObjMark_GetParamBlobValue(mark, key, reinterpret_cast<unsigned char*>(out.data()), bytes, &bytes)) return {};
+  out.resize(bytes);
+  return out;
+}
+
+// 쪽 객체의 OnPdf 마크 id (없으면 빈 문자열)
+std::string text_object_id_of(FPDF_PAGEOBJECT obj) { return mark_string(onpdf_mark_of(obj), "id"); }
 
 std::string new_nm() {
   std::random_device rd;
@@ -652,7 +664,7 @@ Result<void> PdfiumDocument::set_annotation_border_width(int page_index, std::st
 
 // ---------------------------------------------------------------- 텍스트 객체 (#45)
 
-Result<std::vector<std::string>> PdfiumDocument::add_text_objects(int page_index, const TextObjectsSpec& spec) {
+Result<TextObjectsResult> PdfiumDocument::add_text_objects(int page_index, const TextObjectsSpec& spec) {
   PdfiumLibrary::assert_current_thread();
   if (spec.lines.empty()) return make_error(ErrorCode::kInvalidArgument, "no text lines");
   if (spec.font.key.empty() || spec.font.ttf.empty()) return make_error(ErrorCode::kInvalidArgument, "font spec incomplete");
@@ -677,8 +689,9 @@ Result<std::vector<std::string>> PdfiumDocument::add_text_objects(int page_index
   }
   const detail::PageSpace space = detail::PageSpace::of(page->get());
   std::vector<std::string> ids;
+  const std::string box = spec.box.empty() ? new_box_id() : spec.box;
   std::vector<FPDF_PAGEOBJECT> inserted;  // 소유권은 쪽에 있다 (보상 때 Remove+Destroy)
-  const auto fail = [&](const char* what) -> Result<std::vector<std::string>> {
+  const auto fail = [&](const char* what) -> Result<TextObjectsResult> {
     for (FPDF_PAGEOBJECT obj : inserted) {
       if (FPDFPage_RemoveObject(page->get(), obj)) FPDFPageObj_Destroy(obj);
     }
@@ -699,13 +712,25 @@ Result<std::vector<std::string>> PdfiumDocument::add_text_objects(int page_index
     FPDF_PAGEOBJECTMARK mark = FPDFPageObj_AddMark(obj.get(), "OnPdf");
     if (mark == nullptr) return fail("FPDFPageObj_AddMark failed");
     if (!FPDFPageObjMark_SetStringParam(doc_.get(), obj.get(), mark, "id", id.c_str())) return fail("cannot set mark id");
+    if (spec.write_box && !FPDFPageObjMark_SetStringParam(doc_.get(), obj.get(), mark, "box", box.c_str())) return fail("cannot set mark box");
+    if (spec.write_box && !line.text.empty() &&
+        !FPDFPageObjMark_SetBlobParam(doc_.get(), obj.get(), mark, "text", reinterpret_cast<const unsigned char*>(line.text.data()),
+                                      static_cast<unsigned long>(line.text.size()))) {
+      return fail("cannot set mark text");
+    }
+    if (spec.write_box && i == 0 && !spec.box_text.empty() &&
+        !FPDFPageObjMark_SetBlobParam(doc_.get(), obj.get(), mark, "box_text",
+                                      reinterpret_cast<const unsigned char*>(spec.box_text.data()),
+                                      static_cast<unsigned long>(spec.box_text.size()))) {
+      return fail("cannot set mark box_text");
+    }
     FPDF_PAGEOBJECT raw = obj.release();
     FPDFPage_InsertObject(page->get(), raw);  // 소유권 이전
     inserted.push_back(raw);
     ids.push_back(id);
   }
   if (!FPDFPage_GenerateContent(page->get())) return fail("FPDFPage_GenerateContent failed");
-  return ids;
+  return TextObjectsResult{std::move(ids), box};
 }
 
 Result<void> PdfiumDocument::remove_text_objects(int page_index, const std::vector<std::string>& ids) {
@@ -742,19 +767,87 @@ Result<std::vector<TextObjectInfo>> PdfiumDocument::text_objects(int page_index)
   if (!page) return std::unexpected(page.error());
   const detail::PageSpace space = detail::PageSpace::of(page->get());
   std::vector<TextObjectInfo> out;
+  ScopedTextPage text_page;  // 옛 객체(원문 블롭 없음)의 글자 추출에만 연다
   const int count = FPDFPage_CountObjects(page->get());
   for (int i = 0; i < count; ++i) {
     FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page->get(), i);
     if (obj == nullptr || FPDFPageObj_GetType(obj) != FPDF_PAGEOBJ_TEXT) continue;
-    std::string id = text_object_id_of(obj);
+    FPDF_PAGEOBJECTMARK mark = onpdf_mark_of(obj);
+    std::string id = mark_string(mark, "id");
     if (id.empty()) continue;
-    float left = 0, bottom = 0, right = 0, top = 0;
     TextObjectInfo info;
+    info.box = mark_string(mark, "box");
+    if (info.box.empty()) info.box = id;  // #47 이전 객체: 줄 하나가 상자 하나
+    info.text = mark_blob(mark, "text");
+    info.box_text = mark_blob(mark, "box_text");
+    if (info.text.empty()) {
+      if (!text_page) text_page.reset(FPDFText_LoadPage(page->get()));
+      if (text_page) {
+        const unsigned long chars = FPDFTextObj_GetText(obj, text_page.get(), nullptr, 0);  // 바이트 수 (NUL 포함)
+        if (chars > 2) {
+          std::vector<unsigned char> buffer(chars);
+          FPDFTextObj_GetText(obj, text_page.get(), reinterpret_cast<FPDF_WCHAR*>(buffer.data()), chars);
+          info.text = detail::utf16le_to_utf8(buffer.data(), chars);
+        }
+      }
+    }
     info.id = std::move(id);
+    float size = 0;
+    if (FPDFTextObj_GetFontSize(obj, &size)) info.font_size = size;
+    unsigned r = 0, g = 0, b = 0, a = 255;
+    if (FPDFPageObj_GetFillColor(obj, &r, &g, &b, &a)) {
+      info.color = {static_cast<std::uint8_t>(r), static_cast<std::uint8_t>(g), static_cast<std::uint8_t>(b), static_cast<std::uint8_t>(a)};
+    }
+    FS_MATRIX m{};
+    if (FPDFPageObj_GetMatrix(obj, &m)) info.baseline_origin = space.to_pt(m.e, m.f);
+    float left = 0, bottom = 0, right = 0, top = 0;
     if (FPDFPageObj_GetBounds(obj, &left, &bottom, &right, &top)) info.bbox = space.to_rect(left, right, bottom, top);
     out.push_back(std::move(info));
   }
   return out;
+}
+
+Result<void> PdfiumDocument::move_text_objects(int page_index, const std::vector<std::string>& ids, Point delta_pt) {
+  PdfiumLibrary::assert_current_thread();
+  if (ids.empty()) return make_error(ErrorCode::kInvalidArgument, "no ids");
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  std::vector<FPDF_PAGEOBJECT> found;
+  const int count = FPDFPage_CountObjects(page->get());
+  std::vector<std::string> unique_ids(ids);
+  std::sort(unique_ids.begin(), unique_ids.end());
+  unique_ids.erase(std::unique(unique_ids.begin(), unique_ids.end()), unique_ids.end());
+  for (const std::string& id : unique_ids) {
+    FPDF_PAGEOBJECT hit = nullptr;
+    for (int i = count - 1; i >= 0 && hit == nullptr; --i) {
+      FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page->get(), i);
+      if (obj != nullptr && text_object_id_of(obj) == id) hit = obj;
+    }
+    if (hit == nullptr) return make_error(ErrorCode::kInvalidArgument, "text object not found: " + id);
+    found.push_back(hit);
+  }
+  // 쪽 포인트 Δ → 사용자 좌표 Δ: 기저 (a,b) = +x 1pt, (c,d) = 위쪽(−y) 1pt. 쪽 안에서 기저는 일정하다
+  const detail::PageSpace space = detail::PageSpace::of(page->get());
+  const auto basis = space.user_matrix_at({0.0, 0.0});
+  const double du = basis[0] * delta_pt.x - basis[2] * delta_pt.y;
+  const double dv = basis[1] * delta_pt.x - basis[3] * delta_pt.y;
+  std::vector<std::pair<FPDF_PAGEOBJECT, FS_MATRIX>> moved;  // 중간 실패 시 되돌린다
+  const auto fail = [&](const char* what) -> Result<void> {
+    for (auto& [obj, original] : moved) (void)FPDFPageObj_SetMatrix(obj, &original);
+    if (!moved.empty()) (void)FPDFPage_GenerateContent(page->get());
+    return make_error(ErrorCode::kInvalidState, what);
+  };
+  for (FPDF_PAGEOBJECT obj : found) {
+    FS_MATRIX m{};
+    if (!FPDFPageObj_GetMatrix(obj, &m)) return fail("FPDFPageObj_GetMatrix failed");
+    const FS_MATRIX original = m;
+    m.e += static_cast<float>(du);
+    m.f += static_cast<float>(dv);
+    if (!FPDFPageObj_SetMatrix(obj, &m)) return fail("FPDFPageObj_SetMatrix failed");
+    moved.emplace_back(obj, original);
+  }
+  if (!FPDFPage_GenerateContent(page->get())) return fail("FPDFPage_GenerateContent failed");
+  return {};
 }
 
 Result<void> PdfiumDocument::set_annotation_contents(int page_index, std::string_view id, std::string_view utf8) {

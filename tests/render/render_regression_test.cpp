@@ -5,6 +5,7 @@
 
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/edit/add_text_command.h"
+#include "onpdf/edit/text_box_commands.h"
 #include "onpdf/core/engine/save.h"
 #include "onpdf/core/image/png_io.h"
 
@@ -254,6 +255,41 @@ TEST(RenderRegression, TextAddedAndSavedPage) {
     GTEST_SKIP() << "reference updated: " << expected_path;
   }
   onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "simple-p0-text-added.png");
+}
+
+// 텍스트 편집(#47): 추가 → 이동(60, 40) → 크기 36·빨강으로 수정 → 저장 → 다시 열어 렌더
+TEST(RenderRegression, TextEditedAndSavedPage) {
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc) << doc.error().message;
+  auto face = edit::FontFace::load(testdata("fonts") / "NotoSansKR-subset.ttf");
+  ASSERT_TRUE(face);
+  edit::TextBoxSpec spec;
+  spec.page = 0;
+  spec.origin = {72, 420};
+  spec.size = 24;
+  spec.utf8 = "한글 텍스트 추가\n둘째 줄 임베딩";
+  spec.face = *face;
+  edit::AddTextCommand add(spec);
+  ASSERT_TRUE(add.execute(*doc));
+  edit::MoveTextBoxCommand move(0, add.object_ids(), {60, 40});
+  ASSERT_TRUE(move.execute(*doc));
+  edit::ReplaceTextBoxCommand replace(0, add.box_id(), *face, std::string("저장 열기"), 36.0, engine::Color{200, 0, 0, 255});
+  ASSERT_TRUE(replace.execute(*doc));
+  onpdf::test::ScopedTempDir dir;
+  const auto saved_path = dir / "text-edited.pdf";
+  ASSERT_TRUE(engine::save_document_safely(*doc, saved_path, {}));
+  auto reopened = PdfiumDocument::open(saved_path);
+  ASSERT_TRUE(reopened) << reopened.error().message;
+  RenderOptions options;
+  options.scale = 1.0f;
+  auto actual = reopened->render_page(0, options);
+  ASSERT_TRUE(actual) << actual.error().message;
+  const auto expected_path = testdata("expected") / "simple-p0-text-edited.png";
+  if (update_references()) {
+    ASSERT_TRUE(image::write_png(*actual, expected_path));
+    GTEST_SKIP() << "reference updated: " << expected_path;
+  }
+  onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "simple-p0-text-edited.png");
 }
 
 // 회전(90°)된 쪽에 넣은 텍스트: 화면 기준으로 바로 선다

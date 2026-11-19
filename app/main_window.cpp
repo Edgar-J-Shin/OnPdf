@@ -8,6 +8,7 @@
 #include "onpdf/core/page_ranges.h"
 #include "onpdf/edit/add_text_command.h"
 #include "onpdf/edit/annotation_commands.h"
+#include "onpdf/edit/text_box_commands.h"
 #include "onpdf/edit/delete_pages.h"
 #include "onpdf/edit/insert_pages.h"
 #include "onpdf/edit/move_pages.h"
@@ -124,6 +125,14 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(view_, &DocumentView::markup_requested, this, &MainWindow::on_markup_requested);
   connect(view_, &DocumentView::note_requested, this, &MainWindow::on_note_requested);
   connect(view_, &DocumentView::text_requested, this, &MainWindow::on_text_requested);
+  connect(view_, &DocumentView::text_box_selected, this, &MainWindow::on_text_box_selected);
+  connect(view_, &DocumentView::text_box_reselected, this, [this](const DocumentView::SelectedTextBox&) {
+    update_edit_actions();
+    update_property_buttons();
+  });
+  connect(view_, &DocumentView::text_move_requested, this, &MainWindow::on_text_move_requested);
+  connect(view_, &DocumentView::text_delete_requested, this, &MainWindow::on_text_delete_requested);
+  connect(view_, &DocumentView::text_edit_requested, this, &MainWindow::on_text_edit_requested);
   connect(view_, &DocumentView::ink_requested, this, &MainWindow::on_ink_requested);
   connect(view_, &DocumentView::shape_requested, this, &MainWindow::on_shape_requested);
   connect(view_, &DocumentView::annotation_selected, this, &MainWindow::on_annotation_selected);
@@ -375,6 +384,9 @@ QString MainWindow::command_label(std::string_view id) const {
   if (id == "add_square") return tr("사각형 추가");
   if (id == "add_circle") return tr("원 추가");
   if (id == "add_text") return tr("텍스트 추가");
+  if (id == "move_text") return tr("텍스트 이동");
+  if (id == "remove_text") return tr("텍스트 삭제");
+  if (id == "replace_text") return tr("텍스트 수정");
   if (id == "set_annotation_border_width") return tr("선 두께 변경");
   if (id == "set_annotation_opacity") return tr("불투명도 변경");
   if (id == "remove_annotation") return tr("주석 삭제");
@@ -430,13 +442,15 @@ void MainWindow::update_edit_actions() {
   for (QAction* action : markup_selection_actions_) {
     if (action != nullptr) action->setEnabled(idle && can_annotate && view_->has_selection());
   }
-  delete_annotation_action_->setEnabled(annotation_edits_allowed_ && view_->selected_annotation().has_value());
+  delete_annotation_action_->setEnabled((annotation_edits_allowed_ && view_->selected_annotation().has_value()) ||
+                                        (text_edits_allowed_ && view_->selected_text_box().has_value()));
   color_button_->setEnabled(can_annotate);
   // 텍스트 추가는 내용 수정 권한(비트 4) + 번들 폰트. 바쁨·저장·인쇄 중 요청은 annotation_edits_allowed_ 와 같은 규칙으로 막는다
   if (QAction* text_tool = tool_actions_[static_cast<int>(AnnotationTool::kText)]; text_tool != nullptr) {
     const bool can_edit_contents = has_pages && session_.handle().info().permissions.modify_contents;
     const bool text_ok = can_edit_contents && text_font_ != nullptr;
     text_edits_allowed_ = idle && text_ok;
+    view_->set_text_editable(text_edits_allowed_);
     text_tool->setEnabled(text_ok);
     text_tool->setStatusTip(!has_pages ? QString()
                             : !can_edit_contents ? tr("이 문서는 내용 수정이 허용되지 않습니다")
@@ -713,7 +727,8 @@ void MainWindow::build_annotation_ui() {
   for (int pt : {8, 10, 12, 14, 18, 24, 36, 48, 72}) text_size_combo_->addItem(tr("%1pt").arg(pt), pt);
   text_size_combo_->setCurrentIndex(5);  // 24pt
   connect(text_size_combo_, &QComboBox::currentIndexChanged, this, [this](int index) {
-    if (index >= 0) text_size_ = text_size_combo_->itemData(index).toDouble();
+    if (index < 0 || syncing_text_size_) return;
+    set_text_size(text_size_combo_->itemData(index).toDouble());
   });
   annotation_toolbar_->addWidget(text_size_combo_);
   update_property_buttons();
@@ -743,6 +758,16 @@ void MainWindow::update_color_icon() {
 }
 
 void MainWindow::update_property_buttons() {
+  if (text_size_combo_ != nullptr) {
+    // 선택한 텍스트 상자의 크기를 콤보에 비춘다 (선택이 없으면 기본값)
+    const auto selected = view_->selected_text_box();
+    const double shown = selected ? selected->font_size : text_size_;
+    const int index = text_size_combo_->findData(static_cast<int>(std::lround(shown)));
+    if (index >= 0 && index != text_size_combo_->currentIndex()) {
+      QScopedValueRollback<bool> guard(syncing_text_size_, true);
+      text_size_combo_->setCurrentIndex(index);
+    }
+  }
   if (width_button_ == nullptr || opacity_button_ == nullptr) return;
   // 선택이 있으면 그 주석의 값, 없으면 새 도형·펜의 기본값
   if (auto selected = view_->selected_annotation(); selected) {
@@ -795,6 +820,11 @@ void MainWindow::set_annotation_color(engine::Color color) {
     if (edit_->run(std::make_shared<edit::SetAnnotationColorCommand>(view_->selected_annotation_page(), selected->id, color))) {
       show_transient(tr("선택한 주석의 색을 바꿨습니다 (새 주석의 기본 색은 그대로입니다)"));
     }
+    return;
+  }
+  if (auto selected = view_->selected_text_box(); selected) {  // 선택한 텍스트 상자의 색만
+    if (selected->color.r == color.r && selected->color.g == color.g && selected->color.b == color.b) return;
+    replace_selected_text(std::nullopt, std::nullopt, color);
     return;
   }
   annotation_color_ = color;
@@ -875,10 +905,19 @@ bool MainWindow::set_text_font(const QString& path) {
 }
 
 void MainWindow::set_text_size(double size) {
+  // 텍스트 상자가 선택돼 있으면 그 상자의 크기만 바꾼다 (주석 색 버튼과 같은 규칙). 없으면 새 텍스트의 기본값
+  if (auto selected = view_->selected_text_box(); selected && !view_->selected_annotation()) {
+    if (std::abs(selected->font_size - size) < 0.01) return;
+    replace_selected_text(std::nullopt, size, std::nullopt);
+    return;
+  }
   text_size_ = size;
   if (text_size_combo_ == nullptr) return;
   const int index = text_size_combo_->findData(static_cast<int>(size));
-  if (index >= 0) text_size_combo_->setCurrentIndex(index);
+  if (index >= 0) {
+    QScopedValueRollback<bool> guard(syncing_text_size_, true);
+    text_size_combo_->setCurrentIndex(index);
+  }
 }
 
 void MainWindow::on_text_requested(int page, onpdf::Point pt) {
@@ -916,6 +955,70 @@ bool MainWindow::add_text(int page, onpdf::Point pt, const QString& utf8) {
   spec.utf8 = utf8.normalized(QString::NormalizationForm_C).toUtf8().toStdString();
   spec.face = text_font_;
   return edit_->run(std::make_shared<edit::AddTextCommand>(std::move(spec)));
+}
+
+// ---------------------------------------------------------------- 텍스트 상자 편집 (#47)
+
+void MainWindow::on_text_box_selected(bool has, const DocumentView::SelectedTextBox& box) {
+  update_edit_actions();
+  update_property_buttons();
+  if (!has) {
+    if (selection_status_shown_) show_transient(QString());
+    return;
+  }
+  QStringList parts{tr("텍스트"), tr("%1pt").arg(box.font_size), tr("%1줄").arg(box.lines)};
+  if (!box.text.empty()) parts << QString::fromStdString(box.text).left(60).replace(QLatin1Char('\n'), QLatin1Char(' '));
+  statusBar()->showMessage(parts.join(QStringLiteral(" · ")));
+  selection_status_shown_ = true;
+}
+
+void MainWindow::on_text_move_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta) {
+  if (!text_edits_allowed_ || ids.empty()) return;
+  if (!warn_signature_once()) return;
+  edit_->run(std::make_shared<edit::MoveTextBoxCommand>(page, ids, delta));
+}
+
+void MainWindow::on_text_delete_requested(int, const QString&) { delete_selected_text_box(); }
+
+bool MainWindow::delete_selected_text_box() {
+  auto selected = view_->selected_text_box();
+  if (!selected || !text_edits_allowed_ || text_font_ == nullptr) return false;
+  if (!warn_signature_once()) return false;
+  if (!edit_->run(std::make_shared<edit::RemoveTextBoxCommand>(selected->page, selected->box, text_font_))) return false;
+  view_->clear_text_box_selection();
+  return true;
+}
+
+void MainWindow::on_text_edit_requested(int, const DocumentView::SelectedTextBox& box) {
+  if (!text_edits_allowed_ || text_font_ == nullptr) return;
+  for (;;) {
+    AnnotationDialog dialog(tr("텍스트 수정"), QString::fromStdString(box.text), this);
+    dialog.setObjectName(QStringLiteral("text_input"));
+    if (dialog.exec() != QDialog::Accepted) return;
+    const QString text = dialog.text().normalized(QString::NormalizationForm_C);
+    if (text.trimmed().isEmpty() || text.toStdString() == box.text) return;  // 빈 내용·같은 내용은 무시 (삭제는 Delete)
+    const std::u32string missing = text_font_->missing(text.toUtf8().toStdString());
+    if (missing.empty()) {
+      replace_selected_text(text, std::nullopt, std::nullopt);
+      return;
+    }
+    QMessageBox warn(QMessageBox::Warning, tr("텍스트"),
+                     tr("글꼴에 없는 글자가 있습니다: %1\n다른 글자로 바꿔 주세요.")
+                         .arg(QString::fromStdU32String(missing.substr(0, 10))),
+                     QMessageBox::Ok, this);
+    warn.setObjectName(QStringLiteral("text_missing_glyphs"));
+    warn.exec();
+  }
+}
+
+bool MainWindow::replace_selected_text(std::optional<QString> utf8, std::optional<double> size, std::optional<engine::Color> color) {
+  auto selected = view_->selected_text_box();
+  if (!selected || !text_edits_allowed_ || text_font_ == nullptr) return false;
+  if (!warn_signature_once()) return false;
+  std::optional<std::string> text;
+  if (utf8) text = utf8->toUtf8().toStdString();
+  if (color) color->a = 255;
+  return edit_->run(std::make_shared<edit::ReplaceTextBoxCommand>(selected->page, selected->box, text_font_, text, size, color));
 }
 
 void MainWindow::on_ink_requested(int page, const std::vector<onpdf::Point>& points, onpdf::Rect bbox) {
@@ -970,7 +1073,8 @@ void MainWindow::on_annotation_selected(bool has, const engine::AnnotationInfo& 
 
 bool MainWindow::delete_selected_annotation() {
   auto selected = view_->selected_annotation();
-  if (!selected || !delete_annotation_action_->isEnabled()) return false;
+  if (!selected) return delete_selected_text_box();  // 툴바 "주석 삭제" 는 선택한 텍스트 상자에도 동작한다
+  if (!delete_annotation_action_->isEnabled()) return false;
   if (!warn_signature_once()) return false;
   const int page = view_->selected_annotation_page();
   if (!edit_->run(std::make_shared<edit::RemoveAnnotationCommand>(page, selected->id))) return false;

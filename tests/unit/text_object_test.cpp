@@ -54,8 +54,8 @@ TEST(TextObjects, AddWritesFontAndMarkAndReusesFont) {
   const TextObjectsSpec spec = spec_for("한글 임베딩", {72, 500}, 24.0, {0, 0, 255, 255});
   auto ids = doc->add_text_objects(0, spec);
   ASSERT_TRUE(ids) << ids.error().message;
-  ASSERT_EQ(ids->size(), 1u);
-  EXPECT_EQ(ids->front().rfind("onpdf-text-", 0), 0u);
+  ASSERT_EQ(ids->ids.size(), 1u);
+  EXPECT_EQ(ids->ids.front().rfind("onpdf-text-", 0), 0u);
   EXPECT_EQ(doc->font_cache_size(), 1);
   // 같은 key → 재사용, 주어진 id 유지
   TextObjectsSpec again = spec;
@@ -63,7 +63,7 @@ TEST(TextObjects, AddWritesFontAndMarkAndReusesFont) {
   again.lines[0].origin.y += 40;
   auto ids2 = doc->add_text_objects(0, again);
   ASSERT_TRUE(ids2);
-  EXPECT_EQ(ids2->front(), "onpdf-text-0123456789abcdef");
+  EXPECT_EQ(ids2->ids.front(), "onpdf-text-0123456789abcdef");
   EXPECT_EQ(doc->font_cache_size(), 1);
   auto list = doc->text_objects(0);
   ASSERT_TRUE(list);
@@ -93,6 +93,92 @@ TEST(TextObjects, AddWritesFontAndMarkAndReusesFont) {
   EXPECT_FALSE(doc->add_text_objects(5, spec));
 }
 
+// #47: 마크 box·text 블롭, 크기·색·원점 조회, 옛 객체(box·text 없음) 호환
+TEST(TextObjects, ListsBoxTextSizeColorAndOrigin) {
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc);
+  TextObjectsSpec spec = spec_for("한글 원문", {72, 500}, 18.0, {10, 20, 30, 255});
+  spec.lines[0].text = "한글 원문";
+  spec.box = "onpdf-box-0000000000000001";
+  auto added = doc->add_text_objects(0, spec);
+  ASSERT_TRUE(added);
+  EXPECT_EQ(added->box, "onpdf-box-0000000000000001");
+  // box 를 주지 않으면 엔진이 만든다
+  TextObjectsSpec other = spec_for("둘째", {72, 540}, 12.0, {0, 0, 0, 255});
+  other.lines[0].text = "둘째";
+  auto added2 = doc->add_text_objects(0, other);
+  ASSERT_TRUE(added2);
+  EXPECT_EQ(added2->box.rfind("onpdf-box-", 0), 0u);
+  EXPECT_NE(added2->box, added->box);
+  // 옛 객체 흉내: box·text 마크 없음
+  TextObjectsSpec legacy = spec_for("옛 객체", {72, 580}, 12.0, {0, 0, 0, 255});
+  legacy.write_box = false;
+  legacy.lines[0].text = "옛 객체";
+  auto added3 = doc->add_text_objects(0, legacy);
+  ASSERT_TRUE(added3);
+  auto list = doc->text_objects(0);
+  ASSERT_TRUE(list);
+  ASSERT_EQ(list->size(), 3u);
+  const auto& a = (*list)[0];
+  EXPECT_EQ(a.id, added->ids.front());
+  EXPECT_EQ(a.box, "onpdf-box-0000000000000001");
+  EXPECT_EQ(a.text, "한글 원문") << "원문은 블롭에서";
+  EXPECT_FLOAT_EQ(static_cast<float>(a.font_size), 18.0f);
+  EXPECT_EQ(a.color, (Color{10, 20, 30, 255}));
+  EXPECT_NEAR(a.baseline_origin.x, 72.0, 0.01);
+  EXPECT_NEAR(a.baseline_origin.y, spec.lines[0].origin.y, 0.01);
+  const auto& legacy_info = (*list)[2];
+  EXPECT_EQ(legacy_info.box, legacy_info.id) << "box 마크가 없으면 줄 하나가 상자 하나";
+  EXPECT_EQ(legacy_info.text, "옛 객체") << "원문 블롭이 없으면 ToUnicode 추출";
+  // 저장 → 다시 열어도 마크가 남는다
+  ScopedTempDir dir;
+  const auto saved = dir / "boxes.pdf";
+  ASSERT_TRUE(save_document_safely(*doc, saved, {}));
+  auto reopened = PdfiumDocument::open(saved);
+  ASSERT_TRUE(reopened);
+  auto again = reopened->text_objects(0);
+  ASSERT_TRUE(again);
+  ASSERT_EQ(again->size(), 3u);
+  EXPECT_EQ((*again)[0].box, "onpdf-box-0000000000000001");
+  EXPECT_EQ((*again)[0].text, "한글 원문");
+  EXPECT_NEAR((*again)[0].baseline_origin.y, a.baseline_origin.y, 0.01);
+}
+
+// #47: 이동은 쪽 포인트 Δ — 회전 4방향에서 화면 방향으로, 원본 내용 보존
+TEST(TextObjects, MoveShiftsInPagePointsOnAnyRotation) {
+  for (int rotation = 0; rotation < 4; ++rotation) {
+    auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+    ASSERT_TRUE(doc);
+    if (rotation) ASSERT_TRUE(doc->set_page_rotation(0, rotation));
+    RenderOptions options;
+    options.scale = 1.0f;
+    auto before = doc->render_page(0, options);
+    ASSERT_TRUE(before);
+    TextObjectsSpec spec = spec_for("회전", {100, 100}, 20.0, {0, 0, 0, 255});  // 테스트 폰트에 있는 글자만
+    auto added = doc->add_text_objects(0, spec);
+    ASSERT_TRUE(added) << "rotation " << rotation;
+    const auto origin_before = (*doc->text_objects(0))[0].baseline_origin;
+    ASSERT_TRUE(doc->move_text_objects(0, added->ids, {60.0, 40.0})) << "rotation " << rotation;
+    const auto after = (*doc->text_objects(0))[0];
+    EXPECT_NEAR(after.baseline_origin.x, origin_before.x + 60.0, 0.05) << "rotation " << rotation;
+    EXPECT_NEAR(after.baseline_origin.y, origin_before.y + 40.0, 0.05) << "rotation " << rotation;
+    // 추출 글자 상자도 같이 움직인다
+    bool found = false;
+    for (const auto& ch : doc->load_text(0)->chars) {
+      if (ch.code == U'회') { found = true; EXPECT_NEAR(ch.box.x, 160.0, 3.0) << "rotation " << rotation; }
+    }
+    EXPECT_TRUE(found);
+    EXPECT_FALSE(doc->move_text_objects(0, {"onpdf-text-ffffffffffffffff"}, {1, 1}));
+    // 지우면 원본 그대로
+    ASSERT_TRUE(doc->remove_text_objects(0, added->ids));
+    auto restored = doc->render_page(0, options);
+    ASSERT_TRUE(restored);
+    int diff = 0;
+    for (std::size_t i = 0; i < before->pixels.size(); ++i) diff += before->pixels[i] != restored->pixels[i];
+    EXPECT_EQ(diff, 0) << "rotation " << rotation;
+  }
+}
+
 TEST(TextObjects, RemoveFindsByMarkAndPreservesOriginalContent) {
   auto doc = PdfiumDocument::open(testdata("simple.pdf"));
   ASSERT_TRUE(doc);
@@ -109,9 +195,9 @@ TEST(TextObjects, RemoveFindsByMarkAndPreservesOriginalContent) {
   for (std::size_t i = 0; i < before->pixels.size(); ++i) changed += before->pixels[i] != with_text->pixels[i];
   EXPECT_GT(changed, 1000) << "글이 그려졌다";
   EXPECT_FALSE(doc->remove_text_objects(0, {"onpdf-text-ffffffffffffffff"})) << "없는 id";
-  EXPECT_FALSE(doc->remove_text_objects(0, {ids->front(), "onpdf-text-ffffffffffffffff"})) << "하나라도 없으면 전부 거절";
+  EXPECT_FALSE(doc->remove_text_objects(0, {ids->ids.front(), "onpdf-text-ffffffffffffffff"})) << "하나라도 없으면 전부 거절";
   EXPECT_EQ(doc->text_objects(0)->size(), 1u) << "부분 삭제 없음";
-  ASSERT_TRUE(doc->remove_text_objects(0, {ids->front(), ids->front()})) << "중복 id 는 한 번만 지운다 (리뷰 I11)";
+  ASSERT_TRUE(doc->remove_text_objects(0, {ids->ids.front(), ids->ids.front()})) << "중복 id 는 한 번만 지운다 (리뷰 I11)";
   EXPECT_TRUE(doc->text_objects(0)->empty());
   auto after = doc->render_page(0, options);
   ASSERT_TRUE(after);

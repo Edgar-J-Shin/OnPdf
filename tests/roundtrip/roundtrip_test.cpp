@@ -5,6 +5,7 @@
 #include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/engine/save.h"
 #include "onpdf/edit/add_text_command.h"
+#include "onpdf/edit/text_box_commands.h"
 #include "onpdf/edit/annotation_commands.h"
 #include "onpdf/edit/delete_pages.h"
 #include "onpdf/edit/insert_pages.h"
@@ -376,6 +377,85 @@ TEST(Roundtrip, AddedTextSurvivesSave) {
     EXPECT_TRUE(check) << c.file << ": " << (check ? "" : check.error().message);
     if (c.incremental) EXPECT_GT(reopened->signature_count(), 0) << "서명이 보존된다";
   }
+}
+
+// 텍스트 편집(#47): 이동·수정 뒤 저장 → 다시 열기 → 원점·원문·상자 id·줄 id 일치, 추출, qpdf. 옛 객체(box 마크 없음)도 이동 뒤 저장
+TEST(Roundtrip, EditedTextSurvivesSave) {
+  auto face = edit::FontFace::load(testdata("fonts") / "NotoSansKR-subset.ttf");
+  ASSERT_TRUE(face);
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc);
+  edit::TextBoxSpec spec;
+  spec.page = 0;
+  spec.origin = {60, 120};
+  spec.size = 18;
+  spec.utf8 = "한글 텍스트\n둘째 줄";
+  spec.face = *face;
+  edit::AddTextCommand add(spec);
+  ASSERT_TRUE(add.execute(*doc));
+  edit::MoveTextBoxCommand move(0, add.object_ids(), {40, 25});
+  ASSERT_TRUE(move.execute(*doc));
+  edit::ReplaceTextBoxCommand replace(0, add.box_id(), *face, std::string("저장 열기\n둘째 줄\n셋째"), 24.0, std::nullopt);
+  ASSERT_TRUE(replace.execute(*doc));
+  // 옛 객체 흉내 (box·text 마크 없음)
+  engine::TextObjectsSpec legacy;
+  {
+    edit::TextBoxSpec l = spec;
+    l.origin = {60, 400};
+    l.utf8 = "회전 쪽";  // 테스트 폰트에 있는 글자만
+    auto built = edit::build_text_objects_spec(l, "", {});
+    ASSERT_TRUE(built);
+    legacy = *built;
+    legacy.write_box = false;
+  }
+  auto legacy_added = doc->add_text_objects(0, legacy);
+  ASSERT_TRUE(legacy_added);
+  ASSERT_TRUE(doc->move_text_objects(0, legacy_added->ids, {10, 10}));
+  RenderOptions render;
+  render.scale = 1.0f;
+  auto before = doc->render_page(0, render);
+  ASSERT_TRUE(before);
+  const auto before_objects = *doc->text_objects(0);
+  ScopedTempDir dir;
+  const auto target = dir / "edited.pdf";
+  ASSERT_TRUE(save_document_safely(*doc, target, {}));
+  auto reopened = PdfiumDocument::open(target);
+  ASSERT_TRUE(reopened);
+  const auto after_objects = *reopened->text_objects(0);
+  ASSERT_EQ(after_objects.size(), before_objects.size());
+  ASSERT_EQ(after_objects.size(), 4u);
+  for (std::size_t i = 0; i < before_objects.size(); ++i) {
+    EXPECT_EQ(after_objects[i].id, before_objects[i].id);
+    EXPECT_EQ(after_objects[i].box, before_objects[i].box);
+    EXPECT_EQ(after_objects[i].text, before_objects[i].text);
+    EXPECT_NEAR(after_objects[i].baseline_origin.x, before_objects[i].baseline_origin.x, 0.5);
+    EXPECT_NEAR(after_objects[i].baseline_origin.y, before_objects[i].baseline_origin.y, 0.5);
+    EXPECT_NEAR(after_objects[i].font_size, before_objects[i].font_size, 0.01);
+  }
+  EXPECT_EQ(after_objects[0].box, add.box_id());
+  EXPECT_EQ(after_objects[0].id, add.object_ids()[0]) << "첫 줄 id 재사용";
+  EXPECT_EQ(after_objects[0].text, "저장 열기");
+  EXPECT_NEAR(after_objects[0].baseline_origin.x, 100.0, 0.5) << "60 + 40 이동";
+  EXPECT_EQ(after_objects[3].box, after_objects[3].id) << "옛 객체는 줄 하나가 상자";
+  EXPECT_NEAR(after_objects[3].baseline_origin.x, 70.0, 0.5);
+  auto index = reopened->load_text(0);
+  ASSERT_TRUE(index);
+  EXPECT_NE(index->all_text().find("저장 열기"), std::string::npos);
+  EXPECT_NE(index->all_text().find("셋째"), std::string::npos);
+  EXPECT_EQ(index->all_text().find("한글 텍스트"), std::string::npos);
+  auto after = reopened->render_page(0, render);
+  ASSERT_TRUE(after);
+  int diff = 0;
+  for (std::size_t i = 0; i < before->pixels.size(); ++i) diff += before->pixels[i] != after->pixels[i];
+  EXPECT_EQ(diff, 0);
+  auto check = engine::QpdfTools::check(target);
+  EXPECT_TRUE(check) << (check ? "" : check.error().message);
+  // 다시 연 문서에서도 편집할 수 있다 (폰트 캐시는 비어 새 서브셋)
+  edit::RemoveTextBoxCommand remove(0, add.box_id(), *face);
+  ASSERT_TRUE(remove.execute(*reopened));
+  EXPECT_EQ(reopened->text_objects(0)->size(), 1u);
+  ASSERT_TRUE(remove.undo(*reopened));
+  EXPECT_EQ(reopened->text_objects(0)->size(), 4u);
 }
 
 TEST(Roundtrip, EditingExistingAnnotationsKeepsOthers) {
