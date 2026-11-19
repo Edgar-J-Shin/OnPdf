@@ -16,10 +16,13 @@ add_library(onpdf_app_lib STATIC
   outline_panel.h outline_panel.cpp
   thumbnail_panel.h thumbnail_panel.cpp
   print_job.h print_job.cpp
+  edit_controller.h edit_controller.cpp
+  annotation_dialog.h annotation_dialog.cpp
+  structure_job.h structure_job.cpp
   main_window.h main_window.cpp
 )
 target_include_directories(onpdf_app_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(onpdf_app_lib PUBLIC onpdf::core Qt6::Core Qt6::Gui Qt6::Widgets Qt6::PrintSupport)
+target_link_libraries(onpdf_app_lib PUBLIC onpdf::core onpdf::edit Qt6::Core Qt6::Gui Qt6::Widgets Qt6::PrintSupport)
 onpdf_set_warnings(onpdf_app_lib)
 
 qt_add_executable(onpdf_app

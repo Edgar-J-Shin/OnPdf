@@ -32,6 +32,33 @@ Rect PageSpace::to_rect(double left, double right, double bottom, double top) co
   return {x0, y0, x1 - x0, y1 - y0};
 }
 
+Point PageSpace::to_user(Point pt) const {
+  double ux = 0.0, uy = 0.0;
+  const auto dev = [](double v) { return static_cast<int>(std::lround(std::clamp(v * 1000.0, -2.0e9, 2.0e9))); };
+  if (!FPDF_DeviceToPage(page, 0, 0, w1000, h1000, 0, dev(pt.x), dev(pt.y), &ux, &uy)) return {0.0, 0.0};
+  return {ux, uy};
+}
+
+std::array<double, 4> PageSpace::user_rect_of(const Rect& r) const {
+  const Point p[4] = {to_user({r.x, r.y}), to_user({r.right(), r.y}), to_user({r.x, r.bottom()}),
+                      to_user({r.right(), r.bottom()})};
+  double x0 = p[0].x, y0 = p[0].y, x1 = p[0].x, y1 = p[0].y;
+  for (const auto& q : p) {
+    x0 = std::min(x0, q.x);
+    y0 = std::min(y0, q.y);
+    x1 = std::max(x1, q.x);
+    y1 = std::max(y1, q.y);
+  }
+  return {x0, y0, x1, y1};  // left, bottom, right, top
+}
+
+std::array<float, 8> PageSpace::quad_of(const Rect& r) const {
+  const auto u = user_rect_of(r);
+  const auto l = static_cast<float>(u[0]), b = static_cast<float>(u[1]), rt = static_cast<float>(u[2]),
+             t = static_cast<float>(u[3]);
+  return {l, t, rt, t, l, b, rt, b};
+}
+
 bool fill_location(FPDF_DOCUMENT doc, FPDF_DEST dest, view::Link& link) {
   link.page = FPDFDest_GetDestPageIndex(doc, dest);
   if (link.page < 0) return false;

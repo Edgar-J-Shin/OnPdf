@@ -36,6 +36,8 @@ class TileCache {
   // 모든 키 (LRU 순서 아님). 테스트·진단용
   [[nodiscard]] std::vector<TileKey> keys() const;
   void clear();
+  // 그 쪽의 모든 배율 타일을 지운다 (편집으로 쪽 내용·크기가 바뀌었을 때)
+  void remove_page(int page);
   void set_max_bytes(std::size_t max_bytes);
   [[nodiscard]] std::size_t max_bytes() const noexcept { return max_bytes_; }
   [[nodiscard]] Stats stats() const noexcept { return stats_; }

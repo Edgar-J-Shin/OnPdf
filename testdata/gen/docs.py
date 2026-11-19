@@ -443,6 +443,28 @@ def make_annotations() -> bytes:
     return w.write(root=root, info=info, file_id=g.file_id_for("annotations.pdf"))
 
 
+def make_annotation_popup() -> bytes:
+    """외부 프로그램이 만든 메모처럼 Text 주석에 /Popup 이 연결된 문서. 메모를 지울 때 Popup 도 함께 지워야 한다."""
+    w = PdfWriter()
+    pages = w.reserve()
+    helv = g.simple_font(w)
+    page_num = w.reserve()
+    text_num = w.reserve()
+    popup_num = w.reserve()
+    w.set(text_num, b"<< /Type /Annot /Subtype /Text /Rect [340 580 360 600] /C [1 0.8 0] /Name /Comment /Open true "
+          b"/F 28 /P %d 0 R /Popup %d 0 R /T " % (page_num, popup_num) + text_string("작성자")
+          + b" /Contents " + text_string("팝업이 있는 메모") + b" >>")
+    w.set(popup_num, b"<< /Type /Annot /Subtype /Popup /Rect [370 500 560 600] /Open true /F 28 /P %d 0 R /Parent %d 0 R >>"
+          % (page_num, text_num))
+    c = w.stream(b"", content(_label(72, 740, 18, "Annotation with popup"),
+                              _label(72, 700, 12, "The note on the right has a linked Popup annotation.")))
+    g.page(w, pages, g.LETTER, c, _helv_resources(helv), annots=[text_num, popup_num], num=page_num)
+    g.pages_tree(w, pages, [page_num])
+    root = g.catalog(w, pages)
+    info = g.info_dict(w, "Annotation popup")
+    return w.write(root=root, info=info, file_id=g.file_id_for("annotation-popup.pdf"))
+
+
 # ----------------------------------------------------------------- 18~20
 
 
@@ -553,6 +575,44 @@ def make_unicode_map_error() -> bytes:
     root = g.catalog(w, pages)
     info = g.info_dict(w, "Unicode map error (Type3 without ToUnicode)")
     return w.write(root=root, info=info, file_id=g.file_id_for("unicode-map-error.pdf"))
+
+
+def make_signed_dummy() -> bytes:
+    """전자서명 필드 1개(가짜 서명값). 암호학적으로 유효하지 않지만 PDFium 의 서명 수(FPDF_GetSignatureCount)는 1.
+    뷰어는 서명 문서를 증분 저장해 원본 바이트를 보존해야 한다 (#31)."""
+    w = PdfWriter()
+    pages = w.reserve()
+    helv = g.simple_font(w)
+    page_num = w.reserve()
+    sig_value = w.add(b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached "
+                      b"/ByteRange [0 0 0 0] /Contents <" + b"00" * 64 + b"> /M (D:20260101000000Z) >>")
+    widget = w.add(b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Signature1) /V %d 0 R /F 132 "
+                   b"/Rect [0 0 0 0] /P %d 0 R >>" % (sig_value, page_num))
+    c = w.stream(b"", content(_label(72, 720, 18, "Signed document (dummy signature)"),
+                              _label(72, 690, 12, "Saving must be incremental to keep the signature bytes.")))
+    kids = [g.page(w, pages, g.LETTER, c, _helv_resources(helv), annots=[widget], num=page_num)]
+    g.pages_tree(w, pages, kids)
+    root = g.catalog(w, pages, b" /AcroForm << /Fields [%d 0 R] /SigFlags 3 >>" % widget)
+    info = g.info_dict(w, "Signed document (dummy signature)")
+    return w.write(root=root, info=info, file_id=g.file_id_for("signed-dummy.pdf"))
+
+
+def make_perm_assemble_only() -> bytes:
+    # 소유자 암호만(R3). P=-12: 내용 수정(비트 4)만 금지, 쪽 조립(비트 11)·주석(비트 6) 허용 → 쪽 회전 가능
+    return make_simple(encrypt=g.Encryption("", "owner", permissions=-12), title="Permissions: assemble only",
+                       file_id_name="perm-assemble-only.pdf")
+
+
+def make_perm_no_assemble() -> bytes:
+    # 소유자 암호만(R3). P=-1028: 쪽 조립(비트 11)만 금지 → 쪽 회전 불가 (내용 수정 비트 4 는 허용)
+    return make_simple(encrypt=g.Encryption("", "owner", permissions=-1028), title="Permissions: no assembly",
+                       file_id_name="perm-no-assemble.pdf")
+
+
+def make_perm_no_extract() -> bytes:
+    # 소유자 암호만(R3). P=-17: 복사·추출(비트 5)만 금지 → 다른 문서로 쪽을 가져가는 삽입 소스가 될 수 없다
+    return make_simple(encrypt=g.Encryption("", "owner", permissions=-17), title="Permissions: no extraction",
+                       file_id_name="perm-no-extract.pdf")
 
 
 def make_outline_cycle() -> bytes:

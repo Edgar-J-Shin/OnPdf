@@ -17,6 +17,8 @@
 #include "onpdf/core/engine/render_types.h"
 #include "onpdf/core/error.h"
 #include "onpdf/core/geometry.h"
+#include "onpdf/core/engine/editable_document.h"
+#include "onpdf/core/engine/save.h"
 #include "onpdf/core/view/outline.h"
 #include "onpdf/core/view/print_layout.h"
 #include "onpdf/core/view/search.h"
@@ -32,10 +34,14 @@
 
 namespace onpdf::engine {
 
+// 문서 정보 스냅샷. 워커는 열 때만 채우고(핸들이 만들어지기 전), 그 뒤에는 메인 스레드만 읽고
+// apply_change 로 고친다. 워커 작업은 이 값을 읽지 않는다 (잠금 없이 공유하는 근거)
 struct DocumentInfo {
   int page_count = 0;
   std::vector<PageSize> page_sizes;
   view::PrintPreferences print;  // 인쇄 권한·문서 인쇄 기본값
+  EditPermissions permissions;   // 편집 권한 (종류별). 소유자 암호로 열었거나 암호화되지 않았으면 모두 참
+  int signature_count = 0;       // 전자서명 수. 0 보다 크면 저장은 증분 저장
 };
 
 class DocumentHandle {
@@ -79,6 +85,11 @@ class DocumentHandle {
                                                           const Rect& region_px,
                                                           Priority priority = Priority::kNormal) const;
 
+  // 쪽의 주석 목록 (뷰 hit-test·선택용 스냅샷). 계약은 render_page 와 같다
+  TaskHandle load_annotations(int page_index, Priority priority,
+                              std::function<void(Result<std::vector<AnnotationInfo>>)> on_done) const;
+  [[nodiscard]] std::future<Result<std::vector<AnnotationInfo>>> load_annotations(int page_index,
+                                                                               Priority priority = Priority::kLow) const;
   // 쪽 텍스트 인덱스. 계약은 render_page 와 같다 (콜백은 정확히 한 번).
   TaskHandle load_text(int page_index, Priority priority,
                        std::function<void(Result<view::PageTextIndex>)> on_done) const;
@@ -99,6 +110,18 @@ class DocumentHandle {
                               std::function<void(Result<Point>)> on_done) const;
   [[nodiscard]] std::future<Result<Point>> resolve_location(int page_index, Point user_pt,
                                                             Priority priority = Priority::kHigh) const;
+
+  // ---- 편집·저장 ----
+  // 문서를 바꾼다 (edit::Command 실행 전용 — 다른 경로로 문서를 바꾸지 않는다). edit 는 워커 스레드에서 실행된다.
+  // kHigh: 다음 화면 타일보다 먼저 끝나 새 상태로 그려진다. 계약은 render_page 와 같다
+  TaskHandle modify(std::function<Result<ChangeSet>(EditableDocument&)> edit,
+                    std::function<void(Result<ChangeSet>)> on_done) const;
+  [[nodiscard]] std::future<Result<ChangeSet>> modify(std::function<Result<ChangeSet>(EditableDocument&)> edit) const;
+  // 안전 저장 (임시 → 검증 → 교체). 서명 문서면 options.incremental 을 강제로 참으로 한다
+  TaskHandle save(std::filesystem::path target, SaveOptions options, std::function<void(Result<SaveResult>)> on_done) const;
+  [[nodiscard]] std::future<Result<SaveResult>> save(std::filesystem::path target, SaveOptions options = {}) const;
+  // 메인 스레드 전용: 편집 결과로 문서 정보(쪽 크기)를 고친다. 같은 문서의 모든 핸들 사본에 보인다
+  void apply_change(const ChangeSet& change);
 
   // 워커에 문서 해제를 맡긴다. 이후 render_page 는 kInvalidState.
   void close() noexcept;

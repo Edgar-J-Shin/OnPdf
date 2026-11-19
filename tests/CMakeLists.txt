@@ -33,8 +33,21 @@ onpdf_add_test(onpdf_unit_tests
   unit/search_test.cpp
   unit/outline_test.cpp
   unit/print_layout_test.cpp
+  unit/undo_stack_test.cpp
+  unit/rotate_page_test.cpp
+  unit/page_ops_test.cpp
+  unit/delete_pages_test.cpp
+  unit/move_pages_test.cpp
+  unit/insert_pages_test.cpp
+  unit/annotation_test.cpp
+  unit/annotation_commands_test.cpp
+  unit/page_ranges_test.cpp
+  unit/qpdf_tools_test.cpp
+  unit/save_test.cpp
+  unit/fs_sync_test.cpp
 )
 target_compile_definitions(onpdf_unit_tests PRIVATE ONPDF_TEST_GLOBAL_PDFIUM=1)
+target_link_libraries(onpdf_unit_tests PRIVATE onpdf::edit)
 
 onpdf_add_test(onpdf_render_tests
   render/render_regression_test.cpp
@@ -43,6 +56,13 @@ onpdf_add_test(onpdf_render_tests
 target_compile_definitions(onpdf_render_tests PRIVATE ONPDF_TEST_GLOBAL_PDFIUM=1)
 
 # PdfiumWorker 가 자기 스레드에서 라이브러리를 만들므로 전역 환경 없이 분리한다
+# 왕복: 열기 → 저장 → 다시 열기 (manifest 전체)
+onpdf_add_test(onpdf_roundtrip_tests
+  roundtrip/roundtrip_test.cpp
+)
+target_compile_definitions(onpdf_roundtrip_tests PRIVATE ONPDF_TEST_GLOBAL_PDFIUM=1)
+target_link_libraries(onpdf_roundtrip_tests PRIVATE onpdf::edit)
+
 onpdf_add_test(onpdf_worker_tests
   unit/pdfium_worker_test.cpp
   unit/document_handle_test.cpp
@@ -58,6 +78,9 @@ if(ONPDF_BUILD_APP)
     app/search_test.cpp
     app/sidebar_test.cpp
     app/print_test.cpp
+    app/edit_test.cpp
+    app/annotation_test.cpp
+    app/merge_split_test.cpp
   )
   target_link_libraries(onpdf_app_tests PRIVATE onpdf_app_lib)
   set_tests_properties(onpdf_app_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

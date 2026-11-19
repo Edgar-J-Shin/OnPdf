@@ -27,11 +27,14 @@ class DocumentSession : public QObject {
   // page_index 를 scale(포인트당 픽셀) 로 렌더한다. 대기 중인 이전 렌더는 취소된다.
   void render_page(int page_index, float scale, qreal device_pixel_ratio);
   void close();
+  // 다른 이름으로 저장한 뒤: 열린 문서는 그대로, 경로만 바꾼다
+  void set_path(const QString& path) { path_ = path; }
 
   [[nodiscard]] bool has_document() const noexcept { return handle_.valid(); }
   [[nodiscard]] const engine::DocumentHandle& handle() const noexcept { return handle_; }
   [[nodiscard]] const engine::DocumentInfo& info() const { return handle_.info(); }
   [[nodiscard]] QString path() const { return path_; }
+  [[nodiscard]] QString password() const { return password_; }  // 열 때 쓴 암호 (분할 등 디스크 파일을 다시 읽는 작업용)
 
  signals:
   void opened(const QString& path, int page_count);
@@ -45,6 +48,7 @@ class DocumentSession : public QObject {
   UiDispatcher& dispatcher_;
   engine::DocumentHandle handle_;
   QString path_;
+  QString password_;
   std::uint64_t open_generation_ = 0;
   std::uint64_t render_generation_ = 0;
   engine::TaskHandle pending_open_;
