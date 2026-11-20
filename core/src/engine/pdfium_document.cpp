@@ -1232,6 +1232,7 @@ Result<void> PdfiumDocument::reattach_objects(DetachedId id) {
   PdfiumLibrary::assert_current_thread();
   auto it = detached_.find(id);
   if (it == detached_.end()) return make_error(ErrorCode::kInvalidArgument, "unknown detached objects");
+  if (it->second.lost) return make_error(ErrorCode::kInvalidState, "object lost by undo of a line edit");  // #65 C1
   auto page = load_page(it->second.page);
   if (!page) return std::unexpected(page.error());
   std::vector<FPDF_PAGEOBJECT> inserted;
@@ -1316,7 +1317,7 @@ Result<void> PdfiumDocument::save_to(const std::filesystem::path& path, bool inc
   writer.version = 1;
   writer.WriteBlock = &FileWriter::write_block;
   writer.out = &out;
-  prepare_for_save();
+  if (auto prepared = prepare_for_save(); !prepared) return prepared;
   const FPDF_DWORD flags = incremental ? FPDF_INCREMENTAL : FPDF_NO_INCREMENTAL;
   const bool ok = FPDF_SaveAsCopy(doc_.get(), &writer, flags) != 0;
   out.flush();
@@ -1991,7 +1992,10 @@ TextLineInfo line_info_of(const detail::PageAnalysis& analysis, const detail::An
   info.font_type3 = is_type3(first.font);
   info.mixed_fonts = line.mixed_fonts;
   info.object_count = static_cast<int>(line.members.size());
-  if (line.multi_line_object) {
+  if (line.invisible) {
+    info.editable = false;
+    info.reason = "invisible";
+  } else if (line.multi_line_object) {
     info.editable = false;
     info.reason = "multi-line-object";
   } else if (std::abs(line.dir_y) > 0.01 || line.dir_x < 0) {
@@ -2003,14 +2007,15 @@ TextLineInfo line_info_of(const detail::PageAnalysis& analysis, const detail::An
 
 }  // namespace
 
-void PdfiumDocument::prepare_for_save() const {
+Result<void> PdfiumDocument::prepare_for_save() const {
   if (FPDF_FORMHANDLE form = form_handle()) (void)FORM_ForceToKillFocus(form);  // 편집 중 값이 남지 않게 (#51)
-  (void)ensure_annotation_appearances();  // 렌더되지 않은 주석의 AP (#53)
+  if (auto ensured = ensure_annotation_appearances(); !ensured) return std::unexpected(ensured.error());  // 주석 AP (#53)
+  return {};
 }
 
 Result<std::vector<std::uint8_t>> PdfiumDocument::save_to_memory() const {
   PdfiumLibrary::assert_current_thread();
-  prepare_for_save();
+  if (auto prepared = prepare_for_save(); !prepared) return std::unexpected(prepared.error());
   MemoryWriter writer{};
   writer.version = 1;
   writer.WriteBlock = &MemoryWriter::write_block;
@@ -2078,12 +2083,29 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
   for (const auto& [id, d] : detached_) {
     if (d.foreign) return make_error(ErrorCode::kInvalidState, "foreign detached object");
   }
+  // ---- 1. 수술 전 바이트(떼어 둔 객체를 맨 뒤에 되돌려 포함) → 상태 토큰. 새 텍스트를 넣기 전 상태다.
+  //         되돌린 객체가 분석에 보이도록 쪽 핸들은 그 뒤에 연다 (리뷰 W1) ----
+  const bool onpdf_box = line_id.starts_with(kBoxPrefix);
+  const bool needs_surgery = !onpdf_box;
+  std::vector<ParkedDetached> parked;
+  std::vector<std::uint8_t> token_bytes;
+  const auto abort = [&](Result<LineEditResult> error) -> Result<LineEditResult> {
+    if (needs_surgery) (void)unpark_detached(parked);
+    return error;
+  };
+  if (needs_surgery) {
+    auto p = park_detached();
+    if (!p) return std::unexpected(p.error());
+    parked = std::move(*p);
+    auto bytes = save_to_memory();
+    if (!bytes) return abort(std::unexpected(bytes.error()));
+    token_bytes = std::move(*bytes);
+  }
   auto page = load_page(page_index);
-  if (!page) return std::unexpected(page.error());
+  if (!page) return abort(std::unexpected(page.error()));
   const detail::PageSpace space = detail::PageSpace::of(page->get());
 
-  // ---- 1. 원래 줄 해석: OnPdf 상자(수술 없음) 또는 분석 줄(수술) ----
-  const bool onpdf_box = line_id.starts_with(kBoxPrefix);
+  // ---- 2. 원래 줄 해석: OnPdf 상자(수술 없음) 또는 분석 줄(수술) ----
   std::vector<FPDF_PAGEOBJECT> old_objects;  // 지울 객체 (쪽 또는 Form 안)
   FPDF_FONT font = nullptr;
   float size = 0;
@@ -2109,7 +2131,7 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
     if (old_objects.empty()) return make_error(ErrorCode::kInvalidArgument, "line not found");
   } else {
     ScopedTextPage text_page(FPDFText_LoadPage(page->get()));
-    if (!text_page) return make_error(ErrorCode::kInvalidState, "FPDFText_LoadPage failed");
+    if (!text_page) return abort(make_error(ErrorCode::kInvalidState, "FPDFText_LoadPage failed"));
     const detail::PageAnalysis analysis = detail::analyze_page(page->get(), text_page.get());
     const detail::AnalyzedLine* target = nullptr;
     for (const auto& line : analysis.lines) {
@@ -2118,9 +2140,9 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
         break;
       }
     }
-    if (target == nullptr) return make_error(ErrorCode::kInvalidArgument, "line not found");
+    if (target == nullptr) return abort(make_error(ErrorCode::kInvalidArgument, "line not found"));
     const TextLineInfo info = line_info_of(analysis, *target, space);
-    if (!info.editable) return make_error(ErrorCode::kUnsupported, info.reason);
+    if (!info.editable) return abort(make_error(ErrorCode::kUnsupported, info.reason));
     const auto& first = analysis.objects[static_cast<std::size_t>(target->members.front())];
     for (int k : target->members) old_objects.push_back(analysis.objects[static_cast<std::size_t>(k)].handle);
     font = first.font;
@@ -2128,27 +2150,14 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
     r = first.r;
     g = first.g;
     b = first.b;
+    a = first.a;
     matrix = first.matrix;
     line_bbox = info.bbox;
     line_eff_size = first.eff_size;
   }
 
-  // ---- 2. 수술 전 바이트(떼어 둔 객체를 원래 자리에 되돌려 포함) → 상태 토큰. 새 텍스트를 넣기 전 상태다 ----
+  // ---- 3. 새 텍스트 (덧붙인 스트림에만 쓴다 — 원본 스트림을 더럽히지 않는다) ----
   LineEditResult result;
-  const bool needs_surgery = !onpdf_box;
-  std::vector<ParkedDetached> parked;
-  std::vector<std::uint8_t> token_bytes;
-  if (needs_surgery) {
-    auto p = park_detached();
-    if (!p) return std::unexpected(p.error());
-    parked = std::move(*p);
-    auto bytes = save_to_memory();
-    if (!bytes) {
-      (void)unpark_detached(parked);
-      return std::unexpected(bytes.error());
-    }
-    token_bytes = std::move(*bytes);
-  }
   std::vector<FPDF_PAGEOBJECT> inserted;
   const auto remove_inserted = [&] {
     for (FPDF_PAGEOBJECT obj : inserted) {
@@ -2163,7 +2172,6 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
     return error;
   };
 
-  // ---- 3. 새 텍스트 (덧붙인 스트림에만 쓴다 — 원본 스트림을 더럽히지 않는다) ----
   if (replacement != nullptr) {
     const std::u32string chars = detail::utf8_to_utf32(replacement->utf8);
     const bool covers = font != nullptr && FPDFFont_GetIsEmbedded(font) == 1 && !is_type3(font) && detail::font_covers(font, chars);
@@ -2174,7 +2182,7 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
       if (!FPDFText_SetText(obj.get(), reinterpret_cast<FPDF_WIDESTRING>(wide.data()))) {
         return fail(make_error(ErrorCode::kInvalidState, "FPDFText_SetText failed"));
       }
-      if (!FPDFPageObj_SetFillColor(obj.get(), r, g, b, 255)) return fail(make_error(ErrorCode::kInvalidState, "FPDFPageObj_SetFillColor failed"));
+      if (!FPDFPageObj_SetFillColor(obj.get(), r, g, b, a)) return fail(make_error(ErrorCode::kInvalidState, "FPDFPageObj_SetFillColor failed"));
       FPDFPageObj_Transform(obj.get(), matrix[0], matrix[1], matrix[2], matrix[3], matrix[4], matrix[5]);
       const std::string id = new_text_id();
       const std::string box = onpdf_box ? std::string(line_id) : new_box_id();
@@ -2336,24 +2344,32 @@ Result<std::vector<PdfiumDocument::ParkedDetached>> PdfiumDocument::park_detache
   std::sort(ids.begin(), ids.end());
   for (DetachedId id : ids) {
     Detached& d = detached_[id];
-    if (d.foreign) return make_error(ErrorCode::kInvalidState, "foreign detached object");
+    if (d.lost || d.objects.empty()) continue;  // 잃은 항목은 되돌릴 객체가 없다
+    if (d.foreign) {
+      (void)unpark_detached(parked);
+      return make_error(ErrorCode::kInvalidState, "foreign detached object");
+    }
+    auto page = load_page(d.page);
+    if (!page) {
+      (void)unpark_detached(parked);
+      return std::unexpected(page.error());
+    }
     ParkedDetached record;
     record.id = id;
     record.page = d.page;
-    for (auto& [index, obj] : d.objects) {
-      record.mark_ids.push_back(text_object_id_of(obj.get()));
-      record.indices.push_back(index);
-    }
-    auto page = load_page(d.page);
-    if (!page) return std::unexpected(page.error());
     // 맨 뒤에 덧붙인다: 중간에 끼우면(InsertObjectAtIndex) 이웃 객체의 원본 스트림을 물려받아 그 스트림이 재생성된다(손실).
     // 원래 index 는 기록해 두고 다시 뗄 때 되돌린다
     for (auto& [index, obj] : d.objects) {
+      record.mark_ids.push_back(text_object_id_of(obj.get()));
+      record.indices.push_back(index);
       FPDFPage_InsertObject(page->get(), obj.release());
     }
-    if (!FPDFPage_GenerateContent(page->get())) return make_error(ErrorCode::kInvalidState, "FPDFPage_GenerateContent failed");
-    d.objects.clear();
+    d.objects.clear();  // 소유권은 쪽으로 갔다 — 실패해도 null 핸들을 남기지 않는다
     parked.push_back(std::move(record));
+    if (!FPDFPage_GenerateContent(page->get())) {
+      (void)unpark_detached(parked);
+      return make_error(ErrorCode::kInvalidState, "FPDFPage_GenerateContent failed");
+    }
   }
   return parked;
 }
@@ -2403,6 +2419,26 @@ Result<void> PdfiumDocument::restore_document_state(DocumentStateId id) {
   PdfiumLibrary::assert_current_thread();
   auto it = states_.find(id);
   if (it == states_.end()) return make_error(ErrorCode::kInvalidState, "undo history evicted");
+  // 토큰 바이트에 없는 떼어 둔 객체(줄 수정 뒤에 추가했다가 뗀 것)는 되돌릴 곳이 없다 → lost 로 표시하고 되돌리지 않는다.
+  // 그 객체의 reattach 는 거절된다 (리뷰 C1: 비어 있는 채로 성공을 보고하면 안 된다)
+  {
+    auto scratch = load_document(it->second, password_);
+    if (!scratch) return std::unexpected(scratch.error());
+    for (auto& [detached_id, d] : detached_) {
+      if (d.lost || d.objects.empty()) continue;
+      ScopedPage page(FPDF_LoadPage(scratch->get(), d.page));
+      bool present = page != nullptr;
+      for (auto& [index, obj] : d.objects) {
+        if (!present) break;
+        const std::string mark = text_object_id_of(obj.get());
+        present = !mark.empty() && find_page_object(page.get(), mark).first != nullptr;
+      }
+      if (!present) {
+        d.objects.clear();  // 옛 문서와 함께 버린다 (replace_bytes 전에)
+        d.lost = true;
+      }
+    }
+  }
   auto parked = park_detached();
   if (!parked) return std::unexpected(parked.error());
   if (auto replaced = replace_bytes(it->second); !replaced) {

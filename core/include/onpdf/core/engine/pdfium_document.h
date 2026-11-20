@@ -158,7 +158,7 @@ class PdfiumDocument final : public EditableDocument {
                  int flags) const;
   [[nodiscard]] Result<SnapshotId> store_snapshot(std::vector<std::uint8_t> data, ScopedDocument doc);
   // 저장 전처리 (포커스 해제·주석 AP) — save_to 와 save_to_memory 공용
-  void prepare_for_save() const;
+  [[nodiscard]] Result<void> prepare_for_save() const;
   [[nodiscard]] Result<TextObjectsResult> add_text_objects_to(FPDF_PAGE page, const TextObjectsSpec& spec);
   // 줄 삭제·교체 공용 (replacement == nullptr 이면 삭제)
   [[nodiscard]] Result<LineEditResult> edit_line(int page_index, std::string_view line_id, const LineReplacement* replacement);
@@ -195,6 +195,7 @@ class PdfiumDocument final : public EditableDocument {
     int page = 0;
     std::vector<std::pair<int, ScopedFPDFPageObject>> objects;  // (원래 쪽 객체 index, 객체) — index 오름차순
     bool foreign = false;  // 마크 없는 기존 객체가 섞여 있다 → 줄 수정의 다시 열기에서 이월할 수 없다 (#65)
+    bool lost = false;     // 줄 수정 취소로 이 객체가 없던 바이트로 돌아갔다 → 다시 붙일 수 없다 (#65 리뷰 C1)
   };
   std::unordered_map<DetachedId, Detached> detached_;
   DetachedId next_detached_ = 1;

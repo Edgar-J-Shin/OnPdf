@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <map>
 #include <set>
 
@@ -57,6 +58,20 @@ std::u32string object_text(FPDF_PAGEOBJECT obj, FPDF_TEXTPAGE tp) {
   std::vector<unsigned short> buf(bytes / 2 + 1, 0);
   FPDFTextObj_GetText(obj, tp, reinterpret_cast<FPDF_WCHAR*>(buf.data()), bytes);
   return utf16_to_u32(buf);
+}
+
+// OnPdf 마크가 있는 객체인가 (이름 "OnPdf", UTF-16LE)
+bool has_onpdf_mark(FPDF_PAGEOBJECT obj) {
+  const int marks = FPDFPageObj_CountMarks(obj);
+  for (int m = 0; m < marks; ++m) {
+    FPDF_PAGEOBJECTMARK mark = FPDFPageObj_GetMark(obj, static_cast<unsigned long>(m));
+    if (mark == nullptr) continue;
+    unsigned short name[8] = {};
+    unsigned long bytes = 0;
+    if (!FPDFPageObjMark_GetName(mark, reinterpret_cast<FPDF_WCHAR*>(name), sizeof name, &bytes) || bytes != 12) continue;
+    if (name[0] == 'O' && name[1] == 'n' && name[2] == 'P' && name[3] == 'd' && name[4] == 'f') return true;
+  }
+  return false;
 }
 
 struct Collector {
@@ -119,6 +134,7 @@ struct Collector {
     t.text = object_text(obj, tp);
     FPDFPageObj_GetFillColor(obj, &t.r, &t.g, &t.b, &t.a);
     t.render_mode = FPDFTextObj_GetTextRenderMode(obj);
+    t.onpdf = has_onpdf_mark(obj);
     out.objects.push_back(std::move(t));
   }
 
@@ -269,7 +285,7 @@ PageAnalysis analyze_page(FPDF_PAGE page, FPDF_TEXTPAGE text_page) {
   std::vector<int> idx;
   for (int i = 0; i < static_cast<int>(out.objects.size()); ++i) {
     const auto& o = out.objects[static_cast<std::size_t>(i)];
-    if (!trim(o.text).empty() && o.eff_size > 0.1) idx.push_back(i);
+    if (!o.onpdf && !trim(o.text).empty() && o.eff_size > 0.1) idx.push_back(i);  // OnPdf 상자는 줄이 아니다
   }
   auto obj = [&](int i) -> const AnalyzedObject& { return out.objects[static_cast<std::size_t>(i)]; };
   std::sort(idx.begin(), idx.end(), [&](int x, int y) {
@@ -316,6 +332,7 @@ PageAnalysis analyze_page(FPDF_PAGE page, FPDF_TEXTPAGE text_page) {
         }
       }
       cur.merged_lines = extract_ids.size() > 1;
+      cur.invisible = obj(cur.members.front()).render_mode == 3 || obj(cur.members.front()).render_mode == 7;
       cur.text = line_text(ex, members);
       cur.container = obj(cur.members.front()).container;
       out.lines.push_back(std::move(cur));

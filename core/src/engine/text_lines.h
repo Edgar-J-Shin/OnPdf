@@ -34,6 +34,7 @@ struct AnalyzedObject {
   std::u32string text;
   unsigned r = 0, g = 0, b = 0, a = 255;
   int render_mode = 0;
+  bool onpdf = false;  // OnPdf 마크 객체 (상자 경로가 다루므로 줄로 묶지 않는다; 순번에는 들어간다)
   std::vector<int> extract_lines;  // 이 객체의 글자가 속한 추출 줄 번호들
 };
 
@@ -47,6 +48,7 @@ struct AnalyzedLine {
   bool mixed_fonts = false;
   bool multi_line_object = false;  // 어떤 멤버 객체가 두 추출 줄에 걸친다
   bool merged_lines = false;       // 서로 다른 추출 줄을 하나로 묶었다
+  bool invisible = false;          // 첫 객체의 렌더 모드가 3/7 (보이지 않는 OCR 글) — 고치면 보이게 된다
 };
 
 struct PageAnalysis {

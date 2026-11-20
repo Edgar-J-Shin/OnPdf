@@ -81,7 +81,7 @@ TEST(TextLines, GroupsLinesAndFlagsFontsAndEditability) {
   ASSERT_TRUE(doc);
   auto lines = doc->text_lines(0);
   ASSERT_TRUE(lines) << lines.error().message;
-  EXPECT_EQ(lines->size(), 6u);
+  EXPECT_EQ(lines->size(), 10u);
   const TextLineInfo* fox = find_line(*lines, "quick brown fox");
   ASSERT_NE(fox, nullptr);
   EXPECT_EQ(fox->font_name, "Helvetica");
@@ -126,7 +126,7 @@ TEST(TextLines, RemoveLinePreservesEverythingElse) {
   EXPECT_NE(text.find("Spaced words"), std::string::npos);
   auto after_lines = doc->text_lines(0);
   ASSERT_TRUE(after_lines);
-  EXPECT_EQ(after_lines->size(), 5u);
+  EXPECT_EQ(after_lines->size(), 9u);
   const Bitmap after = render(*doc);
   EXPECT_EQ(diff_outside(before, after, bbox, 5.0), 0) << "줄 밖은 픽셀 하나도 안 바뀐다";
   EXPECT_GT(diff_outside(before, after, Rect{0, 0, 0, 0}, 0.0), 100) << "줄 자체는 지워졌다";
@@ -264,7 +264,7 @@ TEST(TextLines, EmbeddedCidLineReusesOriginalFontAndType3FallsBack) {
   ASSERT_TRUE(doc);
   auto lines = doc->text_lines(0);
   ASSERT_TRUE(lines);
-  EXPECT_EQ(lines->size(), 3u);
+  EXPECT_EQ(lines->size(), 4u);
   const TextLineInfo* korean = find_line(*lines, "한글 텍스트 줄");
   ASSERT_NE(korean, nullptr);
   EXPECT_TRUE(korean->font_embedded);
@@ -273,6 +273,11 @@ TEST(TextLines, EmbeddedCidLineReusesOriginalFontAndType3FallsBack) {
   const TextLineInfo* type3 = find_line(*lines, "ABAB");
   ASSERT_NE(type3, nullptr);
   EXPECT_TRUE(type3->font_type3);
+  const TextLineInfo* invisible = find_line(*lines, "Invisible OCR layer text");
+  ASSERT_NE(invisible, nullptr);
+  EXPECT_FALSE(invisible->editable) << "보이지 않는 글(3 Tr)은 고치면 보이게 된다 → 거절";
+  EXPECT_EQ(invisible->reason, "invisible");
+  EXPECT_FALSE(doc->remove_text_line(0, invisible->id));
   // 원본 글꼴 커버리지: 서브셋에 있는 글자만
   EXPECT_TRUE(*doc->line_font_covers(0, korean->id, "줄 텍스트 한글"));
   EXPECT_FALSE(*doc->line_font_covers(0, korean->id, "서브셋에 없는 글자 ㉿"));
@@ -393,5 +398,107 @@ TEST(TextLines, StateTokenLimitEvictsOldest) {
   ASSERT_TRUE(doc->restore_document_state(removed2->before));
 }
 
+
+// 리뷰 C1: 줄 수정 뒤에 추가해 떼어 둔 객체는 토큰에 없다 → 취소는 성공하되 그 객체는 lost (reattach 거절)
+TEST(TextLines, DetachedObjectAddedAfterTokenIsLostNotSilentlyEmpty) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-basic.pdf"));
+  ASSERT_TRUE(doc);
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines);
+  const TextLineInfo* target = find_line(*lines, "Delete me entirely");
+  ASSERT_NE(target, nullptr);
+  const Bitmap initial = render(*doc);
+  auto removed = doc->remove_text_line(0, target->id);
+  ASSERT_TRUE(removed) << removed.error().message;
+  ImagePixels px{4, 4, std::vector<std::uint8_t>(64, 0)};
+  for (std::size_t k = 0; k < px.bgra.size(); k += 4) px.bgra[k + 3] = 255;
+  auto image = doc->add_image_object(0, ImageSpec{px, Rect{300, 100, 40, 40}, {}});
+  ASSERT_TRUE(image);
+  auto detached = doc->detach_objects(0, {*image});  // AddImage 취소
+  ASSERT_TRUE(detached);
+  ASSERT_TRUE(doc->restore_document_state(removed->before)) << "줄 삭제 취소는 성공한다";
+  EXPECT_EQ(render(*doc).pixels, initial.pixels);
+  auto reattached = doc->reattach_objects(*detached);  // AddImage 다시 실행
+  ASSERT_FALSE(reattached) << "토큰에 없던 객체는 되살릴 수 없다고 알려야 한다";
+  EXPECT_EQ(reattached.error().code, ErrorCode::kInvalidState);
+  doc->drop_detached(*detached);
+  EXPECT_EQ(doc->detached_count(), 0);
+}
+
+// 리뷰 W1: 같은 쪽의 떼어 둔 OnPdf 텍스트 상자(삭제 취소용)가 있어도 줄 수정이 거절되지 않는다
+TEST(TextLines, DetachedTextBoxOnSamePageDoesNotBlockEdits) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-basic.pdf"));
+  ASSERT_TRUE(doc);
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines);
+  const TextLineInfo* hello = find_line(*lines, "Hello world line");
+  ASSERT_NE(hello, nullptr);
+  auto added = doc->add_text_objects(0, fallback_for(*hello, "Temporary box"));
+  ASSERT_TRUE(added);
+  auto detached = doc->detach_objects(0, added->ids);
+  ASSERT_TRUE(detached);
+  EXPECT_EQ(doc->text_lines(0)->size(), 10u) << "OnPdf 상자는 줄 목록에 들어가지 않는다";
+  auto lines2 = doc->text_lines(0);
+  const TextLineInfo* target = find_line(*lines2, "Delete me entirely");
+  ASSERT_NE(target, nullptr);
+  auto removed = doc->remove_text_line(0, target->id);
+  ASSERT_TRUE(removed) << removed.error().message;
+  EXPECT_EQ(doc->detached_count(), 1);
+  ASSERT_TRUE(doc->reattach_objects(*detached));
+  EXPECT_NE(page_text(*doc).find("Temporary box"), std::string::npos);
+  EXPECT_EQ(page_text(*doc).find("Delete me entirely"), std::string::npos);
+}
+
+// 리뷰 I1·I3: TJ 배열, ' 와 " 연산자 줄 — 지우면 줄 이동(T*)은 남아 다음 줄이 제자리
+TEST(TextLines, ArrayAndQuoteOperatorsAreRemovedInPlace) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-basic.pdf"));
+  ASSERT_TRUE(doc);
+  const Bitmap before = render(*doc);
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines);
+  const TextLineInfo* quote = find_line(*lines, "Quote second");
+  ASSERT_NE(quote, nullptr);
+  auto removed = doc->remove_text_line(0, quote->id);
+  ASSERT_TRUE(removed) << removed.error().message;
+  const std::string text = page_text(*doc);
+  EXPECT_EQ(text.find("Quote second"), std::string::npos);
+  EXPECT_NE(text.find("Quote first"), std::string::npos);
+  EXPECT_NE(text.find("Double quote third"), std::string::npos);
+  EXPECT_EQ(diff_outside(before, render(*doc), quote->bbox, 5.0), 0) << "' 를 지워도 뒤 줄(\")은 제자리";
+  auto lines2 = doc->text_lines(0);
+  ASSERT_TRUE(lines2);
+  const TextLineInfo* array = find_line(*lines2, "Array show line");
+  ASSERT_NE(array, nullptr);
+  const Bitmap mid = render(*doc);
+  auto removed2 = doc->remove_text_line(0, array->id);
+  ASSERT_TRUE(removed2) << removed2.error().message;
+  EXPECT_EQ(page_text(*doc).find("Array show line"), std::string::npos);
+  EXPECT_EQ(diff_outside(mid, render(*doc), array->bbox, 5.0), 0);
+}
+
+// 리뷰 W3: /Contents 배열이 BT 안에서 나뉘어 앞 스트림의 Tj 를 지우면 뒤 스트림의 Tj 가 밀린다 → 거절
+TEST(TextLines, DisplacementAcrossContentStreamsIsRefused) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-form.pdf"));
+  ASSERT_TRUE(doc);
+  auto lines = doc->text_lines(1);
+  ASSERT_TRUE(lines);
+  const TextLineInfo* split = find_line(*lines, "Split one");
+  ASSERT_NE(split, nullptr);
+  EXPECT_EQ(split->object_count, 2) << "두 스트림의 Tj 가 한 줄로 묶인다";
+  // 줄 전체(두 객체)를 지우는 것은 된다
+  const Bitmap before = render(*doc, 1);
+  auto removed = doc->remove_text_line(1, split->id);
+  ASSERT_TRUE(removed) << removed.error().message;
+  ASSERT_TRUE(doc->restore_document_state(removed->before));
+  doc->drop_document_state(removed->before);
+  EXPECT_EQ(render(*doc, 1).pixels, before.pixels);
+  // 앞 객체만 지우는 수술은 qpdf 가 밀림으로 거절한다
+  ShowOpSurgery ops;
+  ops.page_ordinals = {0};
+  auto report = QpdfTools::remove_text_show_ops(doc->original_bytes(), "", 1, ops);
+  ASSERT_TRUE(report) << report.error().message;
+  EXPECT_EQ(report->needs_displacement, 1);
+  EXPECT_EQ(report->page_show_ops, 3);
+}
 }  // namespace
 }  // namespace onpdf::engine

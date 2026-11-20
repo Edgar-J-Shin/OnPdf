@@ -668,6 +668,27 @@ void MainWindow::on_edit_failed(onpdf::ErrorCode code, const QString& message) {
     show_transient(tr("이 문서는 쪽 추출이 허용되지 않아 삽입할 수 없습니다"));
     return;
   }
+  // 줄 수정(#65)의 거절 사유는 사용자 문구로
+  if (message.startsWith(QStringLiteral("displacement"))) {
+    show_transient(tr("이 줄 뒤에 같은 줄에서 이어지는 글이 있어 고칠 수 없습니다"));
+    return;
+  }
+  if (message.startsWith(QStringLiteral("shared-form"))) {
+    show_transient(tr("여러 쪽이 함께 쓰는 서식 안의 글은 고칠 수 없습니다"));
+    return;
+  }
+  if (message.startsWith(QStringLiteral("content stream does not match"))) {
+    show_transient(tr("이 문서의 내용 구조를 읽을 수 없어 줄을 고칠 수 없습니다"));
+    return;
+  }
+  if (message.startsWith(QStringLiteral("line edit changed other content"))) {
+    show_transient(tr("다른 내용이 바뀔 수 있어 줄 수정을 취소했습니다"));
+    return;
+  }
+  if (message.startsWith(QStringLiteral("undo history evicted"))) {
+    show_transient(tr("실행 취소 기록이 메모리 상한으로 지워졌습니다"));
+    return;
+  }
   show_transient(tr("편집하지 못했습니다: %1").arg(message));
 }
 
@@ -1349,7 +1370,8 @@ void MainWindow::on_text_line_edit_requested(int page, const engine::TextLineInf
     AnnotationDialog dialog(tr("줄 수정"), QString::fromStdString(info.text), this);
     dialog.setObjectName(QStringLiteral("text_input"));
     if (dialog.exec() != QDialog::Accepted) return;
-    const QString text = dialog.text().normalized(QString::NormalizationForm_C).simplified();
+    const QString text = dialog.text().normalized(QString::NormalizationForm_C).trimmed();  // 한 줄: 줄바꿈은 공백으로
+    // (AnnotationDialog 는 여러 줄 입력이지만 줄 수정은 한 줄이다)
     if (text.isEmpty() || text.toStdString() == info.text) return;
     const std::u32string missing = text_font_->missing(text.toUtf8().toStdString());  // 대체 글꼴에도 없는 글자는 거절
     if (missing.empty()) {

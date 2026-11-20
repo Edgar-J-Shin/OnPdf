@@ -41,7 +41,7 @@ pdfium-rectangles.pdf	ok			1	200	300	0	pdfium	BSD-3-Clause	도형 렌더 샘플	
 pdfium-trailer_unterminated.pdf	invalid			0	0	0	0	pdfium	BSD-3-Clause	손상: trailer 미종료	-1
 pdfium-bug_481363.pdf	ok			1	612	792	0	pdfium	BSD-3-Clause	실제 버그 리포트 손상 파일	0
 not_a_pdf.txt	invalid			0	0	0	0	gen	Apache-2.0	PDF 가 아닌 파일	-1
-text-lines-basic.pdf	ok			1	612	792	0	gen	Apache-2.0	기존 줄 수정(#65): 평범한 줄, Tc/Tw 줄, 굵게 섞인 줄, 같은 BT 의 두 Tj(밀림), 지울 줄, 도형	184
-text-lines-basic-enc.pdf	password	user	owner	1	612	792	0	gen	Apache-2.0	text-lines-basic 의 RC4 암호본 — 암호 유지 수술	184
-text-lines-form.pdf	ok			1	612	792	0	gen	Apache-2.0	Form XObject 1단계 줄(수정 가능)·2단계 줄(불가), 쪽 직속 줄, 이미지	127
-text-lines-type3.pdf	ok			1	612	792	0	gen	Apache-2.0	Type3 줄(대체 글꼴)·임베딩 CID 한글 줄(원본 글꼴 재사용)	58
+text-lines-basic.pdf	ok			1	612	792	0	gen	Apache-2.0	기존 줄 수정(#65): 평범한 줄, Tc/Tw 줄, 굵게 섞인 줄, 같은 BT 의 두 Tj(밀림), TJ·'·" 연산자, 지울 줄, 도형	240
+text-lines-basic-enc.pdf	password	user	owner	1	612	792	0	gen	Apache-2.0	text-lines-basic 의 RC4 암호본 — 암호 유지 수술	240
+text-lines-form.pdf	ok			2	612	792	0	gen	Apache-2.0	Form XObject 1단계 줄(수정 가능)·2단계 줄(불가), 쪽 직속 줄, 이미지; 2쪽은 BT 안에서 나뉜 /Contents 배열(밀림)	127
+text-lines-type3.pdf	ok			1	612	792	0	gen	Apache-2.0	Type3 줄(대체 글꼴)·임베딩 CID 한글 줄(원본 글꼴 재사용)·보이지 않는 3 Tr 줄(불가)	82

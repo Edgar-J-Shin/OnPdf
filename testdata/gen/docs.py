@@ -813,8 +813,10 @@ def make_text_lines_basic(*, encrypt: g.Encryption | None = None, file_id_name: 
         "BT /F1 12 Tf 72 610 Td (Shifted one ) Tj (Shifted two) Tj ET",
         "BT /F1 12 Tf 72 580 Td (Delete me entirely) Tj ET",
         "BT /F1 12 Tf 72 550 Td (Hello world line) Tj ET",
-        "0 0 1 rg 72 400 200 80 re f",
-        "1 0 0 RG 3 w 300 400 m 500 480 l S",
+        "BT /F1 12 Tf 72 520 Td [(Array) -500 (show line)] TJ ET",
+        "BT /F1 12 Tf 14 TL 72 500 Td (Quote first) Tj (Quote second) ' 1 0.2 (Double quote third) \" ET",
+        "0 0 1 rg 72 360 200 80 re f",
+        "1 0 0 RG 3 w 300 360 m 500 440 l S",
     ), compress=False)
     p = g.page(w, pages, g.LETTER, c, b"<< /Font << /F1 %d 0 R /F2 %d 0 R >> >>" % (helv, bold))
     g.pages_tree(w, pages, [p])
@@ -857,7 +859,12 @@ def make_text_lines_form() -> bytes:
     ), compress=False)
     p = g.page(w, pages, g.LETTER, c,
                b"<< /Font << /F1 %d 0 R >> /XObject << /Fm1 %d 0 R /Im1 %d 0 R >> >>" % (helv, form, image))
-    g.pages_tree(w, pages, [p])
+    # 2쪽: /Contents 배열이 BT 안에서 나뉜다 (스트림 경계를 넘는 밀림 검사) — 앞 스트림의 Tj 를 지우면 뒤 스트림의 Tj 가 밀린다
+    s1 = w.stream(b"", content("BT /F1 12 Tf 72 700 Td (Split one) Tj"), compress=False)
+    s2 = w.stream(b"", content("(Split two) Tj ET", "BT /F1 12 Tf 72 670 Td (Second page plain line) Tj ET"), compress=False)
+    p2 = w.add(b"<< /Type /Page /Parent %d 0 R /MediaBox [0 0 612 792] /Contents [%d 0 R %d 0 R] "
+               b"/Resources << /Font << /F1 %d 0 R >> >> >>" % (pages, s1, s2, helv))
+    g.pages_tree(w, pages, [p, p2])
     root = g.catalog(w, pages)
     info = g.info_dict(w, "Text lines inside form XObjects")
     return w.write(root=root, info=info, file_id=g.file_id_for("text-lines-form.pdf"))
@@ -913,6 +920,7 @@ def make_text_lines_type3() -> bytes:
         _label(72, 740, 12, "Type3 line below, Korean CID line further down"),
         "BT /T3 24 Tf 72 690 Td (ABAB) Tj ET",
         f"BT /F0 18 Tf 72 640 Td {hexs} Tj ET",
+        "BT /F1 12 Tf 3 Tr 72 600 Td (Invisible OCR layer text) Tj ET",
     ), compress=False)
     p = g.page(w, pages, g.LETTER, c, b"<< /Font << /F1 %d 0 R /T3 %d 0 R /F0 %d 0 R >> >>" % (helv, t3, type0))
     g.pages_tree(w, pages, [p])
