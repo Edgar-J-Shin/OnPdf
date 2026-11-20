@@ -14,6 +14,7 @@ add_library(onpdf_edit STATIC
   src/add_text_command.cpp
   src/text_box_commands.cpp
   src/object_commands.cpp
+  src/form_commands.cpp
 )
 add_library(onpdf::edit ALIAS onpdf_edit)
 target_include_directories(onpdf_edit PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

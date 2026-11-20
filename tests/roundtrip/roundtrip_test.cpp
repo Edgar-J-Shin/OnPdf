@@ -10,6 +10,7 @@
 #include "onpdf/edit/text_box_commands.h"
 #include "onpdf/edit/annotation_commands.h"
 #include "onpdf/edit/delete_pages.h"
+#include "onpdf/edit/form_commands.h"
 #include "onpdf/edit/insert_pages.h"
 #include "onpdf/edit/move_pages.h"
 
@@ -648,6 +649,53 @@ TEST(Roundtrip, SplitPiecesMatchSource) {
       EXPECT_EQ(page_text(*piece, p), page_text(*source, src));
     }
     expect_qpdf_ok(dir, out);
+  }
+}
+
+
+// 폼 채우기 (#51): 값 → 저장(전체·증분) → 다시 열기 값·렌더 일치, qpdf check
+TEST(Roundtrip, FormValuesSurviveSave) {
+  struct Case { const char* file; bool incremental; };
+  for (const Case c : {Case{"form-fields.pdf", false}, Case{"form-fields.pdf", true}, Case{"form-acro.pdf", false}}) {
+    auto doc = PdfiumDocument::open(testdata(c.file));
+    ASSERT_TRUE(doc) << c.file;
+    const bool fields = std::string(c.file) == "form-fields.pdf";
+    edit::SetFormTextCommand name(0, {"name", 0}, "Kim Chulsoo");
+    ASSERT_TRUE(name.execute(*doc)) << c.file;
+    if (fields) {
+      edit::SetFormTextCommand address(0, {"address", 0}, "Seoul\nGangnam-gu");
+      ASSERT_TRUE(address.execute(*doc));
+      edit::SetFormCheckedCommand agree(0, {"agree", 0}, true);
+      ASSERT_TRUE(agree.execute(*doc));
+      edit::SetFormCheckedCommand gender(0, {"gender", 1}, true);
+      ASSERT_TRUE(gender.execute(*doc));
+      edit::SetFormChoiceCommand subjects(0, {"subjects", 0}, {0, 3});
+      ASSERT_TRUE(subjects.execute(*doc));
+    } else {
+      edit::SetFormChoiceCommand city(0, {"city", 0}, {2});
+      ASSERT_TRUE(city.execute(*doc));
+    }
+    RenderOptions render;
+    render.scale = 1.0f;
+    auto before_render = doc->render_page(0, render);
+    ASSERT_TRUE(before_render);
+    const auto before_values = *doc->form_values();
+    ScopedTempDir dir;
+    const auto target = dir / "form.pdf";
+    engine::SaveOptions options;
+    options.incremental = c.incremental;
+    auto saved = save_document_safely(*doc, target, options);
+    ASSERT_TRUE(saved) << c.file << ": " << saved.error().message;
+    auto reopened = PdfiumDocument::open(target);
+    ASSERT_TRUE(reopened) << c.file;
+    EXPECT_EQ(*reopened->form_values(), before_values) << c.file;
+    auto after_render = reopened->render_page(0, render);
+    ASSERT_TRUE(after_render);
+    int diff = 0;
+    for (std::size_t k = 0; k < before_render->pixels.size(); ++k) diff += before_render->pixels[k] != after_render->pixels[k];
+    EXPECT_EQ(diff, 0) << c.file;
+    auto check = engine::QpdfTools::check(target);
+    EXPECT_TRUE(check) << c.file << ": " << (check ? "" : check.error().message);
   }
 }
 

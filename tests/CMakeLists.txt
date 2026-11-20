@@ -49,6 +49,7 @@ onpdf_add_test(onpdf_unit_tests
   unit/page_object_test.cpp
   unit/form_test.cpp
   unit/object_commands_test.cpp
+  unit/form_commands_test.cpp
   unit/page_ranges_test.cpp
   unit/qpdf_tools_test.cpp
   unit/save_test.cpp
