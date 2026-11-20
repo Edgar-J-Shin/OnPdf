@@ -27,6 +27,25 @@ void append_to_vector(void* context, void* data, int size) {
 
 }  // namespace
 
+Result<std::vector<std::uint8_t>> encode_jpeg(const Bitmap& bitmap, int quality) {
+  if (bitmap.empty()) return make_error(ErrorCode::kInvalidArgument, "empty bitmap");
+  std::vector<std::uint8_t> rgb(static_cast<std::size_t>(bitmap.width) * static_cast<std::size_t>(bitmap.height) * 3);
+  for (int y = 0; y < bitmap.height; ++y) {
+    const std::uint8_t* src = bitmap.row(y);
+    std::uint8_t* dst = rgb.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(bitmap.width) * 3;
+    for (int x = 0; x < bitmap.width; ++x, src += 4, dst += 3) {
+      dst[0] = src[2];
+      dst[1] = src[1];
+      dst[2] = src[0];
+    }
+  }
+  std::vector<std::uint8_t> encoded;
+  if (!stbi_write_jpg_to_func(append_to_vector, &encoded, bitmap.width, bitmap.height, 3, rgb.data(), quality)) {
+    return make_error(ErrorCode::kIoError, "JPEG encode failed");
+  }
+  return encoded;
+}
+
 Result<void> write_png(const Bitmap& bitmap, const std::filesystem::path& path) {
   if (bitmap.empty()) {
     return make_error(ErrorCode::kInvalidArgument, "empty bitmap");

@@ -11,6 +11,7 @@ compile_commands.json
 # Third-party binaries (downloaded by third_party/ scripts)
 third_party/pdfium/
 third_party/qpdf/
+third_party/fonts/
 *.dll
 *.lib
 *.pdb

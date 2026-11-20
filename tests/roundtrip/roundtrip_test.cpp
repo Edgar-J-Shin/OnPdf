@@ -3,9 +3,14 @@
 
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/core/engine/qpdf_tools.h"
+#include "onpdf/core/image/png_io.h"
 #include "onpdf/core/engine/save.h"
+#include "onpdf/edit/add_text_command.h"
+#include "onpdf/edit/object_commands.h"
+#include "onpdf/edit/text_box_commands.h"
 #include "onpdf/edit/annotation_commands.h"
 #include "onpdf/edit/delete_pages.h"
+#include "onpdf/edit/form_commands.h"
 #include "onpdf/edit/insert_pages.h"
 #include "onpdf/edit/move_pages.h"
 
@@ -325,6 +330,216 @@ TEST(Roundtrip, ShapesSurviveSave) {
   EXPECT_TRUE(check) << (check ? "" : check.error().message);
 }
 
+// 텍스트 추가(#45): 저장 → 다시 열기(내장 폰트만) → 추출 == 입력, 렌더 == 저장 전, 마크 id 보존, qpdf. 평문·회전·서명(증분)·암호
+TEST(Roundtrip, AddedTextSurvivesSave) {
+  auto face = edit::FontFace::load(testdata("fonts") / "NotoSansKR-subset.ttf");
+  ASSERT_TRUE(face);
+  struct Case { const char* file; const char* password; bool rotate; bool incremental; };
+  const Case cases[] = {{"simple.pdf", "", false, false}, {"simple.pdf", "", true, false},
+                        {"signed-dummy.pdf", "", false, true}, {"encrypted-aes256.pdf", "owner", false, false}};
+  for (const Case& c : cases) {
+    auto doc = PdfiumDocument::open(testdata(c.file), c.password);
+    ASSERT_TRUE(doc) << c.file;
+    if (c.rotate) ASSERT_TRUE(doc->set_page_rotation(0, 1));
+    const std::string text = "한글 텍스트 추가 검증 임베딩 왕복\nOnPdf 2026 (M3)";
+    edit::TextBoxSpec spec;
+    spec.page = 0;
+    spec.origin = {60, 120};
+    spec.size = 18;
+    spec.utf8 = text;
+    spec.face = *face;
+    edit::AddTextCommand add(spec);
+    ASSERT_TRUE(add.execute(*doc)) << c.file;
+    RenderOptions render;
+    render.scale = 1.0f;
+    auto before = doc->render_page(0, render);
+    ASSERT_TRUE(before);
+    const auto before_objects = *doc->text_objects(0);
+    ScopedTempDir dir;
+    const auto target = dir / "text.pdf";
+    engine::SaveOptions options;
+    options.incremental = c.incremental;
+    auto saved = save_document_safely(*doc, target, options);
+    ASSERT_TRUE(saved) << c.file << ": " << saved.error().message;
+    auto reopened = PdfiumDocument::open(target, c.password);
+    ASSERT_TRUE(reopened) << c.file;
+    auto index = reopened->load_text(0);
+    ASSERT_TRUE(index);
+    EXPECT_NE(index->all_text().find("한글 텍스트 추가 검증 임베딩 왕복"), std::string::npos) << c.file << ": " << index->all_text();
+    EXPECT_NE(index->all_text().find("OnPdf 2026 (M3)"), std::string::npos) << c.file;
+    auto after = reopened->render_page(0, render);
+    ASSERT_TRUE(after);
+    ASSERT_EQ(after->pixels.size(), before->pixels.size());
+    int diff = 0;
+    for (std::size_t i = 0; i < before->pixels.size(); ++i) diff += before->pixels[i] != after->pixels[i];
+    EXPECT_EQ(diff, 0) << c.file << ": 저장 전후 렌더가 같아야 한다";
+    const auto after_objects = *reopened->text_objects(0);
+    ASSERT_EQ(after_objects.size(), before_objects.size()) << c.file;
+    for (std::size_t i = 0; i < before_objects.size(); ++i) EXPECT_EQ(after_objects[i].id, before_objects[i].id);
+    auto check = engine::QpdfTools::check(target, c.password);
+    EXPECT_TRUE(check) << c.file << ": " << (check ? "" : check.error().message);
+    if (c.incremental) EXPECT_GT(reopened->signature_count(), 0) << "서명이 보존된다";
+  }
+}
+
+// 텍스트 편집(#47): 이동·수정 뒤 저장 → 다시 열기 → 원점·원문·상자 id·줄 id 일치, 추출, qpdf. 옛 객체(box 마크 없음)도 이동 뒤 저장
+TEST(Roundtrip, EditedTextSurvivesSave) {
+  auto face = edit::FontFace::load(testdata("fonts") / "NotoSansKR-subset.ttf");
+  ASSERT_TRUE(face);
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc);
+  edit::TextBoxSpec spec;
+  spec.page = 0;
+  spec.origin = {60, 120};
+  spec.size = 18;
+  spec.utf8 = "한글 텍스트\n둘째 줄";
+  spec.face = *face;
+  edit::AddTextCommand add(spec);
+  ASSERT_TRUE(add.execute(*doc));
+  edit::MoveObjectsCommand move(0, add.object_ids(), {40, 25});
+  ASSERT_TRUE(move.execute(*doc));
+  edit::ReplaceTextBoxCommand replace(0, add.box_id(), *face, std::string("저장 열기\n둘째 줄\n셋째"), 24.0, std::nullopt);
+  ASSERT_TRUE(replace.execute(*doc));
+  // 옛 객체 흉내 (box·text 마크 없음)
+  engine::TextObjectsSpec legacy;
+  {
+    edit::TextBoxSpec l = spec;
+    l.origin = {60, 400};
+    l.utf8 = "회전 쪽";  // 테스트 폰트에 있는 글자만
+    auto built = edit::build_text_objects_spec(l, "", {});
+    ASSERT_TRUE(built);
+    legacy = *built;
+    legacy.write_box = false;
+  }
+  auto legacy_added = doc->add_text_objects(0, legacy);
+  ASSERT_TRUE(legacy_added);
+  ASSERT_TRUE(doc->move_page_objects(0, legacy_added->ids, {10, 10}));
+  RenderOptions render;
+  render.scale = 1.0f;
+  auto before = doc->render_page(0, render);
+  ASSERT_TRUE(before);
+  const auto before_objects = *doc->text_objects(0);
+  ScopedTempDir dir;
+  const auto target = dir / "edited.pdf";
+  ASSERT_TRUE(save_document_safely(*doc, target, {}));
+  auto reopened = PdfiumDocument::open(target);
+  ASSERT_TRUE(reopened);
+  const auto after_objects = *reopened->text_objects(0);
+  ASSERT_EQ(after_objects.size(), before_objects.size());
+  ASSERT_EQ(after_objects.size(), 4u);
+  for (std::size_t i = 0; i < before_objects.size(); ++i) {
+    EXPECT_EQ(after_objects[i].id, before_objects[i].id);
+    EXPECT_EQ(after_objects[i].box, before_objects[i].box);
+    EXPECT_EQ(after_objects[i].text, before_objects[i].text);
+    EXPECT_NEAR(after_objects[i].baseline_origin.x, before_objects[i].baseline_origin.x, 0.5);
+    EXPECT_NEAR(after_objects[i].baseline_origin.y, before_objects[i].baseline_origin.y, 0.5);
+    EXPECT_NEAR(after_objects[i].font_size, before_objects[i].font_size, 0.01);
+  }
+  EXPECT_EQ(after_objects[0].box, add.box_id());
+  EXPECT_EQ(after_objects[0].id, add.object_ids()[0]) << "첫 줄 id 재사용";
+  EXPECT_EQ(after_objects[0].text, "저장 열기");
+  EXPECT_NEAR(after_objects[0].baseline_origin.x, 100.0, 0.5) << "60 + 40 이동";
+  EXPECT_EQ(after_objects[3].box, after_objects[3].id) << "옛 객체는 줄 하나가 상자";
+  EXPECT_NEAR(after_objects[3].baseline_origin.x, 70.0, 0.5);
+  auto index = reopened->load_text(0);
+  ASSERT_TRUE(index);
+  EXPECT_NE(index->all_text().find("저장 열기"), std::string::npos);
+  EXPECT_NE(index->all_text().find("셋째"), std::string::npos);
+  EXPECT_EQ(index->all_text().find("한글 텍스트"), std::string::npos);
+  auto after = reopened->render_page(0, render);
+  ASSERT_TRUE(after);
+  int diff = 0;
+  for (std::size_t i = 0; i < before->pixels.size(); ++i) diff += before->pixels[i] != after->pixels[i];
+  EXPECT_EQ(diff, 0);
+  auto check = engine::QpdfTools::check(target);
+  EXPECT_TRUE(check) << (check ? "" : check.error().message);
+  // 다시 연 문서에서도 편집할 수 있다 (폰트 캐시는 비어 새 서브셋)
+  edit::RemoveTextBoxCommand remove(0, add.box_id(), *face);
+  ASSERT_TRUE(remove.execute(*reopened));
+  EXPECT_EQ(reopened->text_objects(0)->size(), 1u);
+  ASSERT_TRUE(remove.undo(*reopened));
+  EXPECT_EQ(reopened->text_objects(0)->size(), 4u);
+}
+
+// 이미지(#49): 픽셀·JPEG 추가, 기존 이미지(scanned.pdf) 크기·이동, 삭제 → 저장 → 다시 열기 → 객체·필터·마크·렌더·qpdf. 서명 증분
+TEST(Roundtrip, ImagesSurviveSave) {
+  struct Case { const char* file; bool incremental; };
+  for (const Case c : {Case{"simple.pdf", false}, Case{"scanned.pdf", false}, Case{"signed-dummy.pdf", true}}) {
+    auto doc = PdfiumDocument::open(testdata(c.file));
+    ASSERT_TRUE(doc) << c.file;
+    engine::ImagePixels pixels;
+    pixels.width = 20;
+    pixels.height = 10;
+    pixels.bgra.assign(20 * 10 * 4, 0);
+    for (std::size_t k = 0; k < pixels.bgra.size(); k += 4) { pixels.bgra[k + 2] = 255; pixels.bgra[k + 3] = (k / 4) % 20 < 10 ? 255 : 0; }
+    engine::ImageSpec png;
+    png.source = pixels;
+    png.rect = {40, 40, 100, 50};
+    edit::AddImageCommand add_png(0, png);
+    ASSERT_TRUE(add_png.execute(*doc)) << c.file;
+    Bitmap gray;
+    gray.width = gray.height = 16;
+    gray.stride = 64;
+    gray.pixels.assign(16 * 16 * 4, 128);
+    auto jpeg = image::encode_jpeg(gray);
+    ASSERT_TRUE(jpeg);
+    engine::ImageSpec jpg;
+    jpg.source = engine::JpegBytes{*jpeg, 16, 16};
+    jpg.rect = {200, 200, 64, 64};
+    edit::AddImageCommand add_jpg(0, jpg);
+    ASSERT_TRUE(add_jpg.execute(*doc));
+    edit::ResizeObjectCommand resize(0, add_jpg.object_id(), {200, 200, 64, 64}, {210, 220, 128, 128});
+    ASSERT_TRUE(resize.execute(*doc));
+    std::string foreign_id;
+    for (const auto& o : *doc->page_objects(0)) if (o.kind == engine::ObjectKind::kImage && !o.marked) foreign_id = o.id;
+    if (!foreign_id.empty()) {  // scanned.pdf: 기존 이미지를 줄이고 옮긴다
+      edit::MoveObjectsCommand move(0, {foreign_id}, {0, 0});
+      Rect before{};
+      for (const auto& o : *doc->page_objects(0)) if (o.id == foreign_id) before = o.bbox;
+      edit::ResizeObjectCommand shrink(0, foreign_id, before, {before.x + 20, before.y + 20, before.w / 2, before.h / 2});
+      ASSERT_TRUE(shrink.execute(*doc));
+    }
+    // 하나 더 넣고 지운다 (보관된 채 저장 — 저장 파일에는 없어야 한다)
+    edit::AddImageCommand extra(0, png);
+    ASSERT_TRUE(extra.execute(*doc));
+    edit::RemoveObjectsCommand remove(0, {extra.object_id()});
+    ASSERT_TRUE(remove.execute(*doc));
+    RenderOptions render;
+    render.scale = 1.0f;
+    auto before_render = doc->render_page(0, render);
+    ASSERT_TRUE(before_render);
+    const auto before_objects = *doc->page_objects(0);
+    ScopedTempDir dir;
+    const auto target = dir / "images.pdf";
+    engine::SaveOptions options;
+    options.incremental = c.incremental;
+    auto saved = save_document_safely(*doc, target, options);
+    ASSERT_TRUE(saved) << c.file << ": " << saved.error().message;
+    auto reopened = PdfiumDocument::open(target);
+    ASSERT_TRUE(reopened) << c.file;
+    const auto after_objects = *reopened->page_objects(0);
+    ASSERT_EQ(after_objects.size(), before_objects.size()) << c.file;
+    for (std::size_t k = 0; k < after_objects.size(); ++k) {
+      EXPECT_EQ(after_objects[k].id, before_objects[k].id) << c.file;
+      EXPECT_NEAR(after_objects[k].bbox.x, before_objects[k].bbox.x, 0.5) << c.file;
+      EXPECT_NEAR(after_objects[k].bbox.w, before_objects[k].bbox.w, 0.5) << c.file;
+    }
+    for (const auto& o : after_objects) {
+      if (o.id == add_jpg.object_id()) EXPECT_EQ(o.filter, "DCTDecode") << c.file;
+      if (o.id == add_png.object_id()) EXPECT_EQ(o.filter, "FlateDecode") << c.file;
+      EXPECT_NE(o.id, extra.object_id()) << "지운 이미지는 저장되지 않는다";
+    }
+    auto after_render = reopened->render_page(0, render);
+    ASSERT_TRUE(after_render);
+    int diff = 0;
+    for (std::size_t k = 0; k < before_render->pixels.size(); ++k) diff += before_render->pixels[k] != after_render->pixels[k];
+    EXPECT_EQ(diff, 0) << c.file;
+    auto check = engine::QpdfTools::check(target);
+    EXPECT_TRUE(check) << c.file << ": " << (check ? "" : check.error().message);
+    if (c.incremental) EXPECT_GT(reopened->signature_count(), 0);
+  }
+}
+
 TEST(Roundtrip, EditingExistingAnnotationsKeepsOthers) {
   auto doc = PdfiumDocument::open(testdata("annotations.pdf"));
   ASSERT_TRUE(doc);
@@ -437,5 +652,89 @@ TEST(Roundtrip, SplitPiecesMatchSource) {
   }
 }
 
+
+// 폼 채우기 (#51): 값 → 저장(전체·증분) → 다시 열기 값·렌더 일치, qpdf check
+TEST(Roundtrip, FormValuesSurviveSave) {
+  struct Case { const char* file; bool incremental; };
+  for (const Case c : {Case{"form-fields.pdf", false}, Case{"form-fields.pdf", true}, Case{"form-acro.pdf", false}}) {
+    auto doc = PdfiumDocument::open(testdata(c.file));
+    ASSERT_TRUE(doc) << c.file;
+    const bool fields = std::string(c.file) == "form-fields.pdf";
+    edit::SetFormTextCommand name(0, {"name", 0}, "Kim Chulsoo");
+    ASSERT_TRUE(name.execute(*doc)) << c.file;
+    if (fields) {
+      edit::SetFormTextCommand address(0, {"address", 0}, "Seoul\nGangnam-gu");
+      ASSERT_TRUE(address.execute(*doc));
+      edit::SetFormCheckedCommand agree(0, {"agree", 0}, true);
+      ASSERT_TRUE(agree.execute(*doc));
+      edit::SetFormCheckedCommand gender(0, {"gender", 1}, true);
+      ASSERT_TRUE(gender.execute(*doc));
+      edit::SetFormChoiceCommand subjects(0, {"subjects", 0}, {0, 3});
+      ASSERT_TRUE(subjects.execute(*doc));
+    } else {
+      edit::SetFormChoiceCommand city(0, {"city", 0}, {2});
+      ASSERT_TRUE(city.execute(*doc));
+    }
+    RenderOptions render;
+    render.scale = 1.0f;
+    auto before_render = doc->render_page(0, render);
+    ASSERT_TRUE(before_render);
+    const auto before_values = *doc->form_values();
+    ScopedTempDir dir;
+    const auto target = dir / "form.pdf";
+    engine::SaveOptions options;
+    options.incremental = c.incremental;
+    auto saved = save_document_safely(*doc, target, options);
+    ASSERT_TRUE(saved) << c.file << ": " << saved.error().message;
+    auto reopened = PdfiumDocument::open(target);
+    ASSERT_TRUE(reopened) << c.file;
+    EXPECT_EQ(*reopened->form_values(), before_values) << c.file;
+    auto after_render = reopened->render_page(0, render);
+    ASSERT_TRUE(after_render);
+    int diff = 0;
+    for (std::size_t k = 0; k < before_render->pixels.size(); ++k) diff += before_render->pixels[k] != after_render->pixels[k];
+    EXPECT_EQ(diff, 0) << c.file;
+    auto check = engine::QpdfTools::check(target);
+    EXPECT_TRUE(check) << c.file << ": " << (check ? "" : check.error().message);
+  }
+}
+
+
+// 추가 → 취소 → 저장 → 다시 열기: 취소한 텍스트의 폰트가 파일을 불리지 않는다 (#61)
+TEST(Roundtrip, UndoneTextDoesNotBloatFile) {
+  auto face = edit::FontFace::load(testdata("fonts") / "NotoSansKR-subset.ttf");
+  ASSERT_TRUE(face);
+  struct Case { const char* file; const char* password; };
+  const Case cases[] = {{"simple.pdf", ""}, {"korean-embedded.pdf", ""}, {"encrypted-aes256.pdf", "owner"}};
+  for (const Case& c : cases) {
+    auto doc = PdfiumDocument::open(testdata(c.file), c.password);
+    ASSERT_TRUE(doc) << c.file;
+    const auto original_text = doc->load_text(0);
+    ASSERT_TRUE(original_text);
+    edit::TextBoxSpec spec;
+    spec.page = 0;
+    spec.origin = {60, 120};
+    spec.utf8 = "한글 텍스트 추가 검증\nOnPdf (M3)";
+    spec.face = *face;
+    edit::AddTextCommand add(spec);
+    ASSERT_TRUE(add.execute(*doc)) << c.file;
+    ASSERT_TRUE(add.undo(*doc)) << c.file;
+    ScopedTempDir dir;
+    const auto target = dir / "undone.pdf";
+    auto saved = save_document_safely(*doc, target, {});
+    ASSERT_TRUE(saved) << c.file << ": " << saved.error().message;
+    EXPECT_TRUE(saved->fonts_cleaned) << c.file;
+    EXPECT_LT(saved->bytes, std::filesystem::file_size(testdata(c.file)) + 2000) << c.file;
+    auto reopened = PdfiumDocument::open(target, c.password);
+    ASSERT_TRUE(reopened) << c.file;
+    auto text = reopened->load_text(0);
+    ASSERT_TRUE(text);
+    EXPECT_EQ(text->all_text(), original_text->all_text()) << c.file;
+    EXPECT_TRUE(reopened->text_objects(0)->empty()) << c.file;
+    auto check = engine::QpdfTools::check(target, c.password);
+    ASSERT_TRUE(check) << c.file << ": " << check.error().message;
+    EXPECT_TRUE(check->warnings.empty()) << c.file;
+  }
+}
 }  // namespace
 }  // namespace onpdf::engine

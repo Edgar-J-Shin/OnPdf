@@ -18,6 +18,7 @@
 #include "onpdf/core/error.h"
 #include "onpdf/core/geometry.h"
 #include "onpdf/core/engine/editable_document.h"
+#include "onpdf/core/engine/form.h"
 #include "onpdf/core/engine/save.h"
 #include "onpdf/core/view/outline.h"
 #include "onpdf/core/view/print_layout.h"
@@ -42,6 +43,7 @@ struct DocumentInfo {
   view::PrintPreferences print;  // 인쇄 권한·문서 인쇄 기본값
   EditPermissions permissions;   // 편집 권한 (종류별). 소유자 암호로 열었거나 암호화되지 않았으면 모두 참
   int signature_count = 0;       // 전자서명 수. 0 보다 크면 저장은 증분 저장
+  FormType form_type = FormType::kNone;  // AcroForm·XFA (#51)
 };
 
 class DocumentHandle {
@@ -90,6 +92,17 @@ class DocumentHandle {
                               std::function<void(Result<std::vector<AnnotationInfo>>)> on_done) const;
   [[nodiscard]] std::future<Result<std::vector<AnnotationInfo>>> load_annotations(int page_index,
                                                                                Priority priority = Priority::kLow) const;
+  // OnPdf 텍스트 객체 목록 (뷰 선택·이동용 스냅샷, #47). 계약은 load_annotations 와 같다
+  TaskHandle load_text_objects(int page_index, Priority priority,
+                               std::function<void(Result<std::vector<TextObjectInfo>>)> on_done) const;
+  [[nodiscard]] std::future<Result<std::vector<TextObjectInfo>>> load_text_objects(int page_index,
+                                                                                 Priority priority = Priority::kLow) const;
+  // 쪽 객체(텍스트·이미지) 목록 (뷰 선택·이동·크기용 스냅샷, #49). 계약은 load_annotations 와 같다
+  TaskHandle load_page_objects(int page_index, Priority priority,
+                               std::function<void(Result<std::vector<PageObjectInfo>>)> on_done) const;
+  // 쪽 폼 위젯 스냅샷 (#51). 계약은 load_annotations 와 같다
+  TaskHandle load_form_widgets(int page_index, Priority priority,
+                               std::function<void(Result<std::vector<FormWidgetInfo>>)> on_done) const;
   // 쪽 텍스트 인덱스. 계약은 render_page 와 같다 (콜백은 정확히 한 번).
   TaskHandle load_text(int page_index, Priority priority,
                        std::function<void(Result<view::PageTextIndex>)> on_done) const;

@@ -1,5 +1,7 @@
 #include "onpdf/core/engine/pdfium_document.h"
+#include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/engine/save.h"
+#include "onpdf/edit/add_text_command.h"
 
 #include "../test_support.h"
 
@@ -309,5 +311,203 @@ TEST(SaveDocument, EditPermissionsByKind) {
   EXPECT_TRUE(all.extract);
 }
 
+
+// ---- 미참조 폰트 정리 (#61) ----
+
+std::shared_ptr<const edit::FontFace> cleanup_font() {
+  auto face = edit::FontFace::load(testdata("fonts") / "NotoSansKR-subset.ttf");
+  EXPECT_TRUE(face);
+  return face ? *face : nullptr;
+}
+
+edit::AddTextCommand text_command(const std::string& utf8, double y = 100) {
+  edit::TextBoxSpec spec;
+  spec.page = 0;
+  spec.origin = {72, y};
+  spec.utf8 = utf8;
+  spec.face = cleanup_font();
+  return edit::AddTextCommand(spec);
+}
+
+// 추가 → 취소 → 저장: 폰트가 빠져 원본 크기 수준, 캐시는 그대로
+TEST(SaveDocument, UndoneTextIsCleanedOnSave) {
+  ScopedTempDir dir;
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc);
+  auto cmd = text_command("한글 텍스트");
+  ASSERT_TRUE(cmd.execute(*doc));
+  ASSERT_TRUE(cmd.undo(*doc));
+  const auto target = dir / "undone.pdf";
+  auto saved = save_document_safely(*doc, target, {});
+  ASSERT_TRUE(saved) << saved.error().message;
+  EXPECT_TRUE(saved->fonts_cleaned);
+  EXPECT_LT(saved->bytes, std::filesystem::file_size(testdata("simple.pdf")) + 2000);
+  EXPECT_EQ(doc->font_cache_size(), 1) << "엔진 캐시는 유지(재실행 때 재사용)";
+  ASSERT_TRUE(PdfiumDocument::open(target));
+  EXPECT_EQ(files_in(dir.path()), 1u) << "임시 파일 없음";
+}
+
+// 취소 1 + 남김 1: 남긴 텍스트의 폰트·렌더·추출·마크 id 는 그대로
+TEST(SaveDocument, KeptTextSurvivesCleanup) {
+  ScopedTempDir dir;
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc);
+  auto undone = text_command("첫 줄");
+  ASSERT_TRUE(undone.execute(*doc));
+  ASSERT_TRUE(undone.undo(*doc));
+  auto kept = text_command("둘째 줄 텍스트", 140);
+  ASSERT_TRUE(kept.execute(*doc));
+  ASSERT_EQ(doc->font_cache_size(), 2);
+  RenderOptions render;
+  render.scale = 2.0f;
+  auto before = doc->render_page(0, render);
+  ASSERT_TRUE(before);
+  const auto target = dir / "kept.pdf";
+  auto saved = save_document_safely(*doc, target, {});
+  ASSERT_TRUE(saved) << saved.error().message;
+  EXPECT_TRUE(saved->fonts_cleaned);
+  auto reopened = PdfiumDocument::open(target);
+  ASSERT_TRUE(reopened);
+  auto after = reopened->render_page(0, render);
+  ASSERT_TRUE(after);
+  EXPECT_EQ(after->pixels, before->pixels) << "저장 전후 렌더 동일";
+  auto objects = reopened->text_objects(0);
+  ASSERT_TRUE(objects);
+  ASSERT_EQ(objects->size(), 1u);
+  EXPECT_EQ((*objects)[0].id, kept.object_ids()[0]);
+  auto text = reopened->load_text(0);
+  ASSERT_TRUE(text);
+  EXPECT_NE(text->all_text().find("둘째 줄 텍스트"), std::string::npos);
+  EXPECT_TRUE(QpdfTools::check(target));
+}
+
+// 폰트가 전부 쓰이거나 텍스트를 넣은 적이 없으면 재작성하지 않는다 (PDFium 산출물 그대로)
+TEST(SaveDocument, NoCleanupWhenNothingUnreferenced) {
+  ScopedTempDir dir;
+  {
+    auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+    ASSERT_TRUE(doc);
+    auto cmd = text_command("한글 텍스트");
+    ASSERT_TRUE(cmd.execute(*doc));
+    const auto direct = dir / "direct.pdf";
+    ASSERT_TRUE(doc->save_to(direct, false));
+    const auto target = dir / "all-used.pdf";
+    auto saved = save_document_safely(*doc, target, {});
+    ASSERT_TRUE(saved) << saved.error().message;
+    EXPECT_FALSE(saved->fonts_cleaned);
+    // PDFium 저장은 매번 /ID·날짜가 달라 바이트 비교는 못 한다: 크기가 같고 폰트가 남아 있으면 재작성하지 않은 것
+    EXPECT_EQ(std::filesystem::file_size(target), std::filesystem::file_size(direct)) << "재작성 없음: PDFium 산출물 그대로";
+    EXPECT_GT(saved->bytes, std::filesystem::file_size(testdata("simple.pdf")) + 2000) << "쓰이는 폰트는 남는다";
+  }
+  {
+    auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+    ASSERT_TRUE(doc);
+    ASSERT_TRUE(doc->set_page_rotation(0, 1));
+    auto saved = save_document_safely(*doc, dir / "rotated.pdf", {});
+    ASSERT_TRUE(saved);
+    EXPECT_FALSE(saved->fonts_cleaned);
+  }
+}
+
+TEST(SaveDocument, EncryptedCleanupKeepsPassword) {
+  ScopedTempDir dir;
+  auto doc = PdfiumDocument::open(testdata("encrypted-aes256.pdf"), "owner");
+  ASSERT_TRUE(doc);
+  auto cmd = text_command("한글 텍스트");
+  ASSERT_TRUE(cmd.execute(*doc));
+  ASSERT_TRUE(cmd.undo(*doc));
+  const auto target = dir / "enc.pdf";
+  auto saved = save_document_safely(*doc, target, {});
+  ASSERT_TRUE(saved) << saved.error().message;
+  EXPECT_TRUE(saved->fonts_cleaned);
+  auto no_password = PdfiumDocument::open(target);
+  ASSERT_FALSE(no_password);
+  EXPECT_EQ(no_password.error().code, ErrorCode::kPasswordRequired);
+  ASSERT_TRUE(PdfiumDocument::open(target, "user"));
+  ASSERT_TRUE(PdfiumDocument::open(target, "owner"));
+}
+
+TEST(SaveDocument, SignedIncrementalSkipsCleanup) {
+  ScopedTempDir dir;
+  const auto target = dir / "signed.pdf";
+  std::filesystem::copy_file(testdata("signed-dummy.pdf"), target);
+  const auto original = read_bytes(target);
+  auto doc = PdfiumDocument::open(target);
+  ASSERT_TRUE(doc);
+  auto cmd = text_command("한글 텍스트");
+  ASSERT_TRUE(cmd.execute(*doc));
+  ASSERT_TRUE(cmd.undo(*doc));
+  SaveOptions options;
+  options.incremental = true;
+  auto saved = save_document_safely(*doc, target, options);
+  ASSERT_TRUE(saved) << saved.error().message;
+  EXPECT_FALSE(saved->fonts_cleaned);
+  const auto bytes = read_bytes(target);
+  ASSERT_GT(bytes.size(), original.size());
+  EXPECT_TRUE(std::equal(original.begin(), original.end(), bytes.begin())) << "원본 바이트 보존";
+}
+
+// 재작성 실패는 저장 실패가 아니다: PDFium 산출물(폰트 남음)로 저장한다
+TEST(SaveDocument, RewriteFailureFallsBackToPdfiumOutput) {
+  ScopedTempDir dir;
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc);
+  auto cmd = text_command("한글 텍스트");
+  ASSERT_TRUE(cmd.execute(*doc));
+  ASSERT_TRUE(cmd.undo(*doc));
+  SaveOptions options;
+  int calls = 0;
+  options.rewrite_for_testing = [&](const std::filesystem::path&, const std::filesystem::path&, std::string_view) -> Result<void> {
+    ++calls;
+    return make_error(ErrorCode::kJobFailed, "injected");
+  };
+  const auto target = dir / "fallback.pdf";
+  auto saved = save_document_safely(*doc, target, options);
+  ASSERT_TRUE(saved) << saved.error().message;
+  EXPECT_EQ(calls, 1);
+  EXPECT_FALSE(saved->fonts_cleaned);
+  EXPECT_GT(saved->bytes, std::filesystem::file_size(testdata("simple.pdf")) + 2000) << "폰트가 남은 채 저장";
+  ASSERT_TRUE(PdfiumDocument::open(target));
+  EXPECT_EQ(files_in(dir.path()), 1u) << "두 번째 임시 파일도 정리";
+}
+
+// qpdf 가 거부하는 실제 파일(#37 알려진 제한): 재작성 실패 → PDFium 산출물로 저장 성공
+TEST(SaveDocument, QpdfRejectedFileStillSaves) {
+  ScopedTempDir dir;
+  auto doc = PdfiumDocument::open(testdata("pdfium-bug_481363.pdf"));
+  ASSERT_TRUE(doc);
+  auto cmd = text_command("한글 텍스트");
+  ASSERT_TRUE(cmd.execute(*doc));
+  ASSERT_TRUE(cmd.undo(*doc));
+  ASSERT_TRUE(doc->has_unreferenced_fonts());
+  const auto target = dir / "rejected.pdf";
+  auto saved = save_document_safely(*doc, target, {});
+  ASSERT_TRUE(saved) << saved.error().message;
+  ASSERT_TRUE(PdfiumDocument::open(target));
+  EXPECT_EQ(files_in(dir.path()), 1u);
+}
+
+// 재작성이 문서를 망가뜨리면 기존 검증이 잡아 원본은 그대로
+TEST(SaveDocument, RewriteCorruptionIsCaughtByVerify) {
+  ScopedTempDir dir;
+  const auto target = dir / "doc.pdf";
+  std::filesystem::copy_file(testdata("simple.pdf"), target);
+  const auto original = read_bytes(target);
+  auto doc = PdfiumDocument::open(target);
+  ASSERT_TRUE(doc);
+  auto cmd = text_command("한글 텍스트");
+  ASSERT_TRUE(cmd.execute(*doc));
+  ASSERT_TRUE(cmd.undo(*doc));
+  SaveOptions options;
+  options.rewrite_for_testing = [](const std::filesystem::path&, const std::filesystem::path& out, std::string_view) -> Result<void> {
+    std::ofstream(out, std::ios::binary) << "%PDF-1.7 broken";
+    return {};
+  };
+  auto saved = save_document_safely(*doc, target, options);
+  ASSERT_FALSE(saved);
+  EXPECT_EQ(saved.error().code, ErrorCode::kSaveVerifyFailed);
+  EXPECT_EQ(read_bytes(target), original) << "원본 불변";
+  EXPECT_EQ(files_in(dir.path()), 1u) << "임시 파일 모두 제거";
+}
 }  // namespace
 }  // namespace onpdf::engine

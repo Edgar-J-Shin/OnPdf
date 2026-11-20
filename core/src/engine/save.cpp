@@ -2,6 +2,7 @@
 
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/core/engine/pdfium_library.h"
+#include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/platform/fs_sync.h"
 #include "onpdf/core/platform/path.h"
 
@@ -13,6 +14,7 @@
 #include <optional>
 #include <random>
 #include <fstream>
+#include <set>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -83,6 +85,21 @@ Result<void> verify_saved(const PdfiumDocument& source, const std::filesystem::p
     if (auto loaded = reopened->page_rotation(i); !loaded) {
       return std::unexpected(verify_error("cannot load page " + std::to_string(i + 1)));
     }
+    // OnPdf 가 마크한 쪽 객체(텍스트·이미지 id)가 저장 뒤에도 같은 집합이어야 한다 (#45·#49)
+    auto before_objects = source.page_objects(i);
+    auto after_objects = reopened->page_objects(i);
+    if (!before_objects || !after_objects) return std::unexpected(verify_error("cannot list page objects on page " + std::to_string(i + 1)));
+    std::set<std::string> before_ids, after_ids;
+    for (const auto& o : *before_objects) if (o.marked) before_ids.insert(o.id);
+    for (const auto& o : *after_objects) if (o.marked) after_ids.insert(o.id);
+    if (before_ids != after_ids) return std::unexpected(verify_error("page objects changed on page " + std::to_string(i + 1)));
+  }
+  // 폼 필드 값이 저장 뒤에도 같아야 한다 (#51)
+  {
+    auto before_values = source.form_values();
+    auto after_values = reopened->form_values();
+    if (!before_values || !after_values) return std::unexpected(verify_error("cannot read form field values"));
+    if (*before_values != *after_values) return std::unexpected(verify_error("form field values changed"));
   }
   if (incremental) {
     const auto& original = source.original_bytes();
@@ -186,9 +203,28 @@ Result<SaveResult> save_document_safely(const PdfiumDocument& doc, const std::fi
                                         const SaveOptions& options) {
   PdfiumLibrary::assert_current_thread();
   SafeWriteHooks hooks;
+  bool fonts_cleaned = false;
   hooks.write = [&](const std::vector<std::filesystem::path>& temps) -> Result<void> {
-    if (auto written = doc.save_to(temps.front(), options.incremental); !written) return written;
-    if (options.after_write_for_testing) options.after_write_for_testing(temps.front());
+    const std::filesystem::path& temp = temps.front();
+    if (auto written = doc.save_to(temp, options.incremental); !written) return written;
+    // 취소한 텍스트의 서브셋 폰트는 PDFium 이 저장 때 거르지 않는다(객체 번호 전부 기록, 지우는 API 없음). 미참조 폰트가
+    // 있을 때만 qpdf 로 다시 써 떨어뜨린다 — 모든 저장을 재작성하지는 않는다(필요 없는 구조 변경 회피). 증분 저장은 원본
+    // 바이트를 보존해야 하므로 제외. 재작성 실패는 저장 실패가 아니라 PDFium 산출물로 계속한다(정리는 최선 노력) (#61)
+    if (!options.incremental && options.clean_unreferenced_fonts && doc.has_unreferenced_fonts()) {
+      TempFile rewritten(temp_path_in(temp.parent_path().empty() ? std::filesystem::path(".") : temp.parent_path()));
+      Result<void> ok = options.rewrite_for_testing
+                            ? options.rewrite_for_testing(temp, rewritten.path(), doc.password())
+                            : QpdfTools::rewrite(temp, rewritten.path(), doc.password()).transform([](const JobReport&) {});
+      std::error_code ec;
+      if (ok && std::filesystem::is_regular_file(rewritten.path(), ec)) {
+        std::filesystem::rename(rewritten.path(), temp, ec);  // 같은 폴더: 임시 파일을 재작성본으로 교체
+        if (!ec) {
+          rewritten.release();
+          fonts_cleaned = true;
+        }
+      }
+    }
+    if (options.after_write_for_testing) options.after_write_for_testing(temp);
     return {};
   };
   hooks.verify = [&](std::size_t, const std::filesystem::path&, const std::filesystem::path& temp) {
@@ -198,6 +234,7 @@ Result<SaveResult> save_document_safely(const PdfiumDocument& doc, const std::fi
   if (!results) return std::unexpected(results.error());
   SaveResult result = results->front();
   result.incremental = options.incremental;
+  result.fonts_cleaned = fonts_cleaned;
   return result;
 }
 

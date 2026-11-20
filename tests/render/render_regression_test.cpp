@@ -4,6 +4,9 @@
 // 비교 허용치는 tests/test_support.h 의 expect_bitmap_matches_png 참고.
 
 #include "onpdf/core/engine/pdfium_document.h"
+#include "onpdf/edit/add_text_command.h"
+#include "onpdf/edit/object_commands.h"
+#include "onpdf/edit/text_box_commands.h"
 #include "onpdf/core/engine/save.h"
 #include "onpdf/core/image/png_io.h"
 
@@ -214,6 +217,165 @@ TEST(RenderRegression, AnnotatedAndSavedPage) {
     GTEST_SKIP() << "reference updated: " << expected_path;
   }
   onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "simple-p0-annotated.png");
+}
+
+// 텍스트 추가(#45): 서브셋 임베딩 폰트만으로(시스템 폰트 없음) 한글·영문이 그려진다. 저장 → 다시 열어 렌더
+TEST(RenderRegression, TextAddedAndSavedPage) {
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc) << doc.error().message;
+  auto face = edit::FontFace::load(testdata("fonts") / "NotoSansKR-subset.ttf");
+  ASSERT_TRUE(face);
+  edit::TextBoxSpec big;
+  big.page = 0;
+  big.origin = {72, 420};
+  big.size = 24;
+  big.color = {0, 0, 0, 255};
+  big.utf8 = "한글 텍스트 추가\n둘째 줄 임베딩";
+  big.face = *face;
+  edit::AddTextCommand add_big(big);
+  ASSERT_TRUE(add_big.execute(*doc));
+  edit::TextBoxSpec small = big;
+  small.origin = {72, 520};
+  small.size = 12;
+  small.color = {200, 0, 0, 255};
+  small.utf8 = "OnPdf 2026 빨강 12pt";
+  edit::AddTextCommand add_small(small);
+  ASSERT_TRUE(add_small.execute(*doc));
+  onpdf::test::ScopedTempDir dir;
+  const auto saved_path = dir / "text-added.pdf";
+  ASSERT_TRUE(engine::save_document_safely(*doc, saved_path, {}));
+  auto reopened = PdfiumDocument::open(saved_path);
+  ASSERT_TRUE(reopened) << reopened.error().message;
+  RenderOptions options;
+  options.scale = 1.0f;
+  auto actual = reopened->render_page(0, options);
+  ASSERT_TRUE(actual) << actual.error().message;
+  const auto expected_path = testdata("expected") / "simple-p0-text-added.png";
+  if (update_references()) {
+    ASSERT_TRUE(image::write_png(*actual, expected_path));
+    GTEST_SKIP() << "reference updated: " << expected_path;
+  }
+  onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "simple-p0-text-added.png");
+}
+
+// 텍스트 편집(#47): 추가 → 이동(60, 40) → 크기 36·빨강으로 수정 → 저장 → 다시 열어 렌더
+TEST(RenderRegression, TextEditedAndSavedPage) {
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc) << doc.error().message;
+  auto face = edit::FontFace::load(testdata("fonts") / "NotoSansKR-subset.ttf");
+  ASSERT_TRUE(face);
+  edit::TextBoxSpec spec;
+  spec.page = 0;
+  spec.origin = {72, 420};
+  spec.size = 24;
+  spec.utf8 = "한글 텍스트 추가\n둘째 줄 임베딩";
+  spec.face = *face;
+  edit::AddTextCommand add(spec);
+  ASSERT_TRUE(add.execute(*doc));
+  edit::MoveObjectsCommand move(0, add.object_ids(), {60, 40});
+  ASSERT_TRUE(move.execute(*doc));
+  edit::ReplaceTextBoxCommand replace(0, add.box_id(), *face, std::string("저장 열기"), 36.0, engine::Color{200, 0, 0, 255});
+  ASSERT_TRUE(replace.execute(*doc));
+  onpdf::test::ScopedTempDir dir;
+  const auto saved_path = dir / "text-edited.pdf";
+  ASSERT_TRUE(engine::save_document_safely(*doc, saved_path, {}));
+  auto reopened = PdfiumDocument::open(saved_path);
+  ASSERT_TRUE(reopened) << reopened.error().message;
+  RenderOptions options;
+  options.scale = 1.0f;
+  auto actual = reopened->render_page(0, options);
+  ASSERT_TRUE(actual) << actual.error().message;
+  const auto expected_path = testdata("expected") / "simple-p0-text-edited.png";
+  if (update_references()) {
+    ASSERT_TRUE(image::write_png(*actual, expected_path));
+    GTEST_SKIP() << "reference updated: " << expected_path;
+  }
+  onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "simple-p0-text-edited.png");
+}
+
+// 이미지(#49): 투명 PNG(파란 사각형 위) + JPEG → 이동·크기 조절 → 저장 → 다시 열어 렌더
+TEST(RenderRegression, ImageAddedAndSavedPage) {
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc) << doc.error().message;
+  engine::ImagePixels alpha;
+  alpha.width = 64;
+  alpha.height = 48;
+  alpha.bgra.resize(64 * 48 * 4);
+  for (int y = 0; y < 48; ++y)
+    for (int x = 0; x < 64; ++x) {
+      std::uint8_t* px = alpha.bgra.data() + (y * 64 + x) * 4;
+      if (x < 32) { px[0] = 0; px[1] = 0; px[2] = 255; px[3] = 255; }
+      else if (y < 16) { px[0] = 0; px[1] = 160; px[2] = 0; px[3] = 128; }
+      else { px[0] = px[1] = px[2] = px[3] = 0; }
+    }
+  engine::ImageSpec png;
+  png.source = alpha;
+  png.rect = {72, 162, 200, 150};
+  edit::AddImageCommand add_png(0, png);
+  ASSERT_TRUE(add_png.execute(*doc));
+  Bitmap green;
+  green.width = 80;
+  green.height = 60;
+  green.stride = 80 * 4;
+  green.pixels.resize(80 * 60 * 4);
+  for (int y = 0; y < 60; ++y)
+    for (int x = 0; x < 80; ++x) {
+      std::uint8_t* px = green.pixels.data() + (y * 80 + x) * 4;
+      px[0] = static_cast<std::uint8_t>(x * 3); px[1] = 160; px[2] = static_cast<std::uint8_t>(y * 4); px[3] = 255;
+    }
+  auto jpeg = image::encode_jpeg(green, 90);
+  ASSERT_TRUE(jpeg);
+  engine::ImageSpec jpg;
+  jpg.source = engine::JpegBytes{*jpeg, 80, 60};
+  jpg.rect = {320, 420, 160, 120};
+  edit::AddImageCommand add_jpg(0, jpg);
+  ASSERT_TRUE(add_jpg.execute(*doc));
+  edit::MoveObjectsCommand move(0, {add_jpg.object_id()}, {-20, 60});
+  ASSERT_TRUE(move.execute(*doc));
+  edit::ResizeObjectCommand resize(0, add_jpg.object_id(), {300, 480, 160, 120}, {300, 480, 200, 150});
+  ASSERT_TRUE(resize.execute(*doc));
+  onpdf::test::ScopedTempDir dir;
+  const auto saved_path = dir / "image-added.pdf";
+  ASSERT_TRUE(engine::save_document_safely(*doc, saved_path, {}));
+  auto reopened = PdfiumDocument::open(saved_path);
+  ASSERT_TRUE(reopened) << reopened.error().message;
+  RenderOptions options;
+  options.scale = 1.0f;
+  auto actual = reopened->render_page(0, options);
+  ASSERT_TRUE(actual) << actual.error().message;
+  const auto expected_path = testdata("expected") / "simple-p0-image-added.png";
+  if (update_references()) {
+    ASSERT_TRUE(image::write_png(*actual, expected_path));
+    GTEST_SKIP() << "reference updated: " << expected_path;
+  }
+  onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "simple-p0-image-added.png");
+}
+
+// 회전(90°)된 쪽에 넣은 텍스트: 화면 기준으로 바로 선다
+TEST(RenderRegression, RotatedPageTextAdded) {
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc) << doc.error().message;
+  ASSERT_TRUE(doc->set_page_rotation(0, 1));
+  auto face = edit::FontFace::load(testdata("fonts") / "NotoSansKR-subset.ttf");
+  ASSERT_TRUE(face);
+  edit::TextBoxSpec spec;
+  spec.page = 0;
+  spec.origin = {100, 100};
+  spec.size = 24;
+  spec.utf8 = "회전 쪽 텍스트";
+  spec.face = *face;
+  edit::AddTextCommand add(spec);
+  ASSERT_TRUE(add.execute(*doc));
+  RenderOptions options;
+  options.scale = 1.0f;
+  auto actual = doc->render_page(0, options);
+  ASSERT_TRUE(actual) << actual.error().message;
+  const auto expected_path = testdata("expected") / "rotated-p0-text-added.png";
+  if (update_references()) {
+    ASSERT_TRUE(image::write_png(*actual, expected_path));
+    GTEST_SKIP() << "reference updated: " << expected_path;
+  }
+  onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "rotated-p0-text-added.png");
 }
 
 // 회전(90°)된 쪽의 하이라이트: 글자 위에 정확히 놓인다

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(OnPdf
-  VERSION 0.2.0
+  VERSION 0.3.0
   DESCRIPTION "PDFium 기반 PDF 뷰어·편집기"
   LANGUAGES CXX)
 
@@ -17,6 +17,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 option(ONPDF_BUILD_APP   "Qt UI(app) 빌드 — Qt 6 필요" OFF)
 option(ONPDF_BUILD_CLI   "명령줄 도구(cli) 빌드" ON)
 option(ONPDF_BUILD_TESTS "테스트 빌드" ON)
+option(ONPDF_BUILD_SPIKES "기술 검증(spike) 실험 빌드 — 제품 코드 아님" OFF)
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(OnPdfWarnings)

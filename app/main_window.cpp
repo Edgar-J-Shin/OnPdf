@@ -3,10 +3,15 @@
 #include "document_view.h"
 #include "onpdf/core/platform/path.h"
 #include "annotation_dialog.h"
+#include "form_field_editor.h"
+#include "image_import.h"
 #include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/engine/save.h"
 #include "onpdf/core/page_ranges.h"
+#include "onpdf/edit/add_text_command.h"
 #include "onpdf/edit/annotation_commands.h"
+#include "onpdf/edit/object_commands.h"
+#include "onpdf/edit/text_box_commands.h"
 #include "onpdf/edit/delete_pages.h"
 #include "onpdf/edit/insert_pages.h"
 #include "onpdf/edit/move_pages.h"
@@ -21,6 +26,7 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QToolBar>
+#include <QComboBox>
 #include <QToolButton>
 #include <QApplication>
 #include <QClipboard>
@@ -29,6 +35,7 @@
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QEventLoop>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QInputDialog>
@@ -121,6 +128,22 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(edit_, &EditController::document_changed, this, &MainWindow::on_document_changed);
   connect(view_, &DocumentView::markup_requested, this, &MainWindow::on_markup_requested);
   connect(view_, &DocumentView::note_requested, this, &MainWindow::on_note_requested);
+  connect(view_, &DocumentView::text_requested, this, &MainWindow::on_text_requested);
+  connect(view_, &DocumentView::text_box_selected, this, &MainWindow::on_text_box_selected);
+  connect(view_, &DocumentView::text_box_reselected, this, [this](const DocumentView::SelectedTextBox&) {
+    update_edit_actions();
+    update_property_buttons();
+  });
+  connect(view_, &DocumentView::text_move_requested, this, &MainWindow::on_text_move_requested);
+  connect(view_, &DocumentView::text_delete_requested, this, &MainWindow::on_text_delete_requested);
+  connect(view_, &DocumentView::text_edit_requested, this, &MainWindow::on_text_edit_requested);
+  connect(view_, &DocumentView::image_requested, this, &MainWindow::on_image_requested);
+  connect(view_, &DocumentView::object_resize_requested, this, &MainWindow::on_object_resize_requested);
+  connect(view_, &DocumentView::text_width_requested, this, &MainWindow::on_text_width_requested);
+  connect(view_, &DocumentView::object_nudge_requested, this, &MainWindow::on_object_nudge_requested);
+  connect(view_, &DocumentView::locked_object_edit_attempted, this, &MainWindow::explain_locked_object);
+  connect(view_, &DocumentView::form_field_clicked, this, &MainWindow::on_form_field_clicked);
+  connect(view_, &DocumentView::form_text_committed, this, &MainWindow::on_form_text_committed);
   connect(view_, &DocumentView::ink_requested, this, &MainWindow::on_ink_requested);
   connect(view_, &DocumentView::shape_requested, this, &MainWindow::on_shape_requested);
   connect(view_, &DocumentView::annotation_selected, this, &MainWindow::on_annotation_selected);
@@ -134,6 +157,9 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(edit_, &EditController::state_changed, this, [this] {
     update_edit_actions();
     update_title();
+    flush_pending_nudge();
+    if (!edit_->busy()) form_in_flight_ = false;
+    flush_form_commands();
   });
   connect(edit_, &EditController::failed, this, &MainWindow::on_edit_failed);
 
@@ -185,6 +211,7 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   });
 
   resize(900, 1000);
+  load_bundled_text_font();  // 모든 위젯·액션이 만들어진 뒤 (update_edit_actions 를 부른다)
 }
 
 MainWindow::~MainWindow() {
@@ -214,8 +241,19 @@ void MainWindow::build_menus() {
   quit->setMenuRole(QAction::QuitRole);
 
   QMenu* edit = menuBar()->addMenu(tr("편집(&E)"));
-  undo_action_ = edit->addAction(tr("실행 취소(&U)"), QKeySequence::Undo, this, [this] { edit_->undo(); });
+  undo_action_ = edit->addAction(tr("실행 취소(&U)"), QKeySequence::Undo, this, [this] {
+    // 처음 선택 없던 라디오 그룹의 첫 선택: PDFium 이 해제를 지원하지 않아 문서는 그대로다 (#51)
+    const auto target = edit_->undo_command();
+    const auto* radio = dynamic_cast<const edit::SetFormCheckedCommand*>(target.get());
+    if (edit_->undo() && radio != nullptr && !radio->undoable()) {
+      show_transient(tr("라디오 단추는 선택을 해제할 수 없어 첫 선택은 그대로 둡니다"));
+    }
+  });
   redo_action_ = edit->addAction(tr("다시 실행(&R)"), QKeySequence::Redo, this, [this] { edit_->redo(); });
+  edit->addSeparator();
+  paste_action_ = edit->addAction(tr("이미지 붙여넣기(&V)"), QKeySequence::Paste, this, [this] { paste_image(); });
+  paste_action_->setObjectName(QStringLiteral("paste_image"));
+  paste_action_->setStatusTip(tr("클립보드의 이미지를 현재 쪽 가운데에 놓는다"));
   edit->addSeparator();
   copy_action_ = edit->addAction(tr("복사(&C)"), QKeySequence::Copy, this, &MainWindow::on_copy);
   copy_action_->setEnabled(false);
@@ -306,6 +344,11 @@ void MainWindow::on_opened(const QString& path, int page_count) {
   edit_->set_document(page_count > 0 ? session_.handle() : engine::DocumentHandle{});
   update_title();
   statusBar()->clearMessage();  // "여는 중" 임시 메시지가 문서 정보를 가리지 않게
+  pending_form_commands_.clear();
+  form_in_flight_ = false;
+  if (page_count > 0 && session_.handle().info().form_type == engine::FormType::kXfaFull) {
+    show_transient(tr("XFA 양식은 지원하지 않습니다 (AcroForm 부분만 표시합니다)"));
+  }
   if (page_count <= 0) {
     if (!screenshot_path_.isEmpty()) {
       fail_screenshot(QStringLiteral("no pages"));
@@ -370,6 +413,16 @@ QString MainWindow::command_label(std::string_view id) const {
   if (id == "add_ink") return tr("펜 추가");
   if (id == "add_square") return tr("사각형 추가");
   if (id == "add_circle") return tr("원 추가");
+  if (id == "add_text") return tr("텍스트 추가");
+  if (id == "add_image") return tr("이미지 추가");
+  if (id == "resize_object") return tr("크기 변경");
+  if (id == "remove_object") return tr("삭제");
+  if (id == "move_object") return tr("객체 이동");
+  if (id == "remove_text") return tr("텍스트 삭제");
+  if (id == "replace_text") return tr("텍스트 수정");
+  if (id == "resize_text") return tr("텍스트 폭 변경");
+  if (id == "form_text") return tr("폼 입력");
+  if (id == "form_check" || id == "form_choice") return tr("폼 선택");
   if (id == "set_annotation_border_width") return tr("선 두께 변경");
   if (id == "set_annotation_opacity") return tr("불투명도 변경");
   if (id == "remove_annotation") return tr("주석 삭제");
@@ -397,6 +450,8 @@ void MainWindow::update_edit_actions() {
   // 편집 가능 상태(작업 중이 아님)와 편집 종류별 문서 권한을 따로 본다
   const bool idle = has_pages && !edit_->busy() && !saving_ && !printing;
   const bool can_assemble = has_pages && session_.handle().info().permissions.assemble;  // 쪽 회전·삭제·삽입
+  form_edits_allowed_ = has_pages && session_.handle().info().permissions.fill_forms;  // 폼 (#51): 바쁘면 대기열
+  view_->set_form_fillable(form_edits_allowed_);
   rotate_cw_action_->setEnabled(idle && can_assemble);
   rotate_ccw_action_->setEnabled(idle && can_assemble);
   const QString assemble_tip = has_pages && !can_assemble ? tr("이 문서는 쪽 편집(회전·삭제·삽입)이 허용되지 않습니다")
@@ -425,8 +480,37 @@ void MainWindow::update_edit_actions() {
   for (QAction* action : markup_selection_actions_) {
     if (action != nullptr) action->setEnabled(idle && can_annotate && view_->has_selection());
   }
-  delete_annotation_action_->setEnabled(annotation_edits_allowed_ && view_->selected_annotation().has_value());
+  delete_annotation_action_->setEnabled((annotation_edits_allowed_ && view_->selected_annotation().has_value()) ||
+                                        (content_edits_allowed_ && view_->selected_object().has_value() && !view_->selected_object_locked()));
   color_button_->setEnabled(can_annotate);
+  // 텍스트 추가는 내용 수정 권한(비트 4) + 번들 폰트. 바쁨·저장·인쇄 중 요청은 annotation_edits_allowed_ 와 같은 규칙으로 막는다
+  if (QAction* text_tool = tool_actions_[static_cast<int>(AnnotationTool::kText)]; text_tool != nullptr) {
+    const bool can_edit_contents = has_pages && session_.handle().info().permissions.modify_contents;
+    const bool text_ok = can_edit_contents && text_font_ != nullptr;
+    text_edits_allowed_ = idle && text_ok;
+    content_edits_allowed_ = idle && can_edit_contents;
+    if (paste_action_ != nullptr) paste_action_->setEnabled(can_edit_contents);
+    view_->set_text_editable(content_edits_allowed_);  // 이동·크기 조절 (글꼴과 무관)
+    view_->set_nudge_enabled(can_edit_contents);  // 화살표는 바쁜 동안에도 받아 모은다
+    if (QAction* image_tool = tool_actions_[static_cast<int>(AnnotationTool::kImage)]; image_tool != nullptr) {
+      image_tool->setEnabled(can_edit_contents);
+      image_tool->setStatusTip(has_pages && !can_edit_contents ? tr("이 문서는 내용 수정이 허용되지 않습니다") : QString());
+      if (!can_edit_contents && view_->tool() == AnnotationTool::kImage) {
+        tool_actions_[0]->setChecked(true);
+        view_->set_tool(AnnotationTool::kSelect);
+      }
+    }
+    text_tool->setEnabled(text_ok);
+    text_tool->setStatusTip(!has_pages ? QString()
+                            : !can_edit_contents ? tr("이 문서는 내용 수정이 허용되지 않습니다")
+                            : text_font_ == nullptr ? tr("글꼴 파일이 없습니다 (python3 third_party/fetch_fonts.py)")
+                                                    : QString());
+    if (text_size_combo_ != nullptr) text_size_combo_->setEnabled(text_ok);
+    if (!text_ok && view_->tool() == AnnotationTool::kText) {
+      tool_actions_[0]->setChecked(true);
+      view_->set_tool(AnnotationTool::kSelect);
+    }
+  }
   if (width_button_ != nullptr) {
     const auto selected = view_->selected_annotation();
     const bool width_ok = can_annotate && (!selected || has_border_width(selected->kind));
@@ -543,6 +627,20 @@ bool MainWindow::insert_pages_from(const QString& path, int at, const QString& p
 }
 
 void MainWindow::on_edit_failed(onpdf::ErrorCode code, const QString& message) {
+  if (pending_image_) {
+    const PendingImage pending = *pending_image_;
+    pending_image_.reset();
+    last_image_command_.reset();
+    // PDFium 이 넣지 못한 JPEG(CMYK·일부 프로그레시브 등)은 디코딩해 픽셀로 다시 넣는다
+    if (pending.jpeg && code == ErrorCode::kInvalidFormat && !pending.path.isEmpty()) {
+      if (auto imported = import_image_file(pending.path, true)) {
+        const engine::PageSize size = session_.handle().info().page_sizes.at(static_cast<std::size_t>(pending.page));
+        imported->spec.rect = place_image(size, pending.origin, imported->pixel_width, imported->pixel_height, pending.center);
+        pending_image_ = PendingImage{pending.path, pending.page, pending.origin, pending.center, false};
+        if (run_add_image(pending.page, std::move(imported->spec))) return;
+      }
+    }
+  }
   if (pending_insert_ && code == ErrorCode::kPasswordRequired) {
     // 삽입 소스가 암호 문서: 묻고 같은 삽입을 다시 시도한다 (취소하면 끝)
     const PendingInsert pending = *pending_insert_;
@@ -618,10 +716,13 @@ void MainWindow::build_annotation_ui() {
   tool_group_ = new QActionGroup(this);
   tool_group_->setExclusive(true);
   const QString names[kAnnotationToolCount] = {tr("선택(&S)"), tr("하이라이트(&H)"), tr("밑줄(&U)"), tr("취소선(&K)"),
-                                               tr("메모(&N)"), tr("펜(&P)"), tr("사각형(&R)"), tr("원(&O)")};
+                                               tr("메모(&N)"), tr("펜(&P)"), tr("사각형(&R)"), tr("원(&O)"), tr("텍스트(&T)"),
+                                               tr("이미지(&G)")};
   const QString tips[kAnnotationToolCount] = {tr("텍스트를 선택하거나 주석을 고른다"), tr("드래그한 글에 하이라이트"),
                                               tr("드래그한 글에 밑줄"), tr("드래그한 글에 취소선"), tr("클릭한 자리에 메모"),
-                                              tr("드래그로 자유 선"), tr("드래그한 영역에 사각형 테두리"), tr("드래그한 영역에 원")};
+                                              tr("드래그로 자유 선"), tr("드래그한 영역에 사각형 테두리"), tr("드래그한 영역에 원"),
+                                              tr("클릭한 자리에 텍스트 상자 (쪽 내용에 들어간다)"),
+                                              tr("파일을 골라 클릭한 자리에 이미지를 놓는다")};
   for (int i = 0; i < kAnnotationToolCount; ++i) {
     QAction* action = tool_group_->addAction(names[i]);
     action->setCheckable(true);
@@ -684,6 +785,17 @@ void MainWindow::build_annotation_ui() {
   }
   opacity_button_->setMenu(opacity_popup);
   annotation_toolbar_->addWidget(opacity_button_);
+  // 텍스트 크기 (텍스트 도구 전용)
+  text_size_combo_ = new QComboBox(annotation_toolbar_);
+  text_size_combo_->setObjectName(QStringLiteral("text_size"));
+  text_size_combo_->setToolTip(tr("텍스트 크기"));
+  for (int pt : {8, 10, 12, 14, 18, 24, 36, 48, 72}) text_size_combo_->addItem(tr("%1pt").arg(pt), pt);
+  text_size_combo_->setCurrentIndex(5);  // 24pt
+  connect(text_size_combo_, &QComboBox::currentIndexChanged, this, [this](int index) {
+    if (index < 0 || syncing_text_size_) return;
+    set_text_size(text_size_combo_->itemData(index).toDouble());
+  });
+  annotation_toolbar_->addWidget(text_size_combo_);
   update_property_buttons();
   annotation_toolbar_->addSeparator();
   delete_annotation_action_ = annotation_toolbar_->addAction(tr("주석 삭제"), this, [this] { delete_selected_annotation(); });
@@ -711,6 +823,16 @@ void MainWindow::update_color_icon() {
 }
 
 void MainWindow::update_property_buttons() {
+  if (text_size_combo_ != nullptr) {
+    // 선택한 텍스트 상자의 크기를 콤보에 비춘다 (선택이 없으면 기본값)
+    const auto selected = view_->selected_text_box();
+    const double shown = selected ? selected->font_size : text_size_;
+    const int index = text_size_combo_->findData(static_cast<int>(std::lround(shown)));
+    if (index >= 0 && index != text_size_combo_->currentIndex()) {
+      QScopedValueRollback<bool> guard(syncing_text_size_, true);
+      text_size_combo_->setCurrentIndex(index);
+    }
+  }
   if (width_button_ == nullptr || opacity_button_ == nullptr) return;
   // 선택이 있으면 그 주석의 값, 없으면 새 도형·펜의 기본값
   if (auto selected = view_->selected_annotation(); selected) {
@@ -765,7 +887,13 @@ void MainWindow::set_annotation_color(engine::Color color) {
     }
     return;
   }
+  if (auto selected = view_->selected_text_box(); selected) {  // 선택한 텍스트 상자의 색만
+    if (selected->color.r == color.r && selected->color.g == color.g && selected->color.b == color.b) return;
+    replace_selected_text(std::nullopt, std::nullopt, color);
+    return;
+  }
   annotation_color_ = color;
+  text_color_ = color;  // 새 텍스트도 같은 색 (기본값만 다르다: 텍스트는 검정)
   update_color_icon();
 }
 
@@ -814,6 +942,391 @@ bool MainWindow::add_note(int page, onpdf::Point pt, const QString& contents) {
   spec.author = annotation_author();
   return edit_->run(std::make_shared<edit::AddAnnotationsCommand>(
       std::vector<std::pair<int, engine::AnnotationSpec>>{{page, std::move(spec)}}));
+}
+
+// ---------------------------------------------------------------- 텍스트 추가 (#45)
+
+void MainWindow::load_bundled_text_font() {
+  // 빌드가 third_party/fonts/ 의 Noto Sans KR 을 실행 파일 옆 fonts/ 로 복사한다 (fetch_fonts.py). 없으면 도구 비활성
+  const QString dir = QCoreApplication::applicationDirPath();
+  for (const QString& candidate : {dir + QStringLiteral("/fonts/NotoSansKR[wght].ttf"),
+                                   dir + QStringLiteral("/../Resources/fonts/NotoSansKR[wght].ttf")}) {
+    if (QFileInfo::exists(candidate) && set_text_font(candidate)) return;
+  }
+}
+
+bool MainWindow::set_text_font(const QString& path) {
+  auto face = edit::FontFace::load(onpdf::path_from_utf8(path.toUtf8().toStdString()));
+  if (!face) {
+    text_font_.reset();
+    text_font_path_.clear();
+    update_edit_actions();
+    return false;
+  }
+  text_font_ = *face;
+  text_font_path_ = path;
+  update_edit_actions();
+  return true;
+}
+
+void MainWindow::set_text_size(double size) {
+  // 텍스트 상자가 선택돼 있으면 그 상자의 크기만 바꾼다 (주석 색 버튼과 같은 규칙). 없으면 새 텍스트의 기본값
+  if (auto selected = view_->selected_text_box(); selected && !view_->selected_annotation()) {
+    if (std::abs(selected->font_size - size) < 0.01) return;
+    replace_selected_text(std::nullopt, size, std::nullopt);
+    return;
+  }
+  text_size_ = size;
+  if (text_size_combo_ == nullptr) return;
+  const int index = text_size_combo_->findData(static_cast<int>(size));
+  if (index >= 0) {
+    QScopedValueRollback<bool> guard(syncing_text_size_, true);
+    text_size_combo_->setCurrentIndex(index);
+  }
+}
+
+void MainWindow::on_text_requested(int page, onpdf::Point pt) {
+  if (!text_edits_allowed_ || text_font_ == nullptr) return;
+  for (;;) {
+    AnnotationDialog dialog(tr("텍스트"), QString(), this);
+    dialog.setObjectName(QStringLiteral("text_input"));
+    if (dialog.exec() != QDialog::Accepted) return;
+    const QString text = dialog.text().normalized(QString::NormalizationForm_C);  // NFD 입력(macOS 파일명 등)은 NFC 로 (리뷰 W3)
+    if (text.trimmed().isEmpty()) return;  // 빈 텍스트는 만들지 않는다
+    const std::u32string missing = text_font_->missing(text.toUtf8().toStdString());
+    if (missing.empty()) {
+      add_text(page, pt, text);
+      return;
+    }
+    QMessageBox box(QMessageBox::Warning, tr("텍스트"),
+                    tr("글꼴에 없는 글자가 있습니다: %1\n다른 글자로 바꿔 주세요.")
+                        .arg(QString::fromStdU32String(missing.substr(0, 10))),
+                    QMessageBox::Ok, this);
+    box.setObjectName(QStringLiteral("text_missing_glyphs"));
+    box.exec();
+  }
+}
+
+bool MainWindow::add_text(int page, onpdf::Point pt, const QString& utf8) {
+  if (!text_edits_allowed_ || !view_->has_document() || text_font_ == nullptr) return false;
+  if (utf8.trimmed().isEmpty()) return false;
+  if (!warn_signature_once()) return false;
+  edit::TextBoxSpec spec;
+  spec.page = page;
+  spec.origin = pt;
+  spec.size = text_size_;
+  spec.color = text_color_;
+  spec.color.a = 255;
+  spec.utf8 = utf8.normalized(QString::NormalizationForm_C).toUtf8().toStdString();
+  spec.face = text_font_;
+  return edit_->run(std::make_shared<edit::AddTextCommand>(std::move(spec)));
+}
+
+// ---------------------------------------------------------------- 텍스트 상자 편집 (#47)
+
+void MainWindow::on_text_box_selected(bool has, const DocumentView::SelectedTextBox& box) {
+  update_edit_actions();
+  update_property_buttons();
+  if (!has) {
+    if (selection_status_shown_) show_transient(QString());
+    return;
+  }
+  QStringList parts;
+  if (box.kind == engine::ObjectKind::kImage) {
+    parts << tr("이미지") << tr("%1×%2 px").arg(box.pixel_width).arg(box.pixel_height)
+          << tr("%1×%2 pt").arg(qRound(box.bbox.w)).arg(qRound(box.bbox.h));
+    if (!box.filter.empty()) parts << QString::fromStdString(box.filter == "DCTDecode" ? "JPEG" : box.filter);
+  } else {
+    parts << tr("텍스트") << tr("%1pt").arg(box.font_size) << tr("%1줄").arg(box.lines);
+    if (!box.text.empty()) parts << QString::fromStdString(box.text).left(60).replace(QLatin1Char('\n'), QLatin1Char(' '));
+  }
+  statusBar()->showMessage(parts.join(QStringLiteral(" · ")));
+  selection_status_shown_ = true;
+}
+
+namespace {
+// 마크 없는 기존 이미지 id ("#obj<index>") — 편집하면 원본 스트림이 재생성된다 (#57)
+bool has_foreign_object(const std::vector<std::string>& ids) {
+  return std::any_of(ids.begin(), ids.end(), [](const std::string& id) { return id.starts_with("#obj"); });
+}
+}  // namespace
+
+void MainWindow::on_text_move_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta) {
+  if (!content_edits_allowed_ || ids.empty()) return;
+  if (has_foreign_object(ids)) return explain_locked_object();
+  if (!warn_signature_once()) return;
+  edit_->run(std::make_shared<edit::MoveObjectsCommand>(page, ids, delta));
+}
+
+void MainWindow::on_text_delete_requested(int, const QString&) { delete_selected_text_box(); }
+
+// ---------------------------------------------------------------- 이미지 (#49)
+
+void MainWindow::on_image_requested(int page, onpdf::Point pt) {
+  if (!content_edits_allowed_) return;
+  const QString path = QFileDialog::getOpenFileName(this, tr("이미지 넣기"), QFileInfo(session_.path()).absolutePath(), image_file_filter());
+  if (path.isEmpty()) return;
+  add_image_file(path, page, pt, false);
+}
+
+bool MainWindow::add_image_file(const QString& path, int page, onpdf::Point origin, bool center) {
+  if (!content_edits_allowed_ || !view_->has_document()) return false;
+  auto imported = import_image_file(path);
+  if (!imported) {
+    QMessageBox box(QMessageBox::Warning, tr("이미지"),
+                    tr("이 이미지를 열 수 없습니다: %1\n%2").arg(QFileInfo(path).fileName(), QString::fromStdString(imported.error().message)),
+                    QMessageBox::Ok, this);
+    box.setObjectName(QStringLiteral("image_open_failed"));
+    box.exec();
+    return false;
+  }
+  const engine::PageSize size = session_.handle().info().page_sizes.at(static_cast<std::size_t>(page));
+  imported->spec.rect = place_image(size, origin, imported->pixel_width, imported->pixel_height, center);
+  pending_image_ = PendingImage{path, page, origin, center, std::holds_alternative<engine::JpegBytes>(imported->spec.source)};
+  return run_add_image(page, std::move(imported->spec));
+}
+
+bool MainWindow::add_image(const QImage& image, int page, onpdf::Point origin, bool center) {
+  if (!content_edits_allowed_ || !view_->has_document()) return false;
+  auto imported = import_image(image);
+  if (!imported) {
+    show_transient(tr("이 이미지를 넣을 수 없습니다: %1").arg(QString::fromStdString(imported.error().message)));
+    return false;
+  }
+  const engine::PageSize size = session_.handle().info().page_sizes.at(static_cast<std::size_t>(page));
+  imported->spec.rect = place_image(size, origin, imported->pixel_width, imported->pixel_height, center);
+  pending_image_ = PendingImage{QString(), page, origin, center, false};
+  return run_add_image(page, std::move(imported->spec));
+}
+
+bool MainWindow::run_add_image(int page, engine::ImageSpec spec) {
+  if (!warn_signature_once()) return false;
+  auto command = std::make_shared<edit::AddImageCommand>(page, std::move(spec));
+  if (!edit_->run(command)) {
+    pending_image_.reset();
+    return false;
+  }
+  last_image_command_ = std::move(command);
+  return true;
+}
+
+void MainWindow::on_object_nudge_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta) {
+  if (!view_->has_document() || !session_.handle().info().permissions.modify_contents) return;
+  if (has_foreign_object(ids)) return explain_locked_object();
+  if (pending_nudge_ && (pending_nudge_->page != page || pending_nudge_->ids != ids)) pending_nudge_.reset();
+  if (!pending_nudge_) pending_nudge_ = PendingNudge{page, ids, {0.0, 0.0}};
+  pending_nudge_->delta.x += delta.x;
+  pending_nudge_->delta.y += delta.y;
+  flush_pending_nudge();
+}
+
+void MainWindow::flush_pending_nudge() {
+  if (!pending_nudge_ || !content_edits_allowed_ || edit_->busy()) return;  // 끝나면 state_changed 에서 다시
+  const PendingNudge nudge = std::move(*pending_nudge_);
+  pending_nudge_.reset();
+  if (nudge.delta.x == 0.0 && nudge.delta.y == 0.0) return;
+  if (!warn_signature_once()) return;
+  edit_->run(std::make_shared<edit::MoveObjectsCommand>(nudge.page, nudge.ids, nudge.delta, true));
+}
+
+// ---------------------------------------------------------------- 폼 채우기 (#51)
+
+void MainWindow::on_form_field_clicked(int page, const engine::FormWidgetInfo& widget) {
+  if (!form_edits_allowed_) {
+    show_transient(tr("이 문서는 폼 채우기가 허용되지 않습니다"));
+    return;
+  }
+  if (widget.read_only) {
+    show_transient(tr("읽기 전용 칸입니다: %1").arg(QString::fromStdString(widget.ref.name)));
+    return;
+  }
+  statusBar()->showMessage(tr("폼 · %1").arg(QString::fromStdString(widget.ref.name)), 4000);
+  switch (widget.type) {
+    case engine::FieldType::kText:
+      view_->open_form_editor(page, widget);
+      break;
+    case engine::FieldType::kCheckBox:
+      run_form_command(std::make_shared<edit::SetFormCheckedCommand>(page, widget.ref, !widget.checked));
+      break;
+    case engine::FieldType::kRadio:
+      if (!widget.checked) run_form_command(std::make_shared<edit::SetFormCheckedCommand>(page, widget.ref, true));
+      break;
+    case engine::FieldType::kComboBox:
+    case engine::FieldType::kListBox:
+      show_form_choice_menu(page, widget);
+      break;
+    default:
+      show_transient(tr("이 칸은 채울 수 없습니다"));
+      break;
+  }
+}
+
+void MainWindow::show_form_choice_menu(int page, const engine::FormWidgetInfo& widget) {
+  QMenu menu(this);
+  menu.setObjectName(QStringLiteral("form_choice_menu"));
+  for (int i = 0; i < static_cast<int>(widget.options.size()); ++i) {
+    QAction* action = menu.addAction(QString::fromStdString(widget.options[static_cast<std::size_t>(i)]));
+    action->setCheckable(true);
+    action->setChecked(std::find(widget.selected.begin(), widget.selected.end(), i) != widget.selected.end());
+    connect(action, &QAction::triggered, this, [this, page, widget, i] {
+      std::vector<int> indices{i};
+      if (widget.multi_select) {  // 다중 선택: 누른 항목만 켜고 끈다
+        indices = widget.selected;
+        if (auto it = std::find(indices.begin(), indices.end(), i); it != indices.end()) {
+          indices.erase(it);
+        } else {
+          indices.push_back(i);
+        }
+      }
+      choose_form_option(page, widget.ref, std::move(indices));
+    });
+  }
+  if (widget.editable_combo) {
+    menu.addSeparator();
+    QAction* typed = menu.addAction(tr("직접 입력…"));
+    connect(typed, &QAction::triggered, this, [this, page, widget] { view_->open_form_editor(page, widget); });
+  }
+  const QRectF rect = view_->page_rect_to_viewport(page, widget.rect);
+  menu.exec(view_->viewport()->mapToGlobal(rect.bottomLeft().toPoint()));
+}
+
+bool MainWindow::choose_form_option(int page, const engine::FieldRef& ref, std::vector<int> indices) {
+  if (!form_edits_allowed_ || !view_->has_document()) return false;
+  std::sort(indices.begin(), indices.end());
+  run_form_command(std::make_shared<edit::SetFormChoiceCommand>(page, ref, std::move(indices)));
+  return true;
+}
+
+void MainWindow::on_form_text_committed(int page, const engine::FormWidgetInfo& widget, const QString& text) {
+  if (!form_edits_allowed_) return;
+  const std::string value = text.normalized(QString::NormalizationForm_C).toStdString();  // 한글은 NFC 로 (#45 와 같다)
+  if (value == widget.value) return;  // 바뀌지 않았으면 Command 를 만들지 않는다
+  run_form_command(std::make_shared<edit::SetFormTextCommand>(page, widget.ref, value));
+}
+
+void MainWindow::run_form_command(std::shared_ptr<edit::Command> command) {
+  pending_form_commands_.push_back(std::move(command));
+  flush_form_commands();
+}
+
+void MainWindow::flush_form_commands() {
+  // 하나씩 순서대로: 앞 Command 가 끝나면(state_changed) 다음을 보낸다
+  if (pending_form_commands_.empty() || edit_->busy() || saving_) return;
+  auto command = std::move(pending_form_commands_.front());
+  pending_form_commands_.pop_front();
+  if (edit_->run(command)) {
+    form_in_flight_ = true;
+  } else {
+    pending_form_commands_.clear();  // 문서 없음: 버린다
+  }
+}
+
+void MainWindow::settle_form_edits() {
+  view_->commit_form_editor();
+  // 폼 편집만 기다린다 (다른 편집이 바쁜 경우는 호출자가 기존 규칙대로 "잠시 후" 안내)
+  if (pending_form_commands_.empty() && !form_in_flight_) return;
+  // 폼 Command 는 수 ms 다. 끝날 때까지 이벤트를 돌리며 기다린다 (상한 5초)
+  QEventLoop loop;
+  QTimer timeout;
+  timeout.setSingleShot(true);
+  connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+  const auto check = [this, &loop] {
+    if (pending_form_commands_.empty() && !form_in_flight_) loop.quit();
+  };
+  const QMetaObject::Connection connection = connect(edit_, &EditController::state_changed, &loop, check, Qt::QueuedConnection);
+  timeout.start(5000);
+  QTimer::singleShot(0, &loop, check);
+  loop.exec(QEventLoop::ExcludeUserInputEvents);
+  disconnect(connection);
+}
+
+bool MainWindow::paste_image() {
+  if (!content_edits_allowed_ || !view_->has_document()) return false;
+  const QMimeData* mime = QApplication::clipboard()->mimeData();
+  const int page = std::max(0, view_->current_page());
+  const engine::PageSize size = session_.handle().info().page_sizes.at(static_cast<std::size_t>(page));
+  const onpdf::Point center{size.width / 2, size.height / 2};
+  if (mime != nullptr && mime->hasImage()) {
+    const QImage image = qvariant_cast<QImage>(mime->imageData());
+    if (!image.isNull()) return add_image(image, page, center, true);
+  }
+  if (mime != nullptr && mime->hasUrls()) {
+    for (const QUrl& url : mime->urls()) {
+      const QString path = url.toLocalFile();
+      if (looks_like_image_file(path)) return add_image_file(path, page, center, true);
+    }
+  }
+  show_transient(tr("클립보드에 이미지가 없습니다"));
+  return false;
+}
+
+void MainWindow::on_text_width_requested(int page, const QString& box, double left_x, double width) {
+  if (!text_edits_allowed_ || text_font_ == nullptr) return;  // 재배치에 글꼴이 필요하다
+  auto selected = view_->selected_text_box();
+  if (!selected || selected->box != box.toStdString()) return;
+  if (!warn_signature_once()) return;
+  std::optional<double> origin_x;
+  if (std::abs(left_x - selected->bbox.x) >= 0.5) origin_x = left_x;
+  edit_->run(std::make_shared<edit::ReplaceTextBoxCommand>(page, box.toStdString(), text_font_, std::nullopt, std::nullopt,
+                                                           std::nullopt, width, origin_x));
+}
+
+void MainWindow::on_object_resize_requested(int page, const QString& id, onpdf::Rect before, onpdf::Rect after) {
+  if (!content_edits_allowed_) return;
+  if (has_foreign_object({id.toStdString()})) return explain_locked_object();
+  if (!warn_signature_once()) return;
+  edit_->run(std::make_shared<edit::ResizeObjectCommand>(page, id.toStdString(), before, after));
+}
+
+void MainWindow::explain_locked_object() {
+  // 다른 프로그램이 만든 이미지를 옮기면 PDFium 이 그 쪽 내용 스트림을 통째로 다시 써 글자 모양·색이 바뀔 수 있다 (#57)
+  statusBar()->showMessage(tr("문서에 원래 있던 이미지는 옮기거나 크기를 바꾸거나 지울 수 없습니다 — 쪽 내용이 손상될 수 있습니다"), 6000);
+}
+
+bool MainWindow::delete_selected_text_box() {
+  // 텍스트 상자·이미지 공용: 떼어 문서가 보관 (재생성이 아니라 빈 줄·옛 객체 문제가 없다, #49)
+  auto selected = view_->selected_object();
+  if (!selected || !content_edits_allowed_) return false;
+  if (view_->selected_object_locked()) {
+    explain_locked_object();
+    return false;
+  }
+  if (!warn_signature_once()) return false;
+  if (!edit_->run(std::make_shared<edit::RemoveObjectsCommand>(selected->page, selected->ids))) return false;
+  view_->clear_text_box_selection();
+  return true;
+}
+
+void MainWindow::on_text_edit_requested(int, const DocumentView::SelectedTextBox& box) {
+  if (!text_edits_allowed_ || text_font_ == nullptr) return;
+  for (;;) {
+    AnnotationDialog dialog(tr("텍스트 수정"), QString::fromStdString(box.text), this);
+    dialog.setObjectName(QStringLiteral("text_input"));
+    if (dialog.exec() != QDialog::Accepted) return;
+    const QString text = dialog.text().normalized(QString::NormalizationForm_C);
+    if (text.trimmed().isEmpty() || text.toStdString() == box.text) return;  // 빈 내용·같은 내용은 무시 (삭제는 Delete)
+    const std::u32string missing = text_font_->missing(text.toUtf8().toStdString());
+    if (missing.empty()) {
+      replace_selected_text(text, std::nullopt, std::nullopt);
+      return;
+    }
+    QMessageBox warn(QMessageBox::Warning, tr("텍스트"),
+                     tr("글꼴에 없는 글자가 있습니다: %1\n다른 글자로 바꿔 주세요.")
+                         .arg(QString::fromStdU32String(missing.substr(0, 10))),
+                     QMessageBox::Ok, this);
+    warn.setObjectName(QStringLiteral("text_missing_glyphs"));
+    warn.exec();
+  }
+}
+
+bool MainWindow::replace_selected_text(std::optional<QString> utf8, std::optional<double> size, std::optional<engine::Color> color) {
+  auto selected = view_->selected_text_box();
+  if (!selected || !text_edits_allowed_ || text_font_ == nullptr) return false;
+  if (!warn_signature_once()) return false;
+  std::optional<std::string> text;
+  if (utf8) text = utf8->toUtf8().toStdString();
+  if (color) color->a = 255;
+  return edit_->run(std::make_shared<edit::ReplaceTextBoxCommand>(selected->page, selected->box, text_font_, text, size, color));
 }
 
 void MainWindow::on_ink_requested(int page, const std::vector<onpdf::Point>& points, onpdf::Rect bbox) {
@@ -868,7 +1381,8 @@ void MainWindow::on_annotation_selected(bool has, const engine::AnnotationInfo& 
 
 bool MainWindow::delete_selected_annotation() {
   auto selected = view_->selected_annotation();
-  if (!selected || !delete_annotation_action_->isEnabled()) return false;
+  if (!selected) return delete_selected_text_box();  // 툴바 "주석 삭제" 는 선택한 텍스트 상자에도 동작한다
+  if (!delete_annotation_action_->isEnabled()) return false;
   if (!warn_signature_once()) return false;
   const int page = view_->selected_annotation_page();
   if (!edit_->run(std::make_shared<edit::RemoveAnnotationCommand>(page, selected->id))) return false;
@@ -1174,6 +1688,16 @@ void MainWindow::on_document_changed(const onpdf::engine::ChangeSet& change) {
     reset_search();
     on_search_query(search_bar_->query(), search_bar_->options());
   }
+  if (last_image_command_ && !last_image_command_->object_id().empty() && pending_image_) {
+    // 방금 넣은 이미지: 선택 도구로 돌아가 그 이미지를 고른다 (목록이 새로 오면)
+    const int page = pending_image_->page;
+    const std::string id = last_image_command_->object_id();
+    pending_image_.reset();
+    last_image_command_.reset();
+    tool_actions_[0]->setChecked(true);
+    view_->set_tool(AnnotationTool::kSelect);
+    view_->select_after_refresh(page, id);
+  }
   refresh_status();
 }
 
@@ -1193,6 +1717,7 @@ bool MainWindow::save_to(const QString& path) { return start_save(path, [] {}); 
 
 bool MainWindow::start_save(const QString& path, std::function<void()> then) {
   if (!session_.has_document() || path.isEmpty()) return false;
+  settle_form_edits();  // 입력 중인 칸까지 저장한다 (#51)
   if (saving_ || edit_->busy()) {  // 몇 ms 의 창이지만 조용히 멈추지 않는다 (리뷰 I1)
     show_transient(tr("지금은 저장할 수 없습니다. 잠시 후 다시 시도하세요"));
     return false;
@@ -1211,6 +1736,7 @@ bool MainWindow::start_save(const QString& path, std::function<void()> then) {
         auto shared = std::make_shared<onpdf::Result<engine::SaveResult>>(std::move(result));
         dispatcher->post_to(self, [path, generation, then, shared](MainWindow* window) {
           window->saving_ = false;
+          QTimer::singleShot(0, window, [window] { window->flush_form_commands(); });  // 저장 중 쌓인 폼 입력 (#51)
           if (generation != window->document_generation_) return;  // 다른 문서로 바뀌었다
           if (!*shared) {
             window->update_edit_actions();
@@ -1239,6 +1765,7 @@ bool MainWindow::start_save(const QString& path, std::function<void()> then) {
 }
 
 void MainWindow::maybe_save(std::function<void()> then) {
+  settle_form_edits();  // 입력 중인 칸도 "저장하지 않은 변경" 에 들어간다 (#51)
   if (!session_.has_document() || !edit_->is_modified()) {
     then();
     return;
@@ -1318,6 +1845,7 @@ void MainWindow::on_print() {
 bool MainWindow::print_with(QPrinter& printer) {
   if (!session_.has_document() || !session_.handle().valid()) return false;
   if (print_job_ && print_job_->active()) return false;
+  settle_form_edits();  // 입력 중인 칸 값으로 인쇄한다 (#51)
   if (edit_->busy()) {  // 편집 결과(쪽 크기)가 반영되기 전의 배치로 인쇄하지 않는다 (리뷰 I6)
     show_transient(tr("편집을 반영하는 중입니다. 잠시 후 다시 인쇄하세요"));
     return false;
@@ -1722,6 +2250,16 @@ void MainWindow::dropEvent(QDropEvent* event) {
   const QList<QUrl> urls = event->mimeData()->urls();
   if (urls.isEmpty()) return;
   const QString path = urls.first().toLocalFile();
+  if (looks_like_image_file(path) && view_->has_document()) {
+    // 이미지 파일: 드롭한 자리에 놓는다 (#49). PDF 는 기존대로 연다
+    const QPointF at = view_->viewport()->mapFrom(this, event->position().toPoint());
+    if (auto hit = view_->page_point_at(at)) {
+      event->acceptProposedAction();
+      const auto [page, pt] = *hit;
+      QTimer::singleShot(0, this, [this, path, page, pt] { add_image_file(path, page, pt, true); });
+      return;
+    }
+  }
   if (!path.toLower().endsWith(QStringLiteral(".pdf"))) {
     show_transient(tr("PDF 파일만 열 수 있습니다"));
     return;

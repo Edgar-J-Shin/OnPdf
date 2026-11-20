@@ -10,6 +10,7 @@
 
 #include "onpdf/core/engine/annotation.h"
 #include "onpdf/core/engine/document_handle.h"
+#include "onpdf/core/engine/form.h"
 #include "onpdf/core/view/page_layout.h"
 #include "onpdf/core/view/tile_cache.h"
 #include "onpdf/core/view/search.h"
@@ -23,6 +24,7 @@
 #include <QElapsedTimer>
 #include <QImage>
 #include <QPoint>
+#include <QPointer>
 #include <QPointF>
 #include <QString>
 #include <QTimer>
@@ -37,13 +39,14 @@
 namespace onpdf::app {
 
 class DocumentTileSource;
+class FormFieldEditor;
 
 enum class ZoomMode { kFitWidth, kFitPage, kCustom };
 
 // 주석 도구. kSelect 는 기존 동작(텍스트 선택·링크) + 주석 선택
-enum class AnnotationTool { kSelect, kHighlight, kUnderline, kStrikeOut, kNote, kPen, kSquare, kCircle };
-constexpr int kAnnotationToolCount = 8;
-static_assert(kAnnotationToolCount == static_cast<int>(AnnotationTool::kCircle) + 1, "도구를 추가하면 수를 맞춘다");
+enum class AnnotationTool { kSelect, kHighlight, kUnderline, kStrikeOut, kNote, kPen, kSquare, kCircle, kText, kImage };
+constexpr int kAnnotationToolCount = 10;
+static_assert(kAnnotationToolCount == static_cast<int>(AnnotationTool::kImage) + 1, "도구를 추가하면 수를 맞춘다");
 // 마크업 요청: (쪽, 줄별 사각형(쪽 포인트))
 using MarkupItems = std::vector<std::pair<int, std::vector<onpdf::Rect>>>;
 
@@ -72,6 +75,57 @@ class DocumentView : public QAbstractScrollArea {
   [[nodiscard]] std::optional<engine::AnnotationInfo> selected_annotation() const;
   [[nodiscard]] int selected_annotation_page() const noexcept { return selected_annot_ ? selected_annot_->page : -1; }
   void clear_annotation_selection();
+  // ---- 텍스트 상자 (#47): OnPdf 가 넣은 텍스트 객체를 상자(마크 box) 단위로 고르고 끌어 옮긴다 ----
+  // 선택한 쪽 객체 (#47 텍스트 상자 · #49 이미지). 텍스트는 box(상자 id) 로, 이미지는 id 로 가리킨다 (box = id)
+  struct SelectedObject {
+    engine::ObjectKind kind = engine::ObjectKind::kText;
+    int page = -1;
+    std::string box;               // 텍스트: 상자 id / 이미지: 객체 id (마크 없는 기존 이미지는 "#obj<n>")
+    std::vector<std::string> ids;  // 텍스트: 줄 순서 / 이미지: {id}
+    onpdf::Rect bbox;              // 쪽 포인트 (텍스트는 줄 bbox 합집합)
+    double font_size = 0.0;        // 텍스트
+    engine::Color color;
+    int lines = 0;
+    std::string text;              // 줄을 '\n' 으로 이은 원문
+    int pixel_width = 0;           // 이미지
+    int pixel_height = 0;
+    std::string filter;
+    bool marked = true;            // 이미지: 기존(다른 프로그램) 이미지면 false
+  };
+  using SelectedTextBox = SelectedObject;
+  [[nodiscard]] const std::vector<engine::TextObjectInfo>* text_objects(int page) const;  // 캐시에 있을 때만
+  [[nodiscard]] const std::vector<engine::PageObjectInfo>* page_objects(int page) const;   // 캐시에 있을 때만
+  // 텍스트 상자가 선택돼 있을 때만 (이미지 선택은 selected_object)
+  [[nodiscard]] std::optional<SelectedObject> selected_text_box() const {
+    if (selected_text_ && selected_text_->kind == engine::ObjectKind::kText) return selected_text_;
+    return std::nullopt;
+  }
+  [[nodiscard]] std::optional<SelectedObject> selected_object() const { return selected_text_; }
+  // 문서에 원래 있던(마크 없는) 이미지는 선택만 된다 — 이동·크기·삭제는 그 스트림 전체를 PDFium 이 다시 써
+  // Type3·자간·선 폭·CMYK 등을 잃으므로 막는다 (#57, qpdf 수술로 바꿀 때까지)
+  [[nodiscard]] bool selected_object_locked() const {
+    return selected_text_ && selected_text_->kind == engine::ObjectKind::kImage && !selected_text_->marked;
+  }
+  // 편집(추가) 뒤 새 목록이 오면 이 객체를 고른다 (이미지 추가 직후 선택)
+  void select_after_refresh(int page, const std::string& key);
+  void clear_text_box_selection();
+
+  // ---- 폼 채우기 (#51) ----
+  [[nodiscard]] const std::vector<engine::FormWidgetInfo>* form_widgets(int page) const;
+  // 채울 수 있을 때(권한) 칸을 옅게 강조한다. 클릭 신호는 권한과 무관하게 보낸다 (수신자가 안내)
+  void set_form_fillable(bool fillable);
+  [[nodiscard]] bool form_fillable() const noexcept { return form_fillable_; }
+  // 텍스트 칸 위에 오버레이 편집기를 연다 (열려 있던 편집기는 먼저 확정)
+  void open_form_editor(int page, const engine::FormWidgetInfo& widget);
+  void commit_form_editor();  // 열려 있으면 확정 (저장·다른 문서 열기·인쇄 전에)
+  void cancel_form_editor();
+  [[nodiscard]] FormFieldEditor* form_editor() const;
+  [[nodiscard]] QRectF page_rect_to_viewport(int page, const onpdf::Rect& r) const;
+  // 내용 수정 권한·바쁨에 따라 상자 이동 드래그·커서를 막는다 (선택·정보 표시는 그대로). 썸네일 set_editable 과 같은 역할
+  void set_text_editable(bool editable);
+  // 화살표 이동은 권한만 본다: 바쁜 동안 누른 키는 MainWindow 가 모아 두었다가 실행한다 (#49)
+  void set_nudge_enabled(bool enabled) { nudge_enabled_ = enabled; }
+  [[nodiscard]] bool text_editable() const noexcept { return text_editable_; }
 
   void set_zoom_mode(ZoomMode mode);
   [[nodiscard]] ZoomMode zoom_mode() const noexcept { return mode_; }
@@ -130,13 +184,27 @@ class DocumentView : public QAbstractScrollArea {
   // ---- 주석 (MainWindow 가 Command 로 바꾼다) ----
   void markup_requested(onpdf::engine::AnnotationKind kind, const onpdf::app::MarkupItems& items);
   void note_requested(int page, onpdf::Point pt);  // 쪽 포인트 (쪽 안으로 클램프됨)
+  void text_requested(int page, onpdf::Point pt);  // 텍스트 상자 왼쪽 위 (쪽 포인트, 클램프됨) — #45
   void ink_requested(int page, const std::vector<onpdf::Point>& points, onpdf::Rect bbox);
   void shape_requested(int page, onpdf::engine::AnnotationKind kind, onpdf::Rect rect);  // 쪽 포인트, 4pt 이상
   void annotation_selected(bool has, const onpdf::engine::AnnotationInfo& info);
   // 편집 뒤 같은 NM 을 다시 골랐다 (사용자 조작이 아니므로 상태 표시줄 안내를 덮지 않는다)
   void annotation_reselected(const onpdf::engine::AnnotationInfo& info);
   void annotation_delete_requested(int page, const QString& id);
+  // ---- 텍스트 상자 (#47) ----
+  void text_box_selected(bool has, const SelectedTextBox& box);
+  void text_box_reselected(const SelectedTextBox& box);  // 편집 뒤 같은 상자를 조용히 다시 골랐다
+  void text_move_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta);  // 쪽 포인트
+  void text_delete_requested(int page, const QString& box);
+  void text_edit_requested(int page, const SelectedTextBox& box);  // 두 번 클릭
+  void image_requested(int page, onpdf::Point pt);                   // 이미지 도구 클릭 (쪽 포인트, 클램프됨) — #49
+  void object_resize_requested(int page, const QString& id, onpdf::Rect before, onpdf::Rect after);  // 이미지 핸들
+  void text_width_requested(int page, const QString& box, double left_x, double width);              // 텍스트 상자 폭 핸들
+  void object_nudge_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta);    // 화살표 키 (쪽 포인트)
+  void locked_object_edit_attempted();  // 기존 이미지를 옮기거나 지우려 했다 (#57) — 수신자가 안내
   void annotation_edit_requested(int page, const onpdf::engine::AnnotationInfo& info);
+  void form_field_clicked(int page, const onpdf::engine::FormWidgetInfo& widget);              // 선택 도구로 칸 클릭 (#51)
+  void form_text_committed(int page, const onpdf::engine::FormWidgetInfo& widget, const QString& text);  // 오버레이 확정
 
  protected:
   void paintEvent(QPaintEvent* event) override;
@@ -181,6 +249,12 @@ class DocumentView : public QAbstractScrollArea {
   void on_annotations(int page, int generation, std::shared_ptr<const std::vector<engine::AnnotationInfo>> list,
                       bool cancelled);
   [[nodiscard]] const engine::AnnotationInfo* annotation_at(int page, onpdf::Point pt) const;  // 위에 그려진 것 먼저
+  void request_text_boxes();  // 주석과 같은 범위의 텍스트 상자 목록
+  void on_text_boxes(int page, int generation, std::shared_ptr<const std::vector<engine::PageObjectInfo>> list, bool cancelled);
+  [[nodiscard]] std::string text_box_id_at(int page, onpdf::Point pt) const;  // 뒤(위)에 있는 것 먼저. 없으면 빈 문자열
+  [[nodiscard]] std::optional<SelectedTextBox> text_box_at(int page, onpdf::Point pt) const;
+  [[nodiscard]] std::optional<SelectedTextBox> text_box_by_id(int page, const std::string& box) const;
+  void cancel_text_drag();
   [[nodiscard]] onpdf::Point clamp_to_page(int page, onpdf::Point pt) const;
   [[nodiscard]] onpdf::Point page_point_on(int page, QPointF viewport_pos) const;  // 특정 쪽 좌표로 투영 (쪽 밖도 음수·초과로)
   void update_page(int page);  // 그 쪽 영역만 다시 그린다
@@ -217,7 +291,7 @@ class DocumentView : public QAbstractScrollArea {
   std::unordered_map<int, std::shared_ptr<const view::PageTextIndex>> text_cache_;
   std::unordered_map<int, engine::TaskHandle> text_requested_;  // 쪽 → 취소 핸들
   view::TextSelection selection_;
-  enum class Drag { kNone, kText, kMaybeLink, kInk, kShape } drag_ = Drag::kNone;
+  enum class Drag { kNone, kText, kMaybeLink, kInk, kShape, kMoveText, kResize } drag_ = Drag::kNone;
   // 주석 (메인 스레드 전용)
   AnnotationTool tool_ = AnnotationTool::kSelect;
   std::unordered_map<int, std::shared_ptr<const std::vector<engine::AnnotationInfo>>> annot_cache_;
@@ -231,6 +305,25 @@ class DocumentView : public QAbstractScrollArea {
   std::string reselect_id_;
   int ink_page_ = -1;
   std::vector<onpdf::Point> ink_points_;  // 그리는 중인 펜 스트로크 (쪽 포인트)
+  // 텍스트 상자 (#47)
+  struct ObjectCache {
+    std::vector<engine::PageObjectInfo> objects;  // 쪽 객체 순서 (z)
+    std::vector<engine::TextObjectInfo> texts;    // 텍스트만 (기존 접근자 text_objects 용)
+  };
+  std::unordered_map<int, std::shared_ptr<const ObjectCache>> text_box_cache_;
+  int resize_handle_ = -1;           // 이미지: 0 좌상 · 1 우상 · 2 좌하 · 3 우하 / 텍스트 상자: 4 왼쪽 · 5 오른쪽 (#49)
+  onpdf::Rect resize_preview_{};     // 크기 조절 미리보기 (쪽 포인트)
+  [[nodiscard]] int handle_at(QPointF viewport_pos) const;  // 선택한 이미지의 핸들 (없으면 -1)
+  [[nodiscard]] onpdf::Rect resized_rect(onpdf::Point pt, bool keep_aspect) const;
+  std::unordered_map<int, engine::TaskHandle> text_box_requested_;
+  std::optional<SelectedTextBox> selected_text_;
+  bool text_editable_ = false;
+  bool nudge_enabled_ = false;
+  int reselect_text_page_ = -1;
+  std::string reselect_text_box_;
+  bool reselect_announce_ = false;  // select_after_refresh: 조용한 재선택이 아니라 새 선택으로 알린다 (상태 표시줄)
+  onpdf::Point move_start_pt_{};  // 이동 드래그 시작점 (쪽 포인트)
+  onpdf::Point move_delta_{};
   int shape_page_ = -1;                   // 그리는 중인 도형 (쪽 포인트)
   onpdf::Point shape_anchor_{}, shape_corner_{};
   [[nodiscard]] onpdf::Rect shape_rect() const noexcept;
@@ -242,6 +335,26 @@ class DocumentView : public QAbstractScrollArea {
   QPointF last_drag_pos_;
   QElapsedTimer click_timer_;
   int click_count_ = 0;
+
+  // 폼 (#51): 보이는 쪽 ±1 위젯 스냅샷, 오버레이 편집기, Tab 이동 대상
+  void request_form_widgets();
+  void on_form_widgets(int page, int generation, std::shared_ptr<const std::vector<engine::FormWidgetInfo>> list,
+                       bool cancelled);
+  [[nodiscard]] const engine::FormWidgetInfo* widget_at(int page, onpdf::Point pt) const;
+  void paint_form(QPainter& painter, int page, const QRectF& page_logical);
+  void place_form_editor();
+  void on_form_editor_done(bool commit, int advance);
+  void go_to_adjacent_text_widget(int page, const engine::FieldRef& from, bool backward);
+  void open_pending_form_editor();
+  std::unordered_map<int, std::shared_ptr<const std::vector<engine::FormWidgetInfo>>> form_cache_;
+  std::unordered_map<int, engine::TaskHandle> form_requested_;
+  bool form_fillable_ = false;
+  QPointer<FormFieldEditor> form_editor_;
+  struct PendingFormOpen {
+    int page = -1;
+    bool backward = false;  // 그 쪽의 마지막(true)·첫(false) 텍스트 칸
+  };
+  std::optional<PendingFormOpen> pending_form_open_;
   QPointF last_click_pos_;
   static constexpr int kTextKeepPages = 5;
   const view::SearchSession* search_ = nullptr;

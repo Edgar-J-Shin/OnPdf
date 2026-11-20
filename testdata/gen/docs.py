@@ -273,6 +273,122 @@ def make_form_acro() -> bytes:
     return w.write(root=root, info=info, file_id=g.file_id_for("form-acro.pdf"))
 
 
+# ----------------------------------------------------------------- 8b. form-fields (#51)
+
+
+def make_form_fields() -> bytes:
+    """폼 채우기 테스트: 한 줄·여러 줄·읽기 전용·MaxLen 텍스트, 체크박스, 기본 선택 없는 라디오, 편집 가능 콤보,
+    다중 선택 목록. 2쪽(/Rotate 90)에 이름 필드의 둘째 위젯과 서명 필드."""
+    w = PdfWriter()
+    pages = w.reserve()
+    helv = g.simple_font(w)
+    zadb = w.add(b"<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>")
+    p1, p2 = w.reserve(), w.reserve()
+    res_font = b"<< /Font << /Helv %d 0 R /ZaDb %d 0 R >> >>" % (helv, zadb)
+    mk = b"/MK << /BG [0.95 0.95 1] /BC [0 0 0] >>"
+
+    def ap(width: float, height: float, *ops: str) -> int:
+        return w.stream(b"/Type /XObject /Subtype /Form /BBox [0 0 %s %s] /Resources %s"
+                        % (fmt(width).encode(), fmt(height).encode(), res_font), content(*ops))
+
+    def text_ap(width: float, height: float, value: str = "") -> int:
+        ops = ["0.95 0.95 1 rg 0 0 %s %s re f" % (fmt(width), fmt(height)),
+               "0 G 0.5 w 0.25 0.25 %s %s re S" % (fmt(width - 0.5), fmt(height - 0.5))]
+        if value:
+            ops.append("/Tx BMC BT /Helv 12 Tf 0 g 3 %s Td %s Tj ET EMC" % (fmt(height / 2 - 4), g.lit(value).decode("latin-1")))
+        return ap(width, height, *ops)
+
+    def rect(x0: float, y0: float, x1: float, y1: float) -> bytes:
+        return b"/Rect [%s %s %s %s]" % tuple(fmt(v).encode() for v in (x0, y0, x1, y1))
+
+    fields: list[int] = []
+    p1_annots: list[int] = []
+    p2_annots: list[int] = []
+    # 이름: 부모 필드 + 위젯 2개 (1쪽, 2쪽) — 같은 값을 공유한다
+    name = w.reserve()
+    n1 = w.add(b"<< /Type /Annot /Subtype /Widget /Parent %d 0 R %s /F 4 /P %d 0 R %s /AP << /N %d 0 R >> >>"
+               % (name, rect(150, 690, 350, 714), p1, mk, text_ap(200, 24, "Hong")))
+    n2 = w.add(b"<< /Type /Annot /Subtype /Widget /Parent %d 0 R %s /F 4 /P %d 0 R %s /AP << /N %d 0 R >> >>"
+               % (name, rect(100, 500, 300, 524), p2, mk, text_ap(200, 24, "Hong")))
+    w.set(name, b"<< /FT /Tx /T (name) /V (Hong) /DA (/Helv 12 Tf 0 g) /Kids [%d 0 R %d 0 R] >>" % (n1, n2))
+    fields.append(name)
+    p1_annots.append(n1)
+    p2_annots.append(n2)
+
+    def text_field(title: str, r: tuple[float, float, float, float], extra: bytes = b"", value: str = "") -> int:
+        v = b" /V " + g.lit(value) if value else b""
+        num = w.add(b"<< /Type /Annot /Subtype /Widget /FT /Tx /T %s%s /DA (/Helv 12 Tf 0 g) %s /F 4 /P %d 0 R %s%s "
+                    b"/AP << /N %d 0 R >> >>"
+                    % (g.lit(title), v, rect(*r), p1, mk, extra, text_ap(r[2] - r[0], r[3] - r[1], value)))
+        fields.append(num)
+        p1_annots.append(num)
+        return num
+
+    text_field("address", (150, 610, 450, 670), b" /Ff 4096")
+    text_field("empid", (150, 570, 300, 594), b" /Ff 1", "A-1024")
+    text_field("zip", (150, 530, 230, 554), b" /MaxLen 5")
+    # 동의 (체크박스, 꺼짐)
+    on = ap(18, 18, "0 G 1 w 0.5 0.5 17 17 re S", "0 g BT /ZaDb 14 Tf 3 3 Td (4) Tj ET")
+    off = ap(18, 18, "0 G 1 w 0.5 0.5 17 17 re S")
+    agree = w.add(b"<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /V /Off /AS /Off /DA (/ZaDb 0 Tf 0 g) %s /F 4 "
+                  b"/P %d 0 R /MK << /CA (4) >> /AP << /N << /Yes %d 0 R /Off %d 0 R >> >> >>"
+                  % (rect(150, 490, 168, 508), p1, on, off))
+    fields.append(agree)
+    p1_annots.append(agree)
+    # 성별 (라디오 3개, 기본 선택 없음, NoToggleToOff)
+    ring = "0 G 1 w 8 1 m 11.9 1 15 4.1 15 8 c 15 11.9 11.9 15 8 15 c 4.1 15 1 11.9 1 8 c 1 4.1 4.1 1 8 1 c s"
+    dot = "0 g 8 4 m 10.2 4 12 5.8 12 8 c 12 10.2 10.2 12 8 12 c 5.8 12 4 10.2 4 8 c 4 5.8 5.8 4 8 4 c f"
+    r_on, r_off = ap(16, 16, ring, dot), ap(16, 16, ring)
+    gender = w.reserve()
+    kids = []
+    for i, state in enumerate(("M", "F", "X")):
+        x = 150 + i * 80
+        k = w.add(b"<< /Type /Annot /Subtype /Widget /Parent %d 0 R /AS /Off %s /F 4 /P %d 0 R /MK << /CA (l) >> "
+                  b"/AP << /N << /%s %d 0 R /Off %d 0 R >> >> >>"
+                  % (gender, rect(x, 450, x + 16, 466), p1, state.encode(), r_on, r_off))
+        kids.append(k)
+        p1_annots.append(k)
+    w.set(gender, b"<< /FT /Btn /Ff 49152 /T (gender) /DA (/ZaDb 0 Tf 0 g) /Kids [%s] >>"
+          % b" ".join(b"%d 0 R" % k for k in kids))
+    fields.append(gender)
+    # 도시 (편집 가능 콤보)
+    city = w.add(b"<< /Type /Annot /Subtype /Widget /FT /Ch /Ff 393216 /T (city) /V (Seoul) "
+                 b"/Opt [(Seoul) (Busan) (Daegu)] /DA (/Helv 12 Tf 0 g) %s /F 4 /P %d 0 R %s /AP << /N %d 0 R >> >>"
+                 % (rect(150, 400, 310, 424), p1, mk, text_ap(160, 24, "Seoul")))
+    fields.append(city)
+    p1_annots.append(city)
+    # 과목 (다중 선택 목록, 선택 없음)
+    subjects = w.add(b"<< /Type /Annot /Subtype /Widget /FT /Ch /Ff 2097152 /T (subjects) "
+                     b"/Opt [(Math) (Science) (Art) (Music)] /DA (/Helv 12 Tf 0 g) %s /F 4 /P %d 0 R %s "
+                     b"/AP << /N %d 0 R >> >>" % (rect(150, 300, 310, 380), p1, mk, text_ap(160, 80)))
+    fields.append(subjects)
+    p1_annots.append(subjects)
+    # 2쪽 서명 칸 (채우지 않는다)
+    sig = w.add(b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (signature) %s /F 4 /P %d 0 R >>"
+                % (rect(100, 400, 300, 450), p2))
+    fields.append(sig)
+    p2_annots.append(sig)
+
+    c1 = w.stream(b"", content(
+        _label(72, 740, 18, "Form fields test"),
+        _label(72, 696, 12, "Name:"), _label(72, 650, 12, "Address:"), _label(72, 576, 12, "Employee:"),
+        _label(72, 536, 12, "Zip:"), _label(72, 494, 12, "Agree:"), _label(72, 454, 12, "Gender:"),
+        _label(170, 454, 12, "M"), _label(250, 454, 12, "F"), _label(330, 454, 12, "X"),
+        _label(72, 406, 12, "City:"), _label(72, 366, 12, "Subjects:"),
+    ))
+    g.page(w, pages, g.LETTER, c1, b"<< /Font << /F1 %d 0 R >> >>" % helv, annots=p1_annots, num=p1)
+    c2 = w.stream(b"", content(_label(72, 740, 18, "Page 2 (rotated)"), _label(30, 506, 12, "Name:"),
+                               _label(30, 420, 12, "Sign:")))
+    g.page(w, pages, g.LETTER, c2, b"<< /Font << /F1 %d 0 R >> >>" % helv, rotate=90, annots=p2_annots, num=p2)
+    g.pages_tree(w, pages, [p1, p2])
+    acro = (b" /AcroForm << /Fields [" + b" ".join(b"%d 0 R" % f for f in fields)
+            + b"] /DR << /Font << /Helv %d 0 R /ZaDb %d 0 R >> >> /DA (/Helv 0 Tf 0 g) /NeedAppearances false >>"
+            % (helv, zadb))
+    root = g.catalog(w, pages, acro)
+    info = g.info_dict(w, "Form fields")
+    return w.write(root=root, info=info, file_id=g.file_id_for("form-fields.pdf"))
+
+
 # ----------------------------------------------------------------- 9. bookmarks
 
 
@@ -595,6 +711,12 @@ def make_signed_dummy() -> bytes:
     root = g.catalog(w, pages, b" /AcroForm << /Fields [%d 0 R] /SigFlags 3 >>" % widget)
     info = g.info_dict(w, "Signed document (dummy signature)")
     return w.write(root=root, info=info, file_id=g.file_id_for("signed-dummy.pdf"))
+
+
+def make_perm_modify_only() -> bytes:
+    """내용 수정(비트 4)만 허용, 주석(비트 6)·조립 없음 — 텍스트 도구 게이트 테스트 (#45)."""
+    return make_simple(encrypt=g.Encryption("", "owner", permissions=-3896), title="Permissions: modify contents only",
+                       file_id_name="perm-modify-only.pdf")
 
 
 def make_perm_assemble_only() -> bytes:

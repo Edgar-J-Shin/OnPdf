@@ -41,6 +41,15 @@ onpdf_add_test(onpdf_unit_tests
   unit/insert_pages_test.cpp
   unit/annotation_test.cpp
   unit/annotation_commands_test.cpp
+  unit/font_face_test.cpp
+  unit/text_layout_test.cpp
+  unit/add_text_command_test.cpp
+  unit/text_object_test.cpp
+  unit/text_box_commands_test.cpp
+  unit/page_object_test.cpp
+  unit/form_test.cpp
+  unit/object_commands_test.cpp
+  unit/form_commands_test.cpp
   unit/page_ranges_test.cpp
   unit/qpdf_tools_test.cpp
   unit/save_test.cpp
@@ -54,6 +63,7 @@ onpdf_add_test(onpdf_render_tests
   render/tile_stitch_test.cpp
 )
 target_compile_definitions(onpdf_render_tests PRIVATE ONPDF_TEST_GLOBAL_PDFIUM=1)
+target_link_libraries(onpdf_render_tests PRIVATE onpdf::edit)
 
 # PdfiumWorker 가 자기 스레드에서 라이브러리를 만들므로 전역 환경 없이 분리한다
 # 왕복: 열기 → 저장 → 다시 열기 (manifest 전체)
@@ -81,7 +91,48 @@ if(ONPDF_BUILD_APP)
     app/edit_test.cpp
     app/annotation_test.cpp
     app/merge_split_test.cpp
+    app/text_tool_test.cpp
+    app/image_tool_test.cpp
+    app/form_tool_test.cpp
   )
   target_link_libraries(onpdf_app_tests PRIVATE onpdf_app_lib)
   set_tests_properties(onpdf_app_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
+# ---- Spike (#43): 한글 폰트 임베딩. 제품 코드가 아니며 PDFium 헤더를 직접 쓴다. ctest 에는 넣지 않는다 ----
+if(ONPDF_BUILD_SPIKES)
+  add_executable(onpdf_spike_korean_text spike/korean_text_spike.cpp spike/image_object_spike.cpp spike/form_fill_spike.cpp)
+  target_link_libraries(onpdf_spike_korean_text PRIVATE onpdf::core GTest::gtest GTest::gtest_main pdfium)
+  target_compile_definitions(onpdf_spike_korean_text PRIVATE ONPDF_TESTDATA_DIR="${ONPDF_TESTDATA_DIR}" ONPDF_TEST_GLOBAL_PDFIUM=1)
+  onpdf_set_warnings(onpdf_spike_korean_text)
+  onpdf_set_runtime_rpath(onpdf_spike_korean_text)
+
+  # Spike (#55): 기존 텍스트 줄 단위 수정 — 코퍼스 측정 도구(gtest 아님)
+  add_executable(onpdf_spike_text_edit spike/text_edit_spike.cpp spike/text_edit_surgery.cpp)
+  # qpdf 는 onpdf_core 가 이미 링크한다(정적). 헤더 경로만 가져온다 — 링크 인터페이스의 맨이름 z;jpeg 를 피하려고
+  find_package(qpdf CONFIG REQUIRED)
+  if(TARGET qpdf::libqpdf)
+    set(_spike_qpdf qpdf::libqpdf)
+  else()
+    set(_spike_qpdf qpdf::libqpdf_static)
+  endif()
+  get_target_property(_spike_qpdf_inc ${_spike_qpdf} INTERFACE_INCLUDE_DIRECTORIES)
+  target_include_directories(onpdf_spike_text_edit PRIVATE ${_spike_qpdf_inc})
+  target_link_libraries(onpdf_spike_text_edit PRIVATE onpdf::core pdfium)
+  onpdf_set_warnings(onpdf_spike_text_edit)
+  onpdf_set_runtime_rpath(onpdf_spike_text_edit)
+
+  # Spike (#55 후속): M3 객체 편집의 재생성 손실 — 제품 엔진으로 측정
+  add_executable(onpdf_spike_m3_regen spike/m3_regen_spike.cpp)
+  target_link_libraries(onpdf_spike_m3_regen PRIVATE onpdf::core)
+  onpdf_set_warnings(onpdf_spike_m3_regen)
+  onpdf_set_runtime_rpath(onpdf_spike_m3_regen)
+
+  # Spike (#59): 미참조 폰트 정리(qpdf 재작성)·OTF/TTC 서브셋 임베딩 — core+edit, qpdf 헤더 직접
+  add_executable(onpdf_spike_font_cleanup spike/font_cleanup_spike.cpp)
+  target_include_directories(onpdf_spike_font_cleanup PRIVATE ${_spike_qpdf_inc})
+  target_link_libraries(onpdf_spike_font_cleanup PRIVATE onpdf::core onpdf::edit GTest::gtest GTest::gtest_main)
+  target_compile_definitions(onpdf_spike_font_cleanup PRIVATE ONPDF_TESTDATA_DIR="${ONPDF_TESTDATA_DIR}" ONPDF_TEST_GLOBAL_PDFIUM=1)
+  onpdf_set_warnings(onpdf_spike_font_cleanup)
+  onpdf_set_runtime_rpath(onpdf_spike_font_cleanup)
 endif()

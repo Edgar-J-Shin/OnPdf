@@ -2,6 +2,7 @@
 
 #include "onpdf/core/bitmap.h"
 #include "onpdf/core/engine/editable_document.h"
+#include "onpdf/core/engine/form.h"
 #include "onpdf/core/engine/pdfium_handles.h"
 #include "onpdf/core/engine/render_types.h"
 #include "onpdf/core/error.h"
@@ -13,12 +14,18 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
 
 namespace onpdf::engine {
+
+namespace detail {
+struct FormEnvironment;
+}
 
 // 열린 PDF 문서. 이동만 가능하며 PDFium 워커 스레드에서만 사용한다.
 // 파일 내용은 메모리에 통째로 올린다 (M1 에서 FPDF_LoadCustomDocument 로 전환 예정).
@@ -29,11 +36,17 @@ class PdfiumDocument final : public EditableDocument {
   static Result<PdfiumDocument> open_from_memory(std::vector<std::uint8_t> data,
                                                  std::string_view password = {});
 
-  PdfiumDocument(PdfiumDocument&&) noexcept = default;
-  PdfiumDocument& operator=(PdfiumDocument&&) noexcept = default;
+  PdfiumDocument(PdfiumDocument&&) noexcept;
+  // 폼 환경 → 문서 → 원본 바이트 순으로 정리한다 (기본 대입은 옛 문서를 폼 환경보다 먼저 닫는다)
+  PdfiumDocument& operator=(PdfiumDocument&&) noexcept;
   PdfiumDocument(const PdfiumDocument&) = delete;
   PdfiumDocument& operator=(const PdfiumDocument&) = delete;
-  ~PdfiumDocument() override = default;
+  ~PdfiumDocument() override;
+
+  // AcroForm 이 있으면 폼 필 환경을 갖는다 (#51). XFA 는 AcroForm 부분만
+  [[nodiscard]] FormType form_type() const noexcept { return form_type_; }
+  // 저장 전: AP 가 없는 OnPdf 주석이 있는 쪽을 렌더해 PDFium 이 AP 를 만들게 한다. 렌더한 쪽 수 (#53)
+  [[nodiscard]] Result<int> ensure_annotation_appearances() const;
 
   [[nodiscard]] int page_count() const noexcept override;
   [[nodiscard]] Result<PageSize> page_size(int page_index) const override;
@@ -61,7 +74,31 @@ class PdfiumDocument final : public EditableDocument {
   [[nodiscard]] Result<void> set_annotation_contents(int page_index, std::string_view id,
                                                      std::string_view utf8) override;
   [[nodiscard]] Result<void> set_annotation_border_width(int page_index, std::string_view id, double width) override;
+  [[nodiscard]] Result<TextObjectsResult> add_text_objects(int page_index, const TextObjectsSpec& spec) override;
+  [[nodiscard]] Result<void> remove_text_objects(int page_index, const std::vector<std::string>& ids) override;
+  [[nodiscard]] Result<std::vector<TextObjectInfo>> text_objects(int page_index) const override;
+  [[nodiscard]] Result<void> move_page_objects(int page_index, const std::vector<std::string>& ids, Point delta_pt) override;
+  [[nodiscard]] Result<std::string> add_image_object(int page_index, const ImageSpec& spec) override;
+  [[nodiscard]] Result<std::vector<PageObjectInfo>> page_objects(int page_index) const override;
+  [[nodiscard]] Result<std::string> mark_object(int page_index, std::string_view id) override;
+  [[nodiscard]] Result<void> set_object_rect(int page_index, std::string_view id, Rect rect_pt) override;
+  [[nodiscard]] Result<DetachedId> detach_objects(int page_index, const std::vector<std::string>& ids) override;
+  [[nodiscard]] Result<void> reattach_objects(DetachedId id) override;
+  void drop_detached(DetachedId id) noexcept override;
+  [[nodiscard]] Result<std::vector<FormWidgetInfo>> form_widgets(int page_index) const override;
+  [[nodiscard]] Result<std::vector<int>> set_form_text(int page_index, const FieldRef& ref, std::string_view utf8) override;
+  [[nodiscard]] Result<std::vector<int>> set_form_checked(int page_index, const FieldRef& ref, bool checked) override;
+  [[nodiscard]] Result<std::vector<int>> set_form_selection(int page_index, const FieldRef& ref,
+                                                            const std::vector<int>& indices) override;
+  // 문서 전체 필드 값 (이름 → 값, 체크·라디오는 상태 이름). 저장 검증용. 폼이 없으면 빈 지도
+  [[nodiscard]] Result<std::map<std::string, std::string>> form_values() const;
+  [[nodiscard]] int detached_count() const noexcept { return static_cast<int>(detached_.size()); }  // 테스트용
   [[nodiscard]] int snapshot_count() const noexcept { return static_cast<int>(snapshots_.size()); }  // 테스트용
+  [[nodiscard]] int font_cache_size() const noexcept { return static_cast<int>(fonts_.size()); }     // 테스트용
+
+  // 폰트 캐시(fonts_)의 글꼴 가운데 어느 쪽의 텍스트 객체도 쓰지 않는 것이 있는가 (취소한 텍스트의 서브셋 — #61).
+  // 캐시가 비어 있으면 쪽을 열지 않고 false. 쪽을 못 열면 보수적으로 false (쓰이는지 모르면 지우지 않는다)
+  [[nodiscard]] bool has_unreferenced_fonts() const;
 
   // ---- 저장 ----
   // 파일에 스트림으로 저장한다 (FPDF_SaveAsCopy). incremental 이면 원본 바이트 뒤에 변경만 덧붙인다(서명 보존).
@@ -96,6 +133,14 @@ class PdfiumDocument final : public EditableDocument {
 
   Result<ScopedPage> load_page(int page_index) const;
   [[nodiscard]] static EditPermissions permissions_of(FPDF_DOCUMENT doc);
+  [[nodiscard]] FPDF_FORMHANDLE form_handle() const noexcept;
+  // 구조 편집(쪽 삭제·이동·삽입) 뒤 필드·페이지 뷰를 다시 맞춘다
+  void reset_form();
+  // 필드 이름 → 위젯이 있는 쪽들 (첫 사용 때 전체 쪽을 훑는다, reset_form 이 비운다)
+  [[nodiscard]] std::vector<int> pages_of_field(const std::string& name, int control_count, int page_index) const;
+  // 쪽 위젯을 그린다 (렌더 뒤). start·size 는 쪽 전체를 그렸을 때의 장치 좌표
+  void draw_form(FPDF_BITMAP bitmap, FPDF_PAGE page, int start_x, int start_y, int size_x, int size_y, int rotate,
+                 int flags) const;
   [[nodiscard]] Result<SnapshotId> store_snapshot(std::vector<std::uint8_t> data, ScopedDocument doc);
 
   // 보조 문서: 삭제 취소용 쪽 사본 또는 삽입 소스 파일. data 가 doc 보다 오래 살아야 한다 (선언 순서)
@@ -110,6 +155,20 @@ class PdfiumDocument final : public EditableDocument {
   std::string password_;
   std::unordered_map<SnapshotId, Snapshot> snapshots_;
   SnapshotId next_snapshot_ = 1;
+  // 임베딩 폰트 캐시: 서브셋 key → 문서에 로드된 폰트. doc_ 보다 뒤에 선언 → 먼저 닫힌다
+  std::unordered_map<std::string, ScopedFont> fonts_;
+  // 떼어 낸 쪽 객체 (삭제·추가 취소, #49). doc_ 보다 뒤에 선언 → 문서보다 먼저 Destroy 된다
+  struct Detached {
+    int page = 0;
+    std::vector<std::pair<int, ScopedFPDFPageObject>> objects;  // (원래 쪽 객체 index, 객체) — index 오름차순
+  };
+  std::unordered_map<DetachedId, Detached> detached_;
+  DetachedId next_detached_ = 1;
+  // 폼 필 환경 (#51). 마지막에 선언 → 가장 먼저 소멸 (FPDFDOC_ExitFormFillEnvironment 는 문서를 닫기 전에)
+  FormType form_type_ = FormType::kNone;
+  std::unique_ptr<detail::FormEnvironment> form_;
+  mutable std::unordered_map<std::string, std::vector<int>> field_pages_;
+  mutable bool field_pages_ready_ = false;
 };
 
 }  // namespace onpdf::engine

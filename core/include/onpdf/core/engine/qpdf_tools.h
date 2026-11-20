@@ -37,8 +37,14 @@ class QpdfTools {
                                                  const std::filesystem::path& output, const ProgressFn& progress = {});
   // 구조 검사. 경고(손상 복구 등)는 성공으로 보고 report.warnings 에 담는다. 오류는 kJobFailed
   [[nodiscard]] static Result<JobReport> check(const std::filesystem::path& file, std::string_view password = {});
+  // input 을 output 으로 다시 쓴다: 트레일러에서 닿는 객체만 남고(취소한 텍스트의 폰트 같은 미참조 객체 폐기) 암호화·객체
+  // 스트림은 입력대로. 손상 복구 경고는 성공(report.warnings). 암호가 틀리면 kPasswordRequired. output 은 input 과 달라야 한다 (#61)
+  [[nodiscard]] static Result<JobReport> rewrite(const std::filesystem::path& input, const std::filesystem::path& output,
+                                                 std::string_view password = {});
   [[nodiscard]] static Result<int> page_count(const std::filesystem::path& file, std::string_view password = {});
   [[nodiscard]] static Result<bool> allows_extraction(const std::filesystem::path& file, std::string_view password = {});
+  // 쪽 /Annots 안에 직접(간접 참조가 아닌) 주석 사전이 몇 개인가. PDF 규격 표 30 은 간접 참조를 요구한다 (#53 검증용)
+  [[nodiscard]] static Result<int> direct_annotation_count(const std::filesystem::path& file, std::string_view password = {});
 };
 
 }  // namespace onpdf::engine

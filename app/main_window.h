@@ -3,6 +3,9 @@
 #include "document_session.h"
 #include "document_view.h"
 #include "edit_controller.h"
+#include "onpdf/edit/font_face.h"
+#include "onpdf/edit/object_commands.h"
+#include "onpdf/edit/form_commands.h"
 #include "structure_job.h"
 #include "print_job.h"
 #include "onpdf/core/engine/pdfium_worker.h"
@@ -10,11 +13,13 @@
 #include "onpdf/core/view/text_index.h"
 
 #include <QColor>
+#include <QImage>
 #include <QMainWindow>
 #include <QString>
 
 #include <filesystem>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -26,6 +31,7 @@ class QLabel;
 class QPrinter;
 class QToolBar;
 class QActionGroup;
+class QComboBox;
 class QToolButton;
 class QProgressDialog;
 class QSpinBox;
@@ -102,6 +108,26 @@ class MainWindow : public QMainWindow {
   bool delete_selected_annotation();
   // 메모 생성: contents 가 주어지면 대화상자 없이 만든다 (테스트용)
   bool add_note(int page, onpdf::Point pt, const QString& contents);
+  // ---- 텍스트 추가 (#45). 번들 폰트가 없으면 도구 비활성 ----
+  // 텍스트 상자 생성: 대화상자 없이 (테스트용·on_text_requested 가 부른다). 시작하면 true
+  bool add_text(int page, onpdf::Point pt, const QString& utf8);
+  bool set_text_font(const QString& path);  // 번들 폰트 교체 (테스트: 저장소 서브셋 폰트)
+  bool delete_selected_text_box();         // 선택한 쪽 객체(텍스트 상자·이미지) 삭제 (Delete 키·툴바와 같은 경로). 시작하면 true
+  // ---- 이미지 (#49) ----
+  // 파일을 읽어 page 의 origin 에 놓는다 (center 면 가운데로). 대화상자 없이 (테스트·드롭·도구가 부른다). 시작하면 true
+  bool add_image_file(const QString& path, int page, onpdf::Point origin, bool center);
+  bool add_image(const QImage& image, int page, onpdf::Point origin, bool center);
+  // 클립보드의 이미지(또는 이미지 파일 URL)를 현재 쪽 가운데에 놓는다. 시작하면 true
+  bool paste_image();
+  // 폼 채우기 (#51). 선택지(콤보·목록)는 메뉴가 이 함수를 부른다 (테스트도)
+  bool choose_form_option(int page, const engine::FieldRef& ref, std::vector<int> indices);
+  // 열린 오버레이 편집기를 확정하고 폼 편집이 끝날 때까지 기다린다 (저장·닫기·인쇄 전)
+  void settle_form_edits();
+  [[nodiscard]] QAction* paste_action() const noexcept { return paste_action_; }
+  [[nodiscard]] bool has_text_font() const noexcept { return text_font_ != nullptr; }
+  [[nodiscard]] double text_size() const noexcept { return text_size_; }
+  void set_text_size(double size);
+  [[nodiscard]] QComboBox* text_size_combo() const noexcept { return text_size_combo_; }
   // ---- 병합·분할 (대화상자 없이 같은 경로를 타는 진입점, 테스트용으로도 쓴다). 시작하면 true ----
   bool merge_files(std::vector<engine::StructureInput> inputs, const QString& output);
   bool split_document(int every, const QString& directory);  // 현재 문서(디스크 파일)를 every 쪽마다
@@ -153,6 +179,25 @@ class MainWindow : public QMainWindow {
   void build_annotation_ui();
   void on_markup_requested(onpdf::engine::AnnotationKind kind, const MarkupItems& items);
   void on_note_requested(int page, onpdf::Point pt);
+  void on_text_requested(int page, onpdf::Point pt);
+  void on_text_box_selected(bool has, const DocumentView::SelectedTextBox& box);
+  void on_image_requested(int page, onpdf::Point pt);
+  void on_object_resize_requested(int page, const QString& id, onpdf::Rect before, onpdf::Rect after);
+  void on_text_width_requested(int page, const QString& box, double left_x, double width);
+  void on_object_nudge_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta);
+  void explain_locked_object();  // 기존 이미지 편집을 막은 이유 (#57)
+  void on_form_field_clicked(int page, const onpdf::engine::FormWidgetInfo& widget);
+  void on_form_text_committed(int page, const onpdf::engine::FormWidgetInfo& widget, const QString& text);
+  void show_form_choice_menu(int page, const onpdf::engine::FormWidgetInfo& widget);
+  void run_form_command(std::shared_ptr<edit::Command> command);
+  void flush_form_commands();
+  void flush_pending_nudge();
+  bool run_add_image(int page, engine::ImageSpec spec);
+  void on_text_move_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta);
+  void on_text_delete_requested(int page, const QString& box);
+  void on_text_edit_requested(int page, const DocumentView::SelectedTextBox& box);
+  bool replace_selected_text(std::optional<QString> utf8, std::optional<double> size, std::optional<engine::Color> color);
+  void load_bundled_text_font();
   void on_ink_requested(int page, const std::vector<onpdf::Point>& points, onpdf::Rect bbox);
   void on_shape_requested(int page, onpdf::engine::AnnotationKind kind, onpdf::Rect rect);
   void update_property_buttons();
@@ -235,10 +280,40 @@ class MainWindow : public QMainWindow {
   QToolButton* opacity_button_ = nullptr;  // 불투명도 ▾
   double shape_border_width_ = 2.0;
   std::uint8_t shape_alpha_ = 255;
+  std::shared_ptr<const edit::FontFace> text_font_;  // 새 텍스트 글꼴 (불변, Command 와 공유)
+  QString text_font_path_;
+  QComboBox* text_size_combo_ = nullptr;
+  double text_size_ = 24.0;
+  bool syncing_text_size_ = false;  // 선택한 상자의 크기를 콤보에 비출 때 기본값·Command 를 건드리지 않는다
   QAction* delete_annotation_action_ = nullptr;
   QAction* markup_selection_actions_[3] = {};  // 하이라이트·밑줄·취소선 (선택 영역)
   engine::Color annotation_color_{255, 255, 0, 255};
   bool annotation_edits_allowed_ = false;  // idle && 권한. 도구 선택은 권한만 보고, 실제 편집 요청은 이것으로 막는다
+  bool text_edits_allowed_ = false;        // idle && 내용 수정 권한(비트 4) && 번들 글꼴 (리뷰 W2)
+  bool content_edits_allowed_ = false;     // idle && 내용 수정 권한(비트 4) — 이미지·객체 이동·크기·삭제 (#49, 글꼴 불필요)
+  // 마지막 이미지 추가: 완료되면 새 이미지를 고르고, PDFium 이 JPEG 를 못 넣으면 픽셀로 다시 시도한다
+  struct PendingImage {
+    QString path;  // 비면 메모리 이미지 (재시도 없음)
+    int page = 0;
+    onpdf::Point origin;
+    bool center = false;
+    bool jpeg = false;
+  };
+  std::optional<PendingImage> pending_image_;
+  std::shared_ptr<edit::AddImageCommand> last_image_command_;
+  // 화살표 연타: 편집 중(busy)이면 모았다가 끝나면 한 번에 보낸다 (스택에서는 키보드 이동끼리 합쳐진다)
+  struct PendingNudge {
+    int page = 0;
+    std::vector<std::string> ids;
+    onpdf::Point delta;
+  };
+  std::optional<PendingNudge> pending_nudge_;
+  // 폼 Command 대기열 (#51): Tab 으로 연달아 입력하면 앞 편집이 끝나기 전에 다음 확정이 온다
+  std::deque<std::shared_ptr<edit::Command>> pending_form_commands_;
+  bool form_edits_allowed_ = false;
+  bool form_in_flight_ = false;  // 대기열에서 보낸 폼 Command 가 워커에서 도는 중 (settle 은 이것만 기다린다)  // 권한(fill_forms)만. 바쁜 동안은 대기열에 쌓는다
+  QAction* paste_action_ = nullptr;
+  engine::Color text_color_{0, 0, 0, 255};  // 새 텍스트 색 (기본 검정; 색 팔레트가 주석 색과 함께 바꾼다)
   bool updating_actions_ = false;          // update_edit_actions 재진입 차단
   struct PendingInsert {
     QString path;

@@ -4,7 +4,10 @@
 // 구현(PdfiumDocument)은 워커 스레드에서만 쓴다.
 
 #include "onpdf/core/engine/annotation.h"
+#include "onpdf/core/engine/form.h"
 #include "onpdf/core/engine/render_types.h"
+#include "onpdf/core/engine/page_object.h"
+#include "onpdf/core/engine/text_object.h"
 #include "onpdf/core/error.h"
 
 #include <filesystem>
@@ -93,6 +96,44 @@ class EditableDocument {
   // AP 를 지우고 /Border 폭을 쓴다 (Ink·Square·Circle). /BS 가 있는 주석은 거절한다 — PDFium 은 /BS /W 를 우선하고
   // /BS 를 지울 API 가 없다 (Command 가 삭제·재생성으로 우회)
   [[nodiscard]] virtual Result<void> set_annotation_border_width(int page_index, std::string_view id, double width) = 0;
+
+  // ---- 텍스트 객체 (쪽 콘텐츠, #45). 정체성은 마크 콘텐츠 "OnPdf" 의 id 파라미터 ----
+  // 줄마다 텍스트 객체를 만들고 쪽 콘텐츠를 다시 생성한다. 폰트는 spec.font.key 로 문서가 캐시해 재사용한다.
+  // 돌려주는 값 = 줄별 객체 id (spec.ids 가 있으면 그대로). 중간 실패 시 만든 객체를 지우고 오류 (문서 원상)
+  [[nodiscard]] virtual Result<TextObjectsResult> add_text_objects(int page_index, const TextObjectsSpec& spec) = 0;
+  // id 들을 전부 찾은 뒤에만 지운다 (하나라도 없으면 kInvalidArgument, 아무것도 지우지 않음)
+  [[nodiscard]] virtual Result<void> remove_text_objects(int page_index, const std::vector<std::string>& ids) = 0;
+  // OnPdf 가 만든 텍스트 객체 목록 (저장 검증·선택용)
+  [[nodiscard]] virtual Result<std::vector<TextObjectInfo>> text_objects(int page_index) const = 0;
+  // 마크 객체(텍스트·이미지)들을 쪽 포인트 delta 만큼 옮긴다 (행렬 e,f 만 변경, 회전 쪽에서도 화면 방향). 전부 찾은 뒤에만 바꾼다 (#47·#49)
+  [[nodiscard]] virtual Result<void> move_page_objects(int page_index, const std::vector<std::string>& ids, Point delta_pt) = 0;
+
+  // ---- 이미지·쪽 객체 일반 (#49) ----
+  // 이미지 객체를 만든다 (픽셀 → SetBitmap(+SMask), JPEG → 원본 그대로). 돌려주는 값 = 객체 id
+  [[nodiscard]] virtual Result<std::string> add_image_object(int page_index, const ImageSpec& spec) = 0;
+  // 텍스트(마크 있는 것)·이미지(쪽 직속 전부) 목록, 쪽 객체 순서대로
+  [[nodiscard]] virtual Result<std::vector<PageObjectInfo>> page_objects(int page_index) const = 0;
+  // "#obj<n>" 이면 그 이미지에 마크를 붙이고 새 id 를, 이미 마크 id 면 그대로 돌려준다 (기존 이미지 첫 편집)
+  [[nodiscard]] virtual Result<std::string> mark_object(int page_index, std::string_view id) = 0;
+  // 이미지를 쪽 포인트 사각형에 맞춘다 (행렬 교체, 회전 쪽 기저 반영)
+  [[nodiscard]] virtual Result<void> set_object_rect(int page_index, std::string_view id, Rect rect_pt) = 0;
+  // 객체들을 쪽에서 떼어 문서가 보관한다 (삭제·추가 취소). 전부 찾은 뒤에만 뗀다
+  [[nodiscard]] virtual Result<DetachedId> detach_objects(int page_index, const std::vector<std::string>& ids) = 0;
+  // 보관한 객체를 원래 쪽·원래 순서 자리에 다시 넣는다. 성공하면 보관 토큰은 사라진다
+  [[nodiscard]] virtual Result<void> reattach_objects(DetachedId id) = 0;
+  // 보관한 객체를 버린다 (밀려난 Command 의 discard). 없는 토큰은 무시
+  virtual void drop_detached(DetachedId id) noexcept = 0;
+
+  // ---- 폼 채우기 (#51). 위젯은 필드 이름 + 컨트롤 index 로 가리킨다. 결과는 값이 바뀐 쪽들 (같은 필드의 다른 위젯 포함) ----
+  // 쪽의 위젯 (폼이 없으면 빈 목록)
+  [[nodiscard]] virtual Result<std::vector<FormWidgetInfo>> form_widgets(int page_index) const = 0;
+  // 텍스트 필드·편집 가능 콤보의 값. 읽기 전용은 kPermissionDenied. MaxLen 을 넘으면 잘린 값이 남는다
+  [[nodiscard]] virtual Result<std::vector<int>> set_form_text(int page_index, const FieldRef& ref, std::string_view utf8) = 0;
+  // 체크박스 켜기·끄기, 라디오 위젯 선택. 라디오 해제는 kUnsupported (PDFium 공개 API 로 불가 — #51 프로브)
+  [[nodiscard]] virtual Result<std::vector<int>> set_form_checked(int page_index, const FieldRef& ref, bool checked) = 0;
+  // 콤보·목록 선택 (선택지 index). 다중 선택이 아니면 하나만
+  [[nodiscard]] virtual Result<std::vector<int>> set_form_selection(int page_index, const FieldRef& ref,
+                                                                    const std::vector<int>& indices) = 0;
 };
 
 }  // namespace onpdf::engine
