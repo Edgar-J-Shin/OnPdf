@@ -216,6 +216,11 @@ Result<void> PdfiumDocument::delete_pages(const std::vector<int>& pages) {
   for (auto it = pages.rbegin(); it != pages.rend(); ++it) FPDFPage_Delete(doc_.get(), *it);
   if (page_count() != count - n) return make_error(ErrorCode::kInvalidState, "page count mismatch after delete");
   reset_form();
+  std::vector<int> new_index(static_cast<std::size_t>(count), -1);
+  for (int old = 0, next = 0; old < count; ++old) {
+    if (!std::binary_search(pages.begin(), pages.end(), old)) new_index[static_cast<std::size_t>(old)] = next++;
+  }
+  remap_detached_pages(new_index);
   return {};
 }
 
@@ -235,6 +240,15 @@ Result<void> PdfiumDocument::move_pages(const std::vector<int>& pages, int dest)
     return make_error(ErrorCode::kInvalidState, "FPDF_MovePages failed");
   }
   reset_form();
+  // 새 순서 = 나머지 쪽(오름차순)에 블록(주어진 순서)을 dest 에 끼운 것
+  std::vector<int> order;
+  for (int old = 0; old < count; ++old) {
+    if (!std::binary_search(sorted.begin(), sorted.end(), old)) order.push_back(old);
+  }
+  order.insert(order.begin() + dest, pages.begin(), pages.end());
+  std::vector<int> new_index(static_cast<std::size_t>(count), -1);
+  for (int pos = 0; pos < count; ++pos) new_index[static_cast<std::size_t>(order[static_cast<std::size_t>(pos)])] = pos;
+  remap_detached_pages(new_index);
   return {};
 }
 
@@ -300,6 +314,9 @@ Result<void> PdfiumDocument::insert_from_snapshot(SnapshotId id, const std::vect
   if (!ok) return make_error(ErrorCode::kInvalidState, "FPDF_ImportPagesByIndex failed");
   if (page_count() != count + n) return make_error(ErrorCode::kInvalidState, "page count mismatch after insert");
   reset_form();
+  std::vector<int> new_index(static_cast<std::size_t>(count));
+  for (int old = 0; old < count; ++old) new_index[static_cast<std::size_t>(old)] = old < at ? old : old + n;
+  remap_detached_pages(new_index);
   return {};
 }
 
@@ -1250,6 +1267,28 @@ Result<void> PdfiumDocument::reattach_objects(DetachedId id) {
   detached_.erase(it);
   if (!FPDFPage_GenerateContent(page->get())) return make_error(ErrorCode::kInvalidState, "FPDFPage_GenerateContent failed");
   return {};
+}
+
+void PdfiumDocument::remap_detached_pages(const std::vector<int>& new_index_of_old) {
+  const auto remap = [&](int old) -> int {
+    if (old < 0 || old >= static_cast<int>(new_index_of_old.size())) return -1;
+    return new_index_of_old[static_cast<std::size_t>(old)];
+  };
+  for (auto& [id, d] : detached_) {
+    const int now = remap(d.page);
+    if (now < 0) {  // 쪽이 지워졌다: 되돌릴 자리가 없다 (쪽 삭제 취소는 스냅샷에서 새 쪽을 만들므로 이 객체와 무관)
+      d.objects.clear();
+      d.lost = true;
+    } else {
+      d.page = now;
+    }
+  }
+  std::unordered_map<int, std::unordered_set<std::string>> moved;
+  for (auto& [page, marks] : dropped_marks_) {
+    const int now = remap(page);
+    if (now >= 0) moved[now].insert(marks.begin(), marks.end());
+  }
+  dropped_marks_ = std::move(moved);
 }
 
 void PdfiumDocument::drop_detached(DetachedId id) noexcept {

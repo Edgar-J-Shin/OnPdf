@@ -173,6 +173,8 @@ class PdfiumDocument final : public EditableDocument {
   };
   [[nodiscard]] Result<std::vector<ParkedDetached>> park_detached();
   [[nodiscard]] Result<void> unpark_detached(const std::vector<ParkedDetached>& parked);
+  // 쪽 구조 편집(삭제·이동·삽입) 뒤 떼어 둔 객체·버린 마크의 쪽 번호를 새 번호로 옮긴다 (#66). 지워진 쪽의 것은 lost
+  void remap_detached_pages(const std::vector<int>& new_index_of_old);
   // 상태 토큰 저장 (상한을 넘으면 오래된 것부터 폐기)
   DocumentStateId store_state(std::vector<std::uint8_t> bytes);
 
