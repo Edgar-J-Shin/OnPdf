@@ -428,6 +428,7 @@ QString MainWindow::command_label(std::string_view id) const {
   if (id == "replace_text") return tr("텍스트 수정");
   if (id == "resize_text") return tr("텍스트 폭 변경");
   if (id == "replace_line") return tr("줄 수정");
+  if (id == "format_line") return tr("줄 서식 변경");
   if (id == "remove_line") return tr("줄 삭제");
   if (id == "form_text") return tr("폼 입력");
   if (id == "form_check" || id == "form_choice") return tr("폼 선택");
@@ -856,7 +857,8 @@ void MainWindow::update_property_buttons() {
   if (text_size_combo_ != nullptr) {
     // 선택한 텍스트 상자의 크기를 콤보에 비춘다 (선택이 없으면 기본값)
     const auto selected = view_->selected_text_box();
-    const double shown = selected ? selected->font_size : text_size_;
+    const auto line = view_->selected_line();
+    const double shown = line ? line->info.font_size : selected ? selected->font_size : text_size_;
     const int index = text_size_combo_->findData(static_cast<int>(std::lround(shown)));
     if (index >= 0 && index != text_size_combo_->currentIndex()) {
       QScopedValueRollback<bool> guard(syncing_text_size_, true);
@@ -917,9 +919,15 @@ void MainWindow::set_annotation_color(engine::Color color) {
     }
     return;
   }
+  if (auto line = view_->selected_line(); line && line->info.editable) {  // 기존 줄의 색만 (#69)
+    if (line->info.color.r == color.r && line->info.color.g == color.g && line->info.color.b == color.b) return;
+    run_line_replace(line->page, line->info.id, std::nullopt, std::nullopt, color);
+    return;
+  }
   if (auto selected = view_->selected_text_box(); selected) {  // 선택한 텍스트 상자의 색만
     if (selected->color.r == color.r && selected->color.g == color.g && selected->color.b == color.b) return;
-    replace_selected_text(std::nullopt, std::nullopt, color);
+    if (selected->original_font) run_line_replace(selected->page, selected->box, std::nullopt, std::nullopt, color);  // 원본 글꼴 유지
+    else replace_selected_text(std::nullopt, std::nullopt, color);
     return;
   }
   annotation_color_ = color;
@@ -1000,10 +1008,17 @@ bool MainWindow::set_text_font(const QString& path) {
 }
 
 void MainWindow::set_text_size(double size) {
+  // 기존 줄(텍스트 도구)이 선택돼 있으면 그 줄의 크기만 (#69)
+  if (auto line = view_->selected_line(); line && line->info.editable) {
+    if (std::abs(line->info.font_size - size) < 0.01) return;
+    run_line_replace(line->page, line->info.id, std::nullopt, size, std::nullopt);
+    return;
+  }
   // 텍스트 상자가 선택돼 있으면 그 상자의 크기만 바꾼다 (주석 색 버튼과 같은 규칙). 없으면 새 텍스트의 기본값
   if (auto selected = view_->selected_text_box(); selected && !view_->selected_annotation()) {
     if (std::abs(selected->font_size - size) < 0.01) return;
-    replace_selected_text(std::nullopt, size, std::nullopt);
+    if (selected->original_font) run_line_replace(selected->page, selected->box, std::nullopt, size, std::nullopt);  // 원본 글꼴 유지
+    else replace_selected_text(std::nullopt, size, std::nullopt);
     return;
   }
   text_size_ = size;
@@ -1324,6 +1339,7 @@ QString MainWindow::line_reason_text(const engine::TextLineInfo& info) const {
 
 void MainWindow::on_text_line_selected(bool has, int, const engine::TextLineInfo& info) {
   update_edit_actions();
+  update_property_buttons();
   if (!has) {
     if (selection_status_shown_) show_transient(QString());
     return;
@@ -1345,9 +1361,13 @@ void MainWindow::on_text_line_selected(bool has, int, const engine::TextLineInfo
   selection_status_shown_ = true;
 }
 
-bool MainWindow::run_line_replace(int page, const std::string& line_id, const QString& text) {
+bool MainWindow::run_line_replace(int page, const std::string& line_id, std::optional<QString> text, std::optional<double> size,
+                                  std::optional<engine::Color> color) {
   if (!text_edits_allowed_ || text_font_ == nullptr) return false;
-  auto command = std::make_shared<edit::ReplaceTextLineCommand>(page, line_id, text.toUtf8().toStdString(), text_font_);
+  if (!warn_signature_once()) return false;
+  std::optional<std::string> utf8;
+  if (text) utf8 = text->toUtf8().toStdString();
+  auto command = std::make_shared<edit::ReplaceTextLineCommand>(page, line_id, utf8, size, color, text_font_);
   pending_line_edit_ = command;
   if (!edit_->run(command)) {
     pending_line_edit_.reset();
@@ -1375,7 +1395,7 @@ void MainWindow::on_text_line_edit_requested(int page, const engine::TextLineInf
     if (text.isEmpty() || text.toStdString() == info.text) return;
     const std::u32string missing = text_font_->missing(text.toUtf8().toStdString());  // 대체 글꼴에도 없는 글자는 거절
     if (missing.empty()) {
-      run_line_replace(page, info.id, text);
+      run_line_replace(page, info.id, text, std::nullopt, std::nullopt);
       return;
     }
     QMessageBox warn(QMessageBox::Warning, tr("줄 수정"),
@@ -1450,7 +1470,7 @@ void MainWindow::on_text_edit_requested(int, const DocumentView::SelectedTextBox
     if (text.trimmed().isEmpty() || text.toStdString() == box.text) return;  // 빈 내용·같은 내용은 무시 (삭제는 Delete)
     const std::u32string missing = text_font_->missing(text.toUtf8().toStdString());
     if (missing.empty()) {
-      if (box.original_font) run_line_replace(box.page, box.box, text);  // 원본 글꼴로 고친 줄은 다시 원본 글꼴로 (#65)
+      if (box.original_font) run_line_replace(box.page, box.box, text, std::nullopt, std::nullopt);  // 원본 글꼴로 고친 줄은 다시 원본 글꼴로 (#65)
       else replace_selected_text(text, std::nullopt, std::nullopt);
       return;
     }

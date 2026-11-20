@@ -14,6 +14,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QComboBox>
 #include <QElapsedTimer>
 #include <QMouseEvent>
 #include <QPlainTextEdit>
@@ -169,6 +170,45 @@ TEST_F(TextLineToolTest, HoverSelectEditDeleteUndo) {
   EXPECT_FALSE(view()->selected_line().has_value()) << "편집 뒤 줄 선택은 해제된다";
   ASSERT_TRUE(window_.edit_controller()->undo());
   ASSERT_TRUE(wait_text_contains(0, QStringLiteral("Delete me entirely")));
+}
+
+// #69: 줄을 고르고 크기 콤보·색 팔레트 → 그 줄만 (원본 글꼴 유지, 기본값 불변), ofont 상자도 원본 글꼴 유지
+TEST_F(TextLineToolTest, SizeComboAndPaletteApplyToSelectedLine) {
+  open_copy("text-lines-type3.pdf");
+  ASSERT_TRUE(wait_lines(0));
+  ASSERT_TRUE(spin_until([&] { return view()->text_index(0) != nullptr; }));
+  const engine::TextLineInfo* korean = line_containing(0, QStringLiteral("한글 텍스트 줄"));
+  ASSERT_NE(korean, nullptr);
+  const engine::TextLineInfo info = *korean;
+  window_.tool_action(AnnotationTool::kText)->trigger();
+  click(center_of(0, info));
+  ASSERT_TRUE(view()->selected_line().has_value());
+  EXPECT_EQ(window_.text_size_combo()->currentData().toInt(), 18) << "콤보는 선택한 줄의 크기를 비춘다";
+  const double default_size = window_.text_size();
+  window_.set_text_size(36);
+  ASSERT_TRUE(spin_until([&] { return idle() && view()->text_objects(0) && view()->text_objects(0)->size() == 1 &&
+                                      std::abs((*view()->text_objects(0))[0].font_size - 36.0) < 0.05; }));
+  EXPECT_DOUBLE_EQ(window_.text_size(), default_size) << "기본값은 그대로";
+  EXPECT_TRUE((*view()->text_objects(0))[0].original_font) << "원본 글꼴 유지";
+  EXPECT_EQ((*view()->text_objects(0))[0].text, "한글 텍스트 줄");
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("줄 서식 변경")));
+  ASSERT_TRUE(spin_until([&] { return view()->selected_text_box().has_value(); })) << "선택 도구로 돌아가 새 상자 선택";
+  EXPECT_EQ(view()->tool(), AnnotationTool::kSelect);
+  // ofont 상자의 색 → 원본 글꼴 유지 (번들 글꼴로 바뀌지 않는다)
+  window_.set_annotation_color({0, 0, 255, 255});
+  ASSERT_TRUE(spin_until([&] { return idle() && view()->text_objects(0) && view()->text_objects(0)->size() == 1 &&
+                                      (*view()->text_objects(0))[0].color.b == 255; }));
+  EXPECT_TRUE((*view()->text_objects(0))[0].original_font);
+  EXPECT_NEAR((*view()->text_objects(0))[0].font_size, 36.0, 0.05);
+  EXPECT_NE(window_.annotation_color().b, 255) << "기본 색은 그대로";
+  ASSERT_TRUE(window_.edit_controller()->undo());
+  ASSERT_TRUE(spin_until([&] { return idle() && view()->text_objects(0) && view()->text_objects(0)->size() == 1 &&
+                                      (*view()->text_objects(0))[0].color.b == 0; }));
+  EXPECT_TRUE((*view()->text_objects(0))[0].original_font);
+  ASSERT_TRUE(window_.edit_controller()->undo());
+  ASSERT_TRUE(spin_until([&] { return idle() && view()->text_objects(0) && view()->text_objects(0)->empty(); }));
+  ASSERT_TRUE(wait_lines(0));
+  EXPECT_NE(line_containing(0, QStringLiteral("한글 텍스트 줄")), nullptr);
 }
 
 TEST_F(TextLineToolTest, UneditableLineAndSignedDocumentAreExplained) {

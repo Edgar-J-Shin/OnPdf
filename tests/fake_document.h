@@ -691,7 +691,8 @@ class FakeDocument final : public engine::EditableDocument {
       t.id = "fake-text-" + std::to_string(next_text_++);
       t.box = onpdf_box ? std::string(line_id) : "fake-box-" + std::to_string(next_text_++);
       t.line.text = r->utf8;
-      t.line.font_size = 12.0;
+      t.line.font_size = r->size.value_or(12.0);
+      if (r->color) t.line.color = *r->color;
       t.box_text = r->utf8;
       if (*covers) {
         t.font_key = "original";
