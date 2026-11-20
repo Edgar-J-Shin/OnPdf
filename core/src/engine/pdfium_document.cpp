@@ -1634,12 +1634,12 @@ constexpr int kFormFlagComb = 1 << 24;
 
 // 위젯 하나의 스냅샷. 이름이 없거나 타입을 모르면 nullopt (손상 필드는 건너뛴다)
 std::optional<FormWidgetInfo> widget_info(FPDF_FORMHANDLE form, FPDF_ANNOTATION annot, const detail::PageSpace& space,
-                                          int annot_index) {
+                                          int annot_index, int nth = 0) {
   FormWidgetInfo info;
   info.type = field_type_of(FPDFAnnot_GetFormFieldType(form, annot));
   info.ref.name = form_string(FPDFAnnot_GetFormFieldName, form, annot);
   if (info.type == FieldType::kUnknown || info.ref.name.empty()) return std::nullopt;
-  info.ref.control_index = std::max(0, FPDFAnnot_GetFormControlIndex(form, annot));
+  info.ref.nth = nth;
   info.control_count = std::max(1, FPDFAnnot_GetFormControlCount(form, annot));
   info.annot_index = annot_index;
   FS_RECTF r{};
@@ -1718,24 +1718,28 @@ Result<std::vector<FormWidgetInfo>> PdfiumDocument::form_widgets(int page_index)
   detail::FormPageView view(page->get(), form);
   const detail::PageSpace space = detail::PageSpace::of(page->get());
   const int count = FPDFPage_GetAnnotCount(page->get());
+  std::unordered_map<std::string, int> seen;  // 이름 → 이 쪽에서 지금까지 나온 수 (find_widget 과 같은 순서)
   for (int i = 0; i < count; ++i) {
     ScopedAnnotation annot(FPDFPage_GetAnnot(page->get(), i));
     if (!annot || FPDFAnnot_GetSubtype(annot.get()) != FPDF_ANNOT_WIDGET) continue;
-    if (auto info = widget_info(form, annot.get(), space, i)) out.push_back(std::move(*info));
+    const std::string name = form_string(FPDFAnnot_GetFormFieldName, form, annot.get());
+    const int nth = seen[name]++;
+    if (auto info = widget_info(form, annot.get(), space, i, nth)) out.push_back(std::move(*info));
   }
   return out;
 }
 
 namespace {
 
-// 쪽에서 필드 이름 + 컨트롤 index 로 위젯을 찾는다
+// 쪽에서 필드 이름 + 그 쪽 안의 순서로 위젯을 찾는다 (form_widgets 와 같은 주석 순서)
 ScopedAnnotation find_widget(FPDF_PAGE page, FPDF_FORMHANDLE form, const FieldRef& ref) {
   const int count = FPDFPage_GetAnnotCount(page);
+  int seen = 0;
   for (int i = 0; i < count; ++i) {
     ScopedAnnotation annot(FPDFPage_GetAnnot(page, i));
     if (!annot || FPDFAnnot_GetSubtype(annot.get()) != FPDF_ANNOT_WIDGET) continue;
-    if (std::max(0, FPDFAnnot_GetFormControlIndex(form, annot.get())) != ref.control_index) continue;
-    if (form_string(FPDFAnnot_GetFormFieldName, form, annot.get()) == ref.name) return annot;
+    if (form_string(FPDFAnnot_GetFormFieldName, form, annot.get()) != ref.name) continue;
+    if (seen++ == ref.nth) return annot;
   }
   return {};
 }

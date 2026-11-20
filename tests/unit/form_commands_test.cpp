@@ -1,5 +1,6 @@
 // 폼 Command (#51): 텍스트·체크·라디오·선택지 실행 → 취소 → 재실행 (가짜 + PDFium), 라디오 첫 선택 취소 불가
 #include "onpdf/core/engine/pdfium_document.h"
+#include "onpdf/edit/delete_pages.h"
 #include "onpdf/edit/form_commands.h"
 
 #include "../fake_document.h"
@@ -34,7 +35,7 @@ engine::FormWidgetInfo radio_widget(const std::string& name, int control, const 
 engine::FormWidgetInfo widget(engine::EditableDocument& doc, int page, const std::string& name, int control = 0) {
   auto list = doc.form_widgets(page);
   EXPECT_TRUE(list);
-  for (const auto& w : *list) if (w.ref.name == name && w.ref.control_index == control) return w;
+  for (const auto& w : *list) if (w.ref.name == name && w.ref.nth == control) return w;
   ADD_FAILURE() << "no widget " << name;
   return {};
 }
@@ -42,7 +43,7 @@ engine::FormWidgetInfo widget(engine::EditableDocument& doc, int page, const std
 TEST(FormCommands, TextExecuteUndoRedoOnFakeAcrossPages) {
   FakeDocument doc({{612, 792}, {612, 792}});
   doc.add_widget(0, text_widget("name", 0, "Hong"));
-  doc.add_widget(1, text_widget("name", 1, "Hong"));
+  doc.add_widget(1, text_widget("name", 0, "Hong"));
   SetFormTextCommand cmd(0, {"name", 0}, "홍길동");
   EXPECT_EQ(cmd.id(), "form_text");
   EXPECT_FALSE(cmd.undo(doc));
@@ -50,10 +51,10 @@ TEST(FormCommands, TextExecuteUndoRedoOnFakeAcrossPages) {
   ASSERT_TRUE(change);
   EXPECT_EQ(change->pages, (std::vector<int>{0, 1}));
   EXPECT_EQ(cmd.before(), "Hong");
-  EXPECT_EQ(doc.widget(1, {"name", 1})->value, "홍길동");
+  EXPECT_EQ(doc.widget(1, {"name", 0})->value, "홍길동");
   ASSERT_TRUE(cmd.undo(doc));
   EXPECT_EQ(doc.widget(0, {"name", 0})->value, "Hong");
-  EXPECT_EQ(doc.widget(1, {"name", 1})->value, "Hong");
+  EXPECT_EQ(doc.widget(1, {"name", 0})->value, "Hong");
   ASSERT_TRUE(cmd.execute(doc));
   EXPECT_EQ(doc.widget(0, {"name", 0})->value, "홍길동");
   SetFormTextCommand same(0, {"name", 0}, "홍길동");
@@ -145,9 +146,9 @@ TEST(FormCommands, RoundTripOnPdfium) {
   ASSERT_TRUE(change) << change.error().message;
   EXPECT_EQ(change->pages, (std::vector<int>{0, 1}));
   ASSERT_TRUE(text.undo(*doc));
-  EXPECT_EQ(widget(*doc, 1, "name", 1).value, "Hong");
+  EXPECT_EQ(widget(*doc, 1, "name").value, "Hong");
   ASSERT_TRUE(text.execute(*doc));
-  EXPECT_EQ(widget(*doc, 1, "name", 1).value, "홍길동");
+  EXPECT_EQ(widget(*doc, 1, "name").value, "홍길동");
 
   SetFormTextCommand address(0, {"address", 0}, "1 Main St\n2nd line");
   ASSERT_TRUE(address.execute(*doc));
@@ -199,6 +200,29 @@ TEST(FormCommands, RoundTripOnPdfium) {
   EXPECT_TRUE(widget(*doc, 0, "subjects").selected.empty());
   ASSERT_TRUE(subjects.execute(*doc));
   EXPECT_EQ(widget(*doc, 0, "subjects").selected, (std::vector<int>{1, 3}));
+}
+
+// 폼 입력 뒤 그 쪽을 지웠다가 되살려도 폼 Command 의 취소·재실행이 같은 칸을 가리킨다 (#51 리뷰 W1)
+TEST(FormCommands, UndoAfterPageDeleteAndRestore) {
+  auto doc = engine::PdfiumDocument::open(testdata("form-fields.pdf"));
+  ASSERT_TRUE(doc);
+  SetFormTextCommand text(0, {"zip", 0}, "12345");
+  ASSERT_TRUE(text.execute(*doc));
+  SetFormCheckedCommand radio(0, {"gender", 0}, true);
+  ASSERT_TRUE(radio.execute(*doc));
+  SetFormCheckedCommand radio2(0, {"gender", 1}, true);
+  ASSERT_TRUE(radio2.execute(*doc));
+  DeletePagesCommand del({0});
+  ASSERT_TRUE(del.execute(*doc));
+  ASSERT_TRUE(del.undo(*doc));
+  auto undone = radio2.undo(*doc);
+  ASSERT_TRUE(undone) << undone.error().message;
+  EXPECT_TRUE(widget(*doc, 0, "gender", 0).checked);
+  ASSERT_TRUE(text.undo(*doc));
+  EXPECT_EQ(widget(*doc, 0, "zip").value, "");
+  ASSERT_TRUE(text.execute(*doc));
+  EXPECT_EQ(widget(*doc, 0, "zip").value, "12345");
+  del.discard(*doc);
 }
 
 }  // namespace

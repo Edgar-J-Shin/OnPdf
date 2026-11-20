@@ -19,7 +19,7 @@ using onpdf::test::ScopedTempDir;
 using onpdf::test::testdata;
 
 const FormWidgetInfo* find(const std::vector<FormWidgetInfo>& list, const std::string& name, int control = 0) {
-  for (const auto& w : list) if (w.ref.name == name && w.ref.control_index == control) return &w;
+  for (const auto& w : list) if (w.ref.name == name && w.ref.nth == control) return &w;
   return nullptr;
 }
 
@@ -74,7 +74,7 @@ TEST(Form, ListsWidgetsWithTypesFlagsAndOptions) {
   EXPECT_TRUE(subjects->selected.empty());
   auto second = doc->form_widgets(1);
   ASSERT_TRUE(second);
-  ASSERT_NE(find(*second, "name", 1), nullptr) << "같은 필드의 둘째 위젯";
+  ASSERT_NE(find(*second, "name", 0), nullptr) << "같은 필드의 둘째 위젯 (그 쪽에서는 첫째)";
   ASSERT_NE(find(*second, "signature"), nullptr);
   EXPECT_EQ(find(*second, "signature")->type, FieldType::kSignature);
   EXPECT_FALSE(is_fillable(FieldType::kSignature));
@@ -87,7 +87,7 @@ TEST(Form, KoreanTextSyncsSharedWidgetsAndSurvivesSave) {
   ASSERT_TRUE(pages) << pages.error().message;
   EXPECT_EQ(*pages, (std::vector<int>{0, 1})) << "같은 이름 위젯이 있는 쪽 모두";
   EXPECT_EQ(widget(*doc, 0, "name").value, "홍길동");
-  EXPECT_EQ(widget(*doc, 1, "name", 1).value, "홍길동");
+  EXPECT_EQ(widget(*doc, 1, "name").value, "홍길동");
   ScopedTempDir dir;
   const auto saved = dir / "filled.pdf";
   ASSERT_TRUE(save_document_safely(*doc, saved, {})) << "저장 검증(필드 값 비교) 통과";
@@ -98,7 +98,7 @@ TEST(Form, KoreanTextSyncsSharedWidgetsAndSurvivesSave) {
   auto reopened = PdfiumDocument::open(saved);
   ASSERT_TRUE(reopened);
   EXPECT_EQ(widget(*reopened, 0, "name").value, "홍길동");
-  EXPECT_EQ(widget(*reopened, 1, "name", 1).value, "홍길동");
+  EXPECT_EQ(widget(*reopened, 1, "name").value, "홍길동");
   EXPECT_EQ(*reopened->form_values(), *doc->form_values());
 }
 
@@ -183,11 +183,12 @@ TEST(Form, StructuralEditsKeepFieldsWorking) {
   ASSERT_TRUE(doc->move_pages({1}, 0));
   auto first = doc->form_widgets(0);
   ASSERT_TRUE(first);
-  ASSERT_NE(find(*first, "name", 1), nullptr) << "옮긴 2쪽이 앞으로";
+  ASSERT_NE(find(*first, "name"), nullptr) << "옮긴 2쪽이 앞으로";
+  EXPECT_EQ(find(*first, "signature")->type, FieldType::kSignature);
   auto pages = doc->set_form_text(1, {"name", 0}, "After");
   ASSERT_TRUE(pages) << pages.error().message;
   EXPECT_EQ(*pages, (std::vector<int>{0, 1})) << "구조 편집 뒤 지도를 다시 만든다";
-  EXPECT_EQ(widget(*doc, 0, "name", 1).value, "After");
+  EXPECT_EQ(widget(*doc, 0, "name").value, "After");
 }
 
 TEST(Form, DocumentWithoutFormHasNoWidgets) {
@@ -225,6 +226,32 @@ TEST(Form, RotatedPageTileMatchesFullRender) {
       }
   EXPECT_GT(dark_full, 100) << "영역에 위젯 테두리·글자가 있다";
   EXPECT_LT(big, 512 * 512 * 3 / 1000) << "타일 위젯이 전체 렌더와 일치";
+}
+
+// 쪽 삭제 → 취소(스냅샷에서 되살림) 뒤에도 같은 FieldRef 로 칸을 찾는다. PDFium 은 되살린 위젯을 필드에 다시 붙여
+// 컨트롤 index 가 밀리므로 정체성은 쪽 안 순서다 (#51 리뷰 W1)
+TEST(Form, FieldRefSurvivesPageDeleteAndRestore) {
+  auto doc = PdfiumDocument::open(testdata("form-fields.pdf"));
+  ASSERT_TRUE(doc);
+  const auto before = *doc->form_widgets(0);
+  auto snap = doc->copy_pages_to_snapshot({0});
+  ASSERT_TRUE(snap);
+  ASSERT_TRUE(doc->delete_pages({0}));
+  ASSERT_TRUE(doc->insert_from_snapshot(*snap, {}, 0));
+  auto after = doc->form_widgets(0);
+  ASSERT_TRUE(after);
+  ASSERT_EQ(after->size(), before.size());
+  for (std::size_t i = 0; i < before.size(); ++i) {
+    EXPECT_EQ((*after)[i].ref, before[i].ref) << before[i].ref.name;
+    EXPECT_EQ((*after)[i].value, before[i].value) << before[i].ref.name;
+  }
+  ASSERT_TRUE(doc->set_form_text(0, {"name", 0}, "Restored"));
+  EXPECT_EQ(widget(*doc, 0, "name").value, "Restored");
+  EXPECT_EQ(widget(*doc, 1, "name").value, "Restored") << "2쪽 위젯과 값 공유는 그대로";
+  ASSERT_TRUE(doc->set_form_checked(0, {"gender", 2}, true));
+  EXPECT_TRUE(widget(*doc, 0, "gender", 2).checked);
+  RenderOptions o;
+  ASSERT_TRUE(doc->render_page(0, o));
 }
 
 }  // namespace

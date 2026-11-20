@@ -80,7 +80,7 @@ class FormToolTest : public ::testing::Test {
   bool idle() { return !window_.edit_controller()->busy() && !window_.saving(); }
   std::optional<engine::FormWidgetInfo> field(int page, const std::string& name, int control = 0) {
     if (const auto* list = view()->form_widgets(page)) {
-      for (const auto& w : *list) if (w.ref.name == name && w.ref.control_index == control) return w;
+      for (const auto& w : *list) if (w.ref.name == name && w.ref.nth == control) return w;
     }
     return std::nullopt;
   }
