@@ -471,6 +471,22 @@ TEST(SaveDocument, RewriteFailureFallsBackToPdfiumOutput) {
   EXPECT_EQ(files_in(dir.path()), 1u) << "두 번째 임시 파일도 정리";
 }
 
+// qpdf 가 거부하는 실제 파일(#37 알려진 제한): 재작성 실패 → PDFium 산출물로 저장 성공
+TEST(SaveDocument, QpdfRejectedFileStillSaves) {
+  ScopedTempDir dir;
+  auto doc = PdfiumDocument::open(testdata("pdfium-bug_481363.pdf"));
+  ASSERT_TRUE(doc);
+  auto cmd = text_command("한글 텍스트");
+  ASSERT_TRUE(cmd.execute(*doc));
+  ASSERT_TRUE(cmd.undo(*doc));
+  ASSERT_TRUE(doc->has_unreferenced_fonts());
+  const auto target = dir / "rejected.pdf";
+  auto saved = save_document_safely(*doc, target, {});
+  ASSERT_TRUE(saved) << saved.error().message;
+  ASSERT_TRUE(PdfiumDocument::open(target));
+  EXPECT_EQ(files_in(dir.path()), 1u);
+}
+
 // 재작성이 문서를 망가뜨리면 기존 검증이 잡아 원본은 그대로
 TEST(SaveDocument, RewriteCorruptionIsCaughtByVerify) {
   ScopedTempDir dir;
