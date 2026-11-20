@@ -96,6 +96,10 @@ class PdfiumDocument final : public EditableDocument {
   [[nodiscard]] int snapshot_count() const noexcept { return static_cast<int>(snapshots_.size()); }  // 테스트용
   [[nodiscard]] int font_cache_size() const noexcept { return static_cast<int>(fonts_.size()); }     // 테스트용
 
+  // 폰트 캐시(fonts_)의 글꼴 가운데 어느 쪽의 텍스트 객체도 쓰지 않는 것이 있는가 (취소한 텍스트의 서브셋 — #61).
+  // 캐시가 비어 있으면 쪽을 열지 않고 false. 쪽을 못 열면 보수적으로 false (쓰이는지 모르면 지우지 않는다)
+  [[nodiscard]] bool has_unreferenced_fonts() const;
+
   // ---- 저장 ----
   // 파일에 스트림으로 저장한다 (FPDF_SaveAsCopy). incremental 이면 원본 바이트 뒤에 변경만 덧붙인다(서명 보존).
   // 원자적 교체·검증은 save_document_safely 가 맡는다

@@ -1261,6 +1261,27 @@ struct FileWriter : FPDF_FILEWRITE {
 
 }  // namespace
 
+bool PdfiumDocument::has_unreferenced_fonts() const {
+  PdfiumLibrary::assert_current_thread();
+  if (fonts_.empty()) return false;
+  // FPDFText_LoadCidType2Font 와 FPDFPageObj_CreateTextObj 는 같은 CPDF_Font 를 공유하므로 핸들 포인터로 대조한다.
+  // OnPdf 텍스트는 쪽 직속 객체뿐이라 Form XObject 안은 보지 않는다
+  std::unordered_set<FPDF_FONT> unused;
+  for (const auto& [key, font] : fonts_) unused.insert(font.get());
+  const int pages = page_count();
+  for (int i = 0; i < pages && !unused.empty(); ++i) {
+    auto page = load_page(i);
+    if (!page) return false;
+    const int n = FPDFPage_CountObjects(page->get());
+    for (int k = 0; k < n && !unused.empty(); ++k) {
+      FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page->get(), k);
+      if (obj == nullptr || FPDFPageObj_GetType(obj) != FPDF_PAGEOBJ_TEXT) continue;
+      if (FPDF_FONT font = FPDFTextObj_GetFont(obj); font != nullptr) unused.erase(font);
+    }
+  }
+  return !unused.empty();
+}
+
 Result<void> PdfiumDocument::save_to(const std::filesystem::path& path, bool incremental) const {
   PdfiumLibrary::assert_current_thread();
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
