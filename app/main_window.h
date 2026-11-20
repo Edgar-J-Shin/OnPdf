@@ -185,6 +185,7 @@ class MainWindow : public QMainWindow {
   void on_object_resize_requested(int page, const QString& id, onpdf::Rect before, onpdf::Rect after);
   void on_text_width_requested(int page, const QString& box, double left_x, double width);
   void on_object_nudge_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta);
+  void explain_locked_object();  // 기존 이미지 편집을 막은 이유 (#57)
   void on_form_field_clicked(int page, const onpdf::engine::FormWidgetInfo& widget);
   void on_form_text_committed(int page, const onpdf::engine::FormWidgetInfo& widget, const QString& text);
   void show_form_choice_menu(int page, const onpdf::engine::FormWidgetInfo& widget);

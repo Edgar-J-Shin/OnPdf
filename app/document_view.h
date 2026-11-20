@@ -101,6 +101,11 @@ class DocumentView : public QAbstractScrollArea {
     return std::nullopt;
   }
   [[nodiscard]] std::optional<SelectedObject> selected_object() const { return selected_text_; }
+  // 문서에 원래 있던(마크 없는) 이미지는 선택만 된다 — 이동·크기·삭제는 그 스트림 전체를 PDFium 이 다시 써
+  // Type3·자간·선 폭·CMYK 등을 잃으므로 막는다 (#57, qpdf 수술로 바꿀 때까지)
+  [[nodiscard]] bool selected_object_locked() const {
+    return selected_text_ && selected_text_->kind == engine::ObjectKind::kImage && !selected_text_->marked;
+  }
   // 편집(추가) 뒤 새 목록이 오면 이 객체를 고른다 (이미지 추가 직후 선택)
   void select_after_refresh(int page, const std::string& key);
   void clear_text_box_selection();
@@ -196,6 +201,7 @@ class DocumentView : public QAbstractScrollArea {
   void object_resize_requested(int page, const QString& id, onpdf::Rect before, onpdf::Rect after);  // 이미지 핸들
   void text_width_requested(int page, const QString& box, double left_x, double width);              // 텍스트 상자 폭 핸들
   void object_nudge_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta);    // 화살표 키 (쪽 포인트)
+  void locked_object_edit_attempted();  // 기존 이미지를 옮기거나 지우려 했다 (#57) — 수신자가 안내
   void annotation_edit_requested(int page, const onpdf::engine::AnnotationInfo& info);
   void form_field_clicked(int page, const onpdf::engine::FormWidgetInfo& widget);              // 선택 도구로 칸 클릭 (#51)
   void form_text_committed(int page, const onpdf::engine::FormWidgetInfo& widget, const QString& text);  // 오버레이 확정
