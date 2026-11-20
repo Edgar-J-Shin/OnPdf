@@ -93,6 +93,13 @@ Result<void> verify_saved(const PdfiumDocument& source, const std::filesystem::p
     for (const auto& o : *after_objects) if (o.marked) after_ids.insert(o.id);
     if (before_ids != after_ids) return std::unexpected(verify_error("page objects changed on page " + std::to_string(i + 1)));
   }
+  // 폼 필드 값이 저장 뒤에도 같아야 한다 (#51)
+  {
+    auto before_values = source.form_values();
+    auto after_values = reopened->form_values();
+    if (!before_values || !after_values) return std::unexpected(verify_error("cannot read form field values"));
+    if (*before_values != *after_values) return std::unexpected(verify_error("form field values changed"));
+  }
   if (incremental) {
     const auto& original = source.original_bytes();
     std::ifstream in(saved, std::ios::binary);

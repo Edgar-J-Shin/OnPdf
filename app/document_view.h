@@ -10,6 +10,7 @@
 
 #include "onpdf/core/engine/annotation.h"
 #include "onpdf/core/engine/document_handle.h"
+#include "onpdf/core/engine/form.h"
 #include "onpdf/core/view/page_layout.h"
 #include "onpdf/core/view/tile_cache.h"
 #include "onpdf/core/view/search.h"
@@ -23,6 +24,7 @@
 #include <QElapsedTimer>
 #include <QImage>
 #include <QPoint>
+#include <QPointer>
 #include <QPointF>
 #include <QString>
 #include <QTimer>
@@ -37,6 +39,7 @@
 namespace onpdf::app {
 
 class DocumentTileSource;
+class FormFieldEditor;
 
 enum class ZoomMode { kFitWidth, kFitPage, kCustom };
 
@@ -101,6 +104,18 @@ class DocumentView : public QAbstractScrollArea {
   // 편집(추가) 뒤 새 목록이 오면 이 객체를 고른다 (이미지 추가 직후 선택)
   void select_after_refresh(int page, const std::string& key);
   void clear_text_box_selection();
+
+  // ---- 폼 채우기 (#51) ----
+  [[nodiscard]] const std::vector<engine::FormWidgetInfo>* form_widgets(int page) const;
+  // 채울 수 있을 때(권한) 칸을 옅게 강조한다. 클릭 신호는 권한과 무관하게 보낸다 (수신자가 안내)
+  void set_form_fillable(bool fillable);
+  [[nodiscard]] bool form_fillable() const noexcept { return form_fillable_; }
+  // 텍스트 칸 위에 오버레이 편집기를 연다 (열려 있던 편집기는 먼저 확정)
+  void open_form_editor(int page, const engine::FormWidgetInfo& widget);
+  void commit_form_editor();  // 열려 있으면 확정 (저장·다른 문서 열기·인쇄 전에)
+  void cancel_form_editor();
+  [[nodiscard]] FormFieldEditor* form_editor() const;
+  [[nodiscard]] QRectF page_rect_to_viewport(int page, const onpdf::Rect& r) const;
   // 내용 수정 권한·바쁨에 따라 상자 이동 드래그·커서를 막는다 (선택·정보 표시는 그대로). 썸네일 set_editable 과 같은 역할
   void set_text_editable(bool editable);
   // 화살표 이동은 권한만 본다: 바쁜 동안 누른 키는 MainWindow 가 모아 두었다가 실행한다 (#49)
@@ -182,6 +197,8 @@ class DocumentView : public QAbstractScrollArea {
   void text_width_requested(int page, const QString& box, double left_x, double width);              // 텍스트 상자 폭 핸들
   void object_nudge_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta);    // 화살표 키 (쪽 포인트)
   void annotation_edit_requested(int page, const onpdf::engine::AnnotationInfo& info);
+  void form_field_clicked(int page, const onpdf::engine::FormWidgetInfo& widget);              // 선택 도구로 칸 클릭 (#51)
+  void form_text_committed(int page, const onpdf::engine::FormWidgetInfo& widget, const QString& text);  // 오버레이 확정
 
  protected:
   void paintEvent(QPaintEvent* event) override;
@@ -312,6 +329,26 @@ class DocumentView : public QAbstractScrollArea {
   QPointF last_drag_pos_;
   QElapsedTimer click_timer_;
   int click_count_ = 0;
+
+  // 폼 (#51): 보이는 쪽 ±1 위젯 스냅샷, 오버레이 편집기, Tab 이동 대상
+  void request_form_widgets();
+  void on_form_widgets(int page, int generation, std::shared_ptr<const std::vector<engine::FormWidgetInfo>> list,
+                       bool cancelled);
+  [[nodiscard]] const engine::FormWidgetInfo* widget_at(int page, onpdf::Point pt) const;
+  void paint_form(QPainter& painter, int page, const QRectF& page_logical);
+  void place_form_editor();
+  void on_form_editor_done(bool commit, int advance);
+  void go_to_adjacent_text_widget(int page, const engine::FieldRef& from, bool backward);
+  void open_pending_form_editor();
+  std::unordered_map<int, std::shared_ptr<const std::vector<engine::FormWidgetInfo>>> form_cache_;
+  std::unordered_map<int, engine::TaskHandle> form_requested_;
+  bool form_fillable_ = false;
+  QPointer<FormFieldEditor> form_editor_;
+  struct PendingFormOpen {
+    int page = -1;
+    bool backward = false;  // 그 쪽의 마지막(true)·첫(false) 텍스트 칸
+  };
+  std::optional<PendingFormOpen> pending_form_open_;
   QPointF last_click_pos_;
   static constexpr int kTextKeepPages = 5;
   const view::SearchSession* search_ = nullptr;

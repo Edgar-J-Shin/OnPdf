@@ -5,6 +5,7 @@ add_library(onpdf_core STATIC
   src/engine/document_handle.cpp
   src/engine/text_page.cpp
   src/engine/dest.cpp
+  src/engine/form_env.cpp
   src/engine/save.cpp
   src/engine/qpdf_tools.cpp
   src/page_ranges.cpp

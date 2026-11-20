@@ -277,6 +277,57 @@ class FakeDocument final : public engine::EditableDocument {
     }
     return out;
   }
+  // ---- 폼 (#51): 쪽별 위젯. 같은 이름의 위젯은 값을 공유한다 ----
+  void add_widget(int page, engine::FormWidgetInfo info) { widgets_[page].push_back(std::move(info)); }
+  bool fail_form = false;
+  [[nodiscard]] const engine::FormWidgetInfo* widget(int page, const engine::FieldRef& ref) const {
+    const auto it = widgets_.find(page);
+    if (it == widgets_.end()) return nullptr;
+    for (const auto& w : it->second) if (w.ref == ref) return &w;
+    return nullptr;
+  }
+  [[nodiscard]] Result<std::vector<engine::FormWidgetInfo>> form_widgets(int page) const override {
+    if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
+    const auto it = widgets_.find(page);
+    return it == widgets_.end() ? std::vector<engine::FormWidgetInfo>{} : it->second;
+  }
+  [[nodiscard]] Result<std::vector<int>> set_form_text(int page, const engine::FieldRef& ref, std::string_view utf8) override {
+    auto target = mutable_widget(page, ref);
+    if (!target) return std::unexpected(target.error());
+    if ((*target)->type != engine::FieldType::kText && !(*target)->editable_combo) return make_error(ErrorCode::kInvalidArgument, "not text");
+    std::string value(utf8);
+    if ((*target)->max_len > 0 && value.size() > static_cast<std::size_t>((*target)->max_len)) value.resize(static_cast<std::size_t>((*target)->max_len));
+    return for_field(ref.name, [&](engine::FormWidgetInfo& w) {
+      w.value = value;
+      w.selected.clear();
+      for (std::size_t i = 0; i < w.options.size(); ++i) if (w.options[i] == value) w.selected.push_back(static_cast<int>(i));
+    });
+  }
+  [[nodiscard]] Result<std::vector<int>> set_form_checked(int page, const engine::FieldRef& ref, bool checked) override {
+    auto target = mutable_widget(page, ref);
+    if (!target) return std::unexpected(target.error());
+    const engine::FieldType type = (*target)->type;
+    if (type == engine::FieldType::kRadio && !checked && (*target)->checked) return make_error(ErrorCode::kUnsupported, "radio clear");
+    const std::string on = (*target)->export_value;
+    return for_field(ref.name, [&](engine::FormWidgetInfo& w) {
+      if (type == engine::FieldType::kRadio) {
+        w.checked = checked && w.ref == ref ? true : (checked ? false : w.checked);
+      } else {
+        w.checked = checked;
+      }
+      w.value = checked ? on : (type == engine::FieldType::kRadio ? w.value : "Off");
+    });
+  }
+  [[nodiscard]] Result<std::vector<int>> set_form_selection(int page, const engine::FieldRef& ref, const std::vector<int>& indices) override {
+    auto target = mutable_widget(page, ref);
+    if (!target) return std::unexpected(target.error());
+    for (int i : indices) if (i < 0 || i >= static_cast<int>((*target)->options.size())) return make_error(ErrorCode::kInvalidArgument, "index");
+    return for_field(ref.name, [&](engine::FormWidgetInfo& w) {
+      w.selected = indices;
+      w.value = indices.empty() ? std::string() : w.options[static_cast<std::size_t>(indices.front())];
+    });
+  }
+
   [[nodiscard]] int annotation_count(int page) const { const auto it = annots_.find(page); return it == annots_.end() ? 0 : static_cast<int>(it->second.size()); }
   [[nodiscard]] const FakeAnnot* annotation(int page, std::string_view id) const {
     const auto it = annots_.find(page);
@@ -475,6 +526,28 @@ class FakeDocument final : public engine::EditableDocument {
   }
 
  private:
+  Result<engine::FormWidgetInfo*> mutable_widget(int page, const engine::FieldRef& ref) {
+    if (fail_form) return make_error(ErrorCode::kInvalidState, "form failure");
+    if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
+    for (auto& w : widgets_[page]) {
+      if (w.ref != ref) continue;
+      if (w.read_only) return make_error(ErrorCode::kPermissionDenied, "read-only");
+      return &w;
+    }
+    return make_error(ErrorCode::kInvalidArgument, "field not found: " + ref.name);
+  }
+  template <class F>
+  std::vector<int> for_field(const std::string& name, F&& apply) {
+    std::vector<int> pages;
+    for (auto& [p, list] : widgets_) {
+      for (auto& w : list) {
+        if (w.ref.name != name) continue;
+        apply(w);
+        if (pages.empty() || pages.back() != p) pages.push_back(p);
+      }
+    }
+    return pages;
+  }
   [[nodiscard]] bool valid(int page) const { return page >= 0 && page < page_count(); }
   static bool matches(const FakeAnnot& a, int index, std::string_view id) {
     if (!id.empty() && id.front() == '#') return std::to_string(index) == id.substr(1);
@@ -502,6 +575,7 @@ class FakeDocument final : public engine::EditableDocument {
   int next_nm_ = 1;
   std::map<int, std::vector<FakeTextObject>> texts_;
   std::map<int, std::vector<FakeImage>> images_;
+  std::map<int, std::vector<engine::FormWidgetInfo>> widgets_;
   struct FakeDetached {
     int page = 0;
     std::vector<std::pair<std::size_t, FakeTextObject>> texts;

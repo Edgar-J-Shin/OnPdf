@@ -5,6 +5,7 @@
 #include "edit_controller.h"
 #include "onpdf/edit/font_face.h"
 #include "onpdf/edit/object_commands.h"
+#include "onpdf/edit/form_commands.h"
 #include "structure_job.h"
 #include "print_job.h"
 #include "onpdf/core/engine/pdfium_worker.h"
@@ -18,6 +19,7 @@
 
 #include <filesystem>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -117,6 +119,10 @@ class MainWindow : public QMainWindow {
   bool add_image(const QImage& image, int page, onpdf::Point origin, bool center);
   // 클립보드의 이미지(또는 이미지 파일 URL)를 현재 쪽 가운데에 놓는다. 시작하면 true
   bool paste_image();
+  // 폼 채우기 (#51). 선택지(콤보·목록)는 메뉴가 이 함수를 부른다 (테스트도)
+  bool choose_form_option(int page, const engine::FieldRef& ref, std::vector<int> indices);
+  // 열린 오버레이 편집기를 확정하고 폼 편집이 끝날 때까지 기다린다 (저장·닫기·인쇄 전)
+  void settle_form_edits();
   [[nodiscard]] QAction* paste_action() const noexcept { return paste_action_; }
   [[nodiscard]] bool has_text_font() const noexcept { return text_font_ != nullptr; }
   [[nodiscard]] double text_size() const noexcept { return text_size_; }
@@ -179,6 +185,11 @@ class MainWindow : public QMainWindow {
   void on_object_resize_requested(int page, const QString& id, onpdf::Rect before, onpdf::Rect after);
   void on_text_width_requested(int page, const QString& box, double left_x, double width);
   void on_object_nudge_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta);
+  void on_form_field_clicked(int page, const onpdf::engine::FormWidgetInfo& widget);
+  void on_form_text_committed(int page, const onpdf::engine::FormWidgetInfo& widget, const QString& text);
+  void show_form_choice_menu(int page, const onpdf::engine::FormWidgetInfo& widget);
+  void run_form_command(std::shared_ptr<edit::Command> command);
+  void flush_form_commands();
   void flush_pending_nudge();
   bool run_add_image(int page, engine::ImageSpec spec);
   void on_text_move_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta);
@@ -296,6 +307,10 @@ class MainWindow : public QMainWindow {
     onpdf::Point delta;
   };
   std::optional<PendingNudge> pending_nudge_;
+  // 폼 Command 대기열 (#51): Tab 으로 연달아 입력하면 앞 편집이 끝나기 전에 다음 확정이 온다
+  std::deque<std::shared_ptr<edit::Command>> pending_form_commands_;
+  bool form_edits_allowed_ = false;
+  bool form_in_flight_ = false;  // 대기열에서 보낸 폼 Command 가 워커에서 도는 중 (settle 은 이것만 기다린다)  // 권한(fill_forms)만. 바쁜 동안은 대기열에 쌓는다
   QAction* paste_action_ = nullptr;
   engine::Color text_color_{0, 0, 0, 255};  // 새 텍스트 색 (기본 검정; 색 팔레트가 주석 색과 함께 바꾼다)
   bool updating_actions_ = false;          // update_edit_actions 재진입 차단
