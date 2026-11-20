@@ -200,7 +200,8 @@ class MainWindow : public QMainWindow {
   void on_text_line_selected(bool has, int page, const engine::TextLineInfo& info);
   void on_text_line_edit_requested(int page, const engine::TextLineInfo& info);
   void on_text_line_delete_requested(int page, const engine::TextLineInfo& info);
-  bool run_line_replace(int page, const std::string& line_id, const QString& text);
+  bool run_line_replace(int page, const std::string& line_id, std::optional<QString> text, std::optional<double> size,
+                        std::optional<engine::Color> color);
   void announce_line_edit();  // 줄 수정 Command 가 끝나면 새 상자를 고르고 대체 글꼴 안내
   [[nodiscard]] QString line_reason_text(const engine::TextLineInfo& info) const;
   bool replace_selected_text(std::optional<QString> utf8, std::optional<double> size, std::optional<engine::Color> color);

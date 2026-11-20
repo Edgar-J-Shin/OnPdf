@@ -307,7 +307,7 @@ TEST(RenderRegression, LineEditedAndSavedPage) {
     for (const auto& l : *lines) if (l.text.find(needle) != std::string::npos) return l.id;
     return {};
   };
-  edit::ReplaceTextLineCommand replace(0, find("Hello world line"), "Hello edited line", *face);
+  edit::ReplaceTextLineCommand replace(0, find("Hello world line"), std::string("Hello edited line"), std::nullopt, std::nullopt, *face);
   ASSERT_TRUE(replace.execute(*doc));
   edit::RemoveTextLineCommand remove(0, find("Delete me entirely"));
   ASSERT_TRUE(remove.execute(*doc));

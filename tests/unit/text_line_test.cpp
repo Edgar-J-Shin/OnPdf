@@ -527,5 +527,38 @@ TEST(TextLines, DisplacementAcrossContentStreamsIsRefused) {
   EXPECT_EQ(report->needs_displacement, 1);
   EXPECT_EQ(report->page_show_ops, 3);
 }
+
+// #69: 크기·색 변경 — 원본 글꼴 유지, 기준선 유지(상자 아래쪽이 원래 줄 아래쪽 근처), 줄 밖 보존, 복원
+TEST(TextLines, FormatChangesSizeAndColorKeepingBaseline) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-type3.pdf"));
+  ASSERT_TRUE(doc);
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines);
+  const TextLineInfo* korean = find_line(*lines, "한글 텍스트 줄");
+  ASSERT_NE(korean, nullptr);
+  const Bitmap before = render(*doc);
+  LineReplacement r{"한글 텍스트 줄", std::nullopt, 27.0, Color{0, 0, 200, 255}};
+  auto replaced = doc->replace_text_line(0, korean->id, r);
+  ASSERT_TRUE(replaced) << replaced.error().message;
+  EXPECT_FALSE(replaced->used_fallback);
+  auto objects = doc->text_objects(0);
+  ASSERT_TRUE(objects);
+  ASSERT_EQ(objects->size(), 1u);
+  EXPECT_NEAR((*objects)[0].font_size, 27.0, 0.05) << "유효 크기 18 → 27";
+  EXPECT_EQ((*objects)[0].color.b, 200);
+  EXPECT_NEAR((*objects)[0].baseline_origin.y, korean->bbox.bottom(), 6.0) << "기준선은 그대로";
+  EXPECT_EQ(page_text(*doc).find("한글 텍스트 줄") != std::string::npos, true);
+  // 기준선 고정이라 줄이 위·오른쪽으로 1.5배 커진다 → 그만큼 넓힌 마스크 밖은 동일
+  Rect mask = korean->bbox;
+  mask.y -= korean->bbox.h;
+  mask.h += korean->bbox.h;
+  mask.w = korean->bbox.w * 1.6 + 4;
+  EXPECT_EQ(diff_outside(before, render(*doc), mask, 6.0), 0);
+  LineReplacement bad{"한글 텍스트 줄", std::nullopt, 0.0, std::nullopt};
+  EXPECT_FALSE(doc->replace_text_line(0, replaced->box, bad));
+  ASSERT_TRUE(doc->restore_document_state(replaced->before));
+  EXPECT_EQ(render(*doc).pixels, before.pixels);
+  doc->drop_document_state(replaced->before);
+}
 }  // namespace
 }  // namespace onpdf::engine

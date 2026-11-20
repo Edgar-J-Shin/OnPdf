@@ -42,7 +42,7 @@ std::string page_text(const engine::PdfiumDocument& doc) {
 TEST(TextLineCommands, ReplaceExecuteUndoRedoOnFake) {
   FakeDocument doc({{612, 792}});
   doc.add_line(0, "p/0/abc", "old line");
-  ReplaceTextLineCommand cmd(0, "p/0/abc", "new line", test_font());
+  ReplaceTextLineCommand cmd(0, "p/0/abc", std::string("new line"), std::nullopt, std::nullopt, test_font());
   EXPECT_EQ(cmd.id(), "replace_line");
   EXPECT_FALSE(cmd.undo(doc)) << "실행 전 취소는 실패";
   auto change = cmd.execute(doc);
@@ -68,11 +68,11 @@ TEST(TextLineCommands, ReplaceExecuteUndoRedoOnFake) {
 TEST(TextLineCommands, FallbackFontWhenOriginalCannotDraw) {
   FakeDocument doc({{612, 792}});
   doc.add_line(0, "p/1/abc", "old", /*covers=*/false);
-  ReplaceTextLineCommand without(0, "p/1/abc", "한글", nullptr);
+  ReplaceTextLineCommand without(0, "p/1/abc", std::string("한글"), std::nullopt, std::nullopt, nullptr);
   auto refused = without.execute(doc);
   ASSERT_FALSE(refused);
   EXPECT_EQ(refused.error().code, ErrorCode::kUnsupported);
-  ReplaceTextLineCommand cmd(0, "p/1/abc", "한글", test_font());
+  ReplaceTextLineCommand cmd(0, "p/1/abc", std::string("한글"), std::nullopt, std::nullopt, test_font());
   ASSERT_TRUE(cmd.execute(doc));
   EXPECT_TRUE(cmd.used_fallback());
   EXPECT_EQ(doc.font_count(), 1);
@@ -113,7 +113,7 @@ TEST(TextLineCommands, PdfiumReplaceUndoRedoRestoresRender) {
   ASSERT_TRUE(before);
   const std::string id = line_id_containing(*doc, 0, "한글 텍스트 줄");
   ASSERT_FALSE(id.empty());
-  ReplaceTextLineCommand cmd(0, id, "줄 텍스트 한글", test_font());
+  ReplaceTextLineCommand cmd(0, id, std::string("줄 텍스트 한글"), std::nullopt, std::nullopt, test_font());
   ASSERT_TRUE(cmd.execute(*doc));
   EXPECT_FALSE(cmd.used_fallback()) << "임베딩 CID 글꼴 재사용";
   EXPECT_NE(page_text(*doc).find("줄 텍스트 한글"), std::string::npos);
@@ -130,7 +130,7 @@ TEST(TextLineCommands, PdfiumReplaceUndoRedoRestoresRender) {
   ASSERT_TRUE(redone);
   EXPECT_EQ(redone->pixels, edited->pixels);
   // OnPdf 상자 재수정(수술 없음)과 그 취소
-  ReplaceTextLineCommand again(0, cmd.box(), "한글 줄", test_font());
+  ReplaceTextLineCommand again(0, cmd.box(), std::string("한글 줄"), std::nullopt, std::nullopt, test_font());
   ASSERT_TRUE(again.execute(*doc));
   EXPECT_NE(page_text(*doc).find("한글 줄"), std::string::npos);
   ASSERT_TRUE(again.undo(*doc));
@@ -183,5 +183,55 @@ TEST(TextLineCommands, EarlierEditsStayUndoableAcrossReopen) {
   EXPECT_EQ(doc->document_state_count(), 0);
 }
 
+
+// #69: 서식만 바꾸면 id 는 format_line, 가짜·PDFium 모두 취소가 크기·색을 되돌린다 (ofont 상자 경로 포함)
+TEST(TextLineCommands, FormatOnlyChangesSizeAndColorAndUndoes) {
+  FakeDocument doc({{612, 792}});
+  doc.add_line(0, "p/0/abc", "keep me");
+  ReplaceTextLineCommand nothing(0, "p/0/abc", std::nullopt, std::nullopt, std::nullopt, test_font());
+  EXPECT_FALSE(nothing.execute(doc));
+  ReplaceTextLineCommand format(0, "p/0/abc", std::nullopt, 24.0, engine::Color{200, 0, 0, 255}, test_font());
+  EXPECT_EQ(format.id(), "format_line");
+  ASSERT_TRUE(format.execute(doc));
+  ASSERT_EQ(doc.text_objects_on(0).size(), 1u);
+  EXPECT_EQ(doc.text_objects_on(0)[0].line.text, "keep me") << "글은 그대로";
+  EXPECT_DOUBLE_EQ(doc.text_objects_on(0)[0].line.font_size, 24.0);
+  EXPECT_EQ(doc.text_objects_on(0)[0].line.color.r, 200);
+  ASSERT_TRUE(format.undo(doc));
+  EXPECT_EQ(doc.lines_on(0).size(), 1u);
+  ASSERT_TRUE(format.execute(doc));
+  format.discard(doc);
+  EXPECT_EQ(doc.document_state_count(), 0);
+
+  auto pdf = engine::PdfiumDocument::open(testdata("text-lines-type3.pdf"));
+  ASSERT_TRUE(pdf);
+  const std::string id = line_id_containing(*pdf, 0, "한글 텍스트 줄");
+  ASSERT_FALSE(id.empty());
+  ReplaceTextLineCommand bigger(0, id, std::nullopt, 24.0, std::nullopt, test_font());
+  ASSERT_TRUE(bigger.execute(*pdf));
+  EXPECT_FALSE(bigger.used_fallback()) << "원본 글꼴 유지";
+  auto objects = pdf->text_objects(0);
+  ASSERT_TRUE(objects);
+  ASSERT_EQ(objects->size(), 1u);
+  EXPECT_NEAR((*objects)[0].font_size, 24.0, 0.05);
+  EXPECT_TRUE((*objects)[0].original_font);
+  // ofont 상자의 색 변경(수술 없음) → 취소가 크기·색 복원
+  ReplaceTextLineCommand red(0, bigger.box(), std::nullopt, std::nullopt, engine::Color{200, 0, 0, 255}, test_font());
+  EXPECT_EQ(red.id(), "format_line");
+  ASSERT_TRUE(red.execute(*pdf));
+  objects = pdf->text_objects(0);
+  ASSERT_EQ(objects->size(), 1u);
+  EXPECT_EQ((*objects)[0].color.r, 200);
+  EXPECT_NEAR((*objects)[0].font_size, 24.0, 0.05);
+  ASSERT_TRUE(red.undo(*pdf));
+  objects = pdf->text_objects(0);
+  ASSERT_EQ(objects->size(), 1u);
+  EXPECT_EQ((*objects)[0].color.r, 0);
+  EXPECT_NEAR((*objects)[0].font_size, 24.0, 0.05);
+  EXPECT_EQ((*objects)[0].text, "한글 텍스트 줄");
+  ASSERT_TRUE(bigger.undo(*pdf));
+  EXPECT_TRUE(pdf->text_objects(0)->empty());
+  bigger.discard(*pdf);
+}
 }  // namespace
 }  // namespace onpdf::edit
