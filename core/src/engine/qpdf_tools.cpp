@@ -235,6 +235,28 @@ Result<int> QpdfTools::page_count(const std::filesystem::path& file, std::string
   return n;
 }
 
+Result<int> QpdfTools::direct_annotation_count(const std::filesystem::path& file, std::string_view password) {
+  auto q = open_for_query(file, password);
+  if (!q) return std::unexpected(q.error());
+  qpdf_data data = q->get();
+  const int pages = qpdf_get_num_pages(data);
+  if (pages < 0) return make_error(ErrorCode::kJobFailed, "cannot read pages");
+  int direct = 0;
+  for (int i = 0; i < pages; ++i) {
+    const qpdf_oh page = qpdf_get_page_n(data, static_cast<std::size_t>(i));
+    if (!qpdf_oh_has_key(data, page, "/Annots")) continue;
+    const qpdf_oh annots = qpdf_oh_get_key(data, page, "/Annots");
+    if (!qpdf_oh_is_array(data, annots)) continue;
+    const int count = qpdf_oh_get_array_n_items(data, annots);
+    for (int k = 0; k < count; ++k) {
+      const qpdf_oh item = qpdf_oh_get_array_item(data, annots, k);
+      if (qpdf_oh_is_dictionary(data, item) && !qpdf_oh_is_indirect(data, item)) ++direct;
+    }
+  }
+  if (qpdf_has_error(data)) return make_error(ErrorCode::kJobFailed, "cannot read annotations");
+  return direct;
+}
+
 Result<bool> QpdfTools::allows_extraction(const std::filesystem::path& file, std::string_view password) {
   auto q = open_for_query(file, password);
   if (!q) return std::unexpected(q.error());

@@ -41,6 +41,7 @@ struct AnnotationInfo {
   bool has_border = false;
   float opacity = 1.0f;                           // /CA (없으면 1). AP 가 있어도 읽힌다
   bool has_bs = false;                            // /BS 가 있는 주석: 두께는 삭제·재생성으로만 바꿀 수 있다
+  bool has_appearance = false;                    // /AP /N 이 있다 (새·고친 주석은 렌더·저장 때 PDFium 이 만든다, #53)
 };
 
 // 선 두께(/Border)가 의미 있는 종류: 펜·사각형·원 (edit 의 Command 와 app 의 메뉴가 같은 기준을 쓴다)

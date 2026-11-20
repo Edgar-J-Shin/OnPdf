@@ -39,6 +39,8 @@ class QpdfTools {
   [[nodiscard]] static Result<JobReport> check(const std::filesystem::path& file, std::string_view password = {});
   [[nodiscard]] static Result<int> page_count(const std::filesystem::path& file, std::string_view password = {});
   [[nodiscard]] static Result<bool> allows_extraction(const std::filesystem::path& file, std::string_view password = {});
+  // 쪽 /Annots 안에 직접(간접 참조가 아닌) 주석 사전이 몇 개인가. PDF 규격 표 30 은 간접 참조를 요구한다 (#53 검증용)
+  [[nodiscard]] static Result<int> direct_annotation_count(const std::filesystem::path& file, std::string_view password = {});
 };
 
 }  // namespace onpdf::engine

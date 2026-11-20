@@ -567,9 +567,37 @@ Result<std::vector<AnnotationInfo>> PdfiumDocument::annotations(int page_index) 
     float ca = 1.0f;
     if (FPDFAnnot_GetNumberValue(annot.get(), "CA", &ca)) info.opacity = std::clamp(ca, 0.0f, 1.0f);
     info.has_bs = FPDFAnnot_HasKey(annot.get(), "BS") != 0;
+    info.has_appearance = FPDFAnnot_GetAP(annot.get(), FPDF_ANNOT_APPEARANCEMODE_NORMAL, nullptr, 0) > 2;  // 빈 문자열 = NUL 2바이트
     out.push_back(std::move(info));
   }
   return out;
+}
+
+Result<int> PdfiumDocument::ensure_annotation_appearances() const {
+  // 새 주석은 AP 없이 만들고, 색·불투명도를 바꾸면 AP 를 지운다: PDFium 은 쪽을 렌더할 때 AP 를 만들어 사전에 넣는다.
+  // 렌더되지 않은 채 저장하면 AP 가 없어 다른 뷰어가 제멋대로 그린다(미리보기: /CA 무시) — 저장 전에 그 쪽만 렌더한다 (#53).
+  // OnPdf 가 만든·고친 주석(/NM onpdf-…)만 본다: 다른 프로그램 주석의 AP 를 새로 만들면 서명 문서의 증분 저장에 섞인다
+  int rendered = 0;
+  for (int i = 0; i < page_count(); ++i) {
+    auto page = load_page(i);
+    if (!page) return std::unexpected(page.error());
+    bool needs = false;
+    const int count = std::max(0, FPDFPage_GetAnnotCount(page->get()));
+    for (int a = 0; a < count && !needs; ++a) {
+      ScopedAnnotation annot(FPDFPage_GetAnnot(page->get(), a));
+      if (!annot || !is_editable_kind(kind_of(FPDFAnnot_GetSubtype(annot.get())))) continue;
+      if (annot_string(annot.get(), "NM").rfind("onpdf-", 0) != 0) continue;
+      needs = FPDFAnnot_GetAP(annot.get(), FPDF_ANNOT_APPEARANCEMODE_NORMAL, nullptr, 0) <= 2;
+    }
+    if (!needs) continue;
+    // 주석 목록을 만드는 렌더가 AP 를 생성하고, /Annots 의 직접 사전을 간접 객체로 바꾼다(CPDF_AnnotList) —
+    // FPDFPage_CreateAnnot 은 직접 사전을 넣으므로 이 렌더가 규격(표 30: 간접 참조) 위반도 함께 고친다 (크기 무관: 1×1)
+    ScopedBitmap bitmap(FPDFBitmap_Create(1, 1, 1));
+    if (!bitmap) return make_error(ErrorCode::kRenderFailed, "FPDFBitmap_Create failed");
+    FPDF_RenderPageBitmap(bitmap.get(), page->get(), 0, 0, 1, 1, 0, FPDF_ANNOT);
+    ++rendered;
+  }
+  return rendered;
 }
 
 Result<std::string> PdfiumDocument::add_annotation(int page_index, const AnnotationSpec& spec) {
@@ -1242,6 +1270,7 @@ Result<void> PdfiumDocument::save_to(const std::filesystem::path& path, bool inc
   writer.WriteBlock = &FileWriter::write_block;
   writer.out = &out;
   if (FPDF_FORMHANDLE form = form_handle()) (void)FORM_ForceToKillFocus(form);  // 편집 중 값이 남지 않게 (#51)
+  if (auto ensured = ensure_annotation_appearances(); !ensured) return std::unexpected(ensured.error());
   const FPDF_DWORD flags = incremental ? FPDF_INCREMENTAL : FPDF_NO_INCREMENTAL;
   const bool ok = FPDF_SaveAsCopy(doc_.get(), &writer, flags) != 0;
   out.flush();

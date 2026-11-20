@@ -45,6 +45,8 @@ class PdfiumDocument final : public EditableDocument {
 
   // AcroForm 이 있으면 폼 필 환경을 갖는다 (#51). XFA 는 AcroForm 부분만
   [[nodiscard]] FormType form_type() const noexcept { return form_type_; }
+  // 저장 전: AP 가 없는 OnPdf 주석이 있는 쪽을 렌더해 PDFium 이 AP 를 만들게 한다. 렌더한 쪽 수 (#53)
+  [[nodiscard]] Result<int> ensure_annotation_appearances() const;
 
   [[nodiscard]] int page_count() const noexcept override;
   [[nodiscard]] Result<PageSize> page_size(int page_index) const override;
