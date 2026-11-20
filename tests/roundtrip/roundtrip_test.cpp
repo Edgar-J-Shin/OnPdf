@@ -8,6 +8,7 @@
 #include "onpdf/edit/add_text_command.h"
 #include "onpdf/edit/object_commands.h"
 #include "onpdf/edit/text_box_commands.h"
+#include "onpdf/edit/text_line_commands.h"
 #include "onpdf/edit/annotation_commands.h"
 #include "onpdf/edit/delete_pages.h"
 #include "onpdf/edit/form_commands.h"
@@ -462,6 +463,61 @@ TEST(Roundtrip, EditedTextSurvivesSave) {
 }
 
 // 이미지(#49): 픽셀·JPEG 추가, 기존 이미지(scanned.pdf) 크기·이동, 삭제 → 저장 → 다시 열기 → 객체·필터·마크·렌더·qpdf. 서명 증분
+// 기존 줄 수정(#65): 원본 글꼴 재사용(CID 한글)·대체 글꼴(Helvetica)·삭제 → 저장 → 다시 열기 → 추출·마크·렌더 동일, 암호본 포함
+TEST(Roundtrip, EditedLinesSurviveSave) {
+  auto face = edit::FontFace::load(testdata("fonts") / "NotoSansKR-subset.ttf");
+  ASSERT_TRUE(face);
+  struct Case { const char* file; const char* password; const char* target; const char* replacement; const char* removed; };
+  const Case cases[] = {{"text-lines-basic.pdf", "", "Hello world line", "Hello saved line", "Delete me entirely"},
+                        {"text-lines-basic-enc.pdf", "user", "Hello world line", "Hello saved line", "Delete me entirely"},
+                        {"text-lines-type3.pdf", "", "한글 텍스트 줄", "줄 텍스트 한글", "ABAB"}};
+  for (const Case& c : cases) {
+    auto doc = PdfiumDocument::open(testdata(c.file), c.password);
+    ASSERT_TRUE(doc) << c.file;
+    auto find = [&](const char* needle) -> std::string {
+      auto lines = doc->text_lines(0);
+      EXPECT_TRUE(lines);
+      for (const auto& l : *lines) if (l.text.find(needle) != std::string::npos) return l.id;
+      return {};
+    };
+    const std::string target = find(c.target);
+    ASSERT_FALSE(target.empty()) << c.file;
+    edit::ReplaceTextLineCommand replace(0, target, c.replacement, *face);
+    ASSERT_TRUE(replace.execute(*doc)) << c.file;
+    const std::string removed = find(c.removed);
+    ASSERT_FALSE(removed.empty()) << c.file;
+    edit::RemoveTextLineCommand remove(0, removed);
+    ASSERT_TRUE(remove.execute(*doc)) << c.file;
+    RenderOptions render;
+    render.scale = 1.0f;
+    auto before = doc->render_page(0, render);
+    ASSERT_TRUE(before);
+    const auto before_objects = *doc->text_objects(0);
+    ScopedTempDir dir;
+    const auto target_path = dir / "lines.pdf";
+    auto saved = save_document_safely(*doc, target_path, {});
+    ASSERT_TRUE(saved) << c.file << ": " << saved.error().message;
+    auto reopened = PdfiumDocument::open(target_path, c.password);
+    ASSERT_TRUE(reopened) << c.file;
+    const std::string text = reopened->load_text(0)->all_text();
+    EXPECT_NE(text.find(c.replacement), std::string::npos) << c.file << ": " << text;
+    EXPECT_EQ(text.find(c.target), std::string::npos) << c.file;
+    EXPECT_EQ(text.find(c.removed), std::string::npos) << c.file;
+    auto after = reopened->render_page(0, render);
+    ASSERT_TRUE(after);
+    EXPECT_EQ(after->pixels, before->pixels) << c.file << ": 저장 전후 렌더가 같아야 한다";
+    const auto after_objects = *reopened->text_objects(0);
+    ASSERT_EQ(after_objects.size(), before_objects.size()) << c.file;
+    for (std::size_t i = 0; i < before_objects.size(); ++i) {
+      EXPECT_EQ(after_objects[i].id, before_objects[i].id);
+      EXPECT_EQ(after_objects[i].original_font, before_objects[i].original_font);
+    }
+    auto check = engine::QpdfTools::check(target_path, c.password);
+    ASSERT_TRUE(check) << c.file << ": " << check.error().message;
+    EXPECT_TRUE(check->warnings.empty()) << c.file;
+  }
+}
+
 TEST(Roundtrip, ImagesSurviveSave) {
   struct Case { const char* file; bool incremental; };
   for (const Case c : {Case{"simple.pdf", false}, Case{"scanned.pdf", false}, Case{"signed-dummy.pdf", true}}) {

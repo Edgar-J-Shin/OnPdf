@@ -7,6 +7,7 @@
 #include "onpdf/core/engine/form.h"
 #include "onpdf/core/engine/render_types.h"
 #include "onpdf/core/engine/page_object.h"
+#include "onpdf/core/engine/text_line.h"
 #include "onpdf/core/engine/text_object.h"
 #include "onpdf/core/error.h"
 
@@ -123,6 +124,20 @@ class EditableDocument {
   [[nodiscard]] virtual Result<void> reattach_objects(DetachedId id) = 0;
   // 보관한 객체를 버린다 (밀려난 Command 의 discard). 없는 토큰은 무시
   virtual void drop_detached(DetachedId id) noexcept = 0;
+
+  // ---- 기존 텍스트 줄 수정 (#65) ----
+  // 쪽의 텍스트 객체(직속 + Form XObject 1단계)를 줄로 묶은 목록. id 는 현재 문서 바이트에서만 유효
+  [[nodiscard]] virtual Result<std::vector<TextLineInfo>> text_lines(int page_index) const = 0;
+  // 그 줄의 원본 글꼴이 utf8 의 모든 글자를 그릴 수 있는가 (Type3·비임베딩이면 false)
+  [[nodiscard]] virtual Result<bool> line_font_covers(int page_index, std::string_view line_id, std::string_view utf8) const = 0;
+  // 줄 삭제: qpdf 수술 → 다시 열기. 결과 before 가 수술 전 상태 토큰 (호출자가 drop)
+  [[nodiscard]] virtual Result<LineEditResult> remove_text_line(int page_index, std::string_view line_id) = 0;
+  // 줄 교체: 새 텍스트(원본 글꼴 재사용 또는 fallback)를 넣고 원래 줄을 수술로 지운다. line_id 가 OnPdf 상자 id 면 수술 없음
+  [[nodiscard]] virtual Result<LineEditResult> replace_text_line(int page_index, std::string_view line_id,
+                                                                 const LineReplacement& replacement) = 0;
+  // 상태 토큰의 바이트로 문서를 되돌린다 (토큰은 유지 — 호출자가 drop)
+  [[nodiscard]] virtual Result<void> restore_document_state(DocumentStateId id) = 0;
+  virtual void drop_document_state(DocumentStateId id) noexcept = 0;
 
   // ---- 폼 채우기 (#51). 위젯은 필드 이름 + 컨트롤 index 로 가리킨다. 결과는 값이 바뀐 쪽들 (같은 필드의 다른 위젯 포함) ----
   // 쪽의 위젯 (폼이 없으면 빈 목록)

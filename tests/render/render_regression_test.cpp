@@ -7,6 +7,7 @@
 #include "onpdf/edit/add_text_command.h"
 #include "onpdf/edit/object_commands.h"
 #include "onpdf/edit/text_box_commands.h"
+#include "onpdf/edit/text_line_commands.h"
 #include "onpdf/core/engine/save.h"
 #include "onpdf/core/image/png_io.h"
 
@@ -291,6 +292,40 @@ TEST(RenderRegression, TextEditedAndSavedPage) {
     GTEST_SKIP() << "reference updated: " << expected_path;
   }
   onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "simple-p0-text-edited.png");
+}
+
+// 기존 줄 수정(#65): Tc/Tw·굵게 섞인 줄은 그대로 두고 "Hello world line" 을 대체 글꼴로 고치고 "Delete me entirely" 를 지운다
+// → 저장 → 다시 열어 렌더 (원본 스트림이 재생성되지 않았음을 기준 PNG 가 증명한다)
+TEST(RenderRegression, LineEditedAndSavedPage) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-basic.pdf"));
+  ASSERT_TRUE(doc) << doc.error().message;
+  auto face = edit::FontFace::load(testdata("fonts") / "NotoSansKR-subset.ttf");
+  ASSERT_TRUE(face);
+  auto find = [&](const char* needle) -> std::string {
+    auto lines = doc->text_lines(0);
+    EXPECT_TRUE(lines);
+    for (const auto& l : *lines) if (l.text.find(needle) != std::string::npos) return l.id;
+    return {};
+  };
+  edit::ReplaceTextLineCommand replace(0, find("Hello world line"), "Hello edited line", *face);
+  ASSERT_TRUE(replace.execute(*doc));
+  edit::RemoveTextLineCommand remove(0, find("Delete me entirely"));
+  ASSERT_TRUE(remove.execute(*doc));
+  onpdf::test::ScopedTempDir dir;
+  const auto saved_path = dir / "line-edited.pdf";
+  ASSERT_TRUE(engine::save_document_safely(*doc, saved_path, {}));
+  auto reopened = PdfiumDocument::open(saved_path);
+  ASSERT_TRUE(reopened) << reopened.error().message;
+  RenderOptions options;
+  options.scale = 1.0f;
+  auto actual = reopened->render_page(0, options);
+  ASSERT_TRUE(actual) << actual.error().message;
+  const auto expected_path = testdata("expected") / "text-lines-basic-p0-line-edited.png";
+  if (update_references()) {
+    ASSERT_TRUE(image::write_png(*actual, expected_path));
+    GTEST_SKIP() << "reference updated: " << expected_path;
+  }
+  onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "text-lines-basic-p0-line-edited.png");
 }
 
 // 이미지(#49): 투명 PNG(파란 사각형 위) + JPEG → 이동·크기 조절 → 저장 → 다시 열어 렌더

@@ -70,6 +70,7 @@ struct TextObjectInfo {
   Point baseline_origin;  // 기준선 왼쪽 끝 (쪽 포인트)
   Rect bbox;              // 쪽 포인트
   int index = -1;         // 쪽 객체 순서 (z 순서)
+  bool original_font = false;  // 기존 줄을 원본 글꼴로 고친 객체 (마크 ofont, #65) — 재수정도 원본 글꼴 경로로
 };
 
 }  // namespace onpdf::engine

@@ -12,6 +12,7 @@
 #include "onpdf/edit/annotation_commands.h"
 #include "onpdf/edit/object_commands.h"
 #include "onpdf/edit/text_box_commands.h"
+#include "onpdf/edit/text_line_commands.h"
 #include "onpdf/edit/delete_pages.h"
 #include "onpdf/edit/insert_pages.h"
 #include "onpdf/edit/move_pages.h"
@@ -63,6 +64,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <utility>
 #include <memory>
 #include <string>
 
@@ -142,6 +144,9 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(view_, &DocumentView::text_width_requested, this, &MainWindow::on_text_width_requested);
   connect(view_, &DocumentView::object_nudge_requested, this, &MainWindow::on_object_nudge_requested);
   connect(view_, &DocumentView::locked_object_edit_attempted, this, &MainWindow::explain_locked_object);
+  connect(view_, &DocumentView::text_line_selected, this, &MainWindow::on_text_line_selected);
+  connect(view_, &DocumentView::text_line_edit_requested, this, &MainWindow::on_text_line_edit_requested);
+  connect(view_, &DocumentView::text_line_delete_requested, this, &MainWindow::on_text_line_delete_requested);
   connect(view_, &DocumentView::form_field_clicked, this, &MainWindow::on_form_field_clicked);
   connect(view_, &DocumentView::form_text_committed, this, &MainWindow::on_form_text_committed);
   connect(view_, &DocumentView::ink_requested, this, &MainWindow::on_ink_requested);
@@ -157,6 +162,7 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(edit_, &EditController::state_changed, this, [this] {
     update_edit_actions();
     update_title();
+    announce_line_edit();
     flush_pending_nudge();
     if (!edit_->busy()) form_in_flight_ = false;
     flush_form_commands();
@@ -421,6 +427,8 @@ QString MainWindow::command_label(std::string_view id) const {
   if (id == "remove_text") return tr("텍스트 삭제");
   if (id == "replace_text") return tr("텍스트 수정");
   if (id == "resize_text") return tr("텍스트 폭 변경");
+  if (id == "replace_line") return tr("줄 수정");
+  if (id == "remove_line") return tr("줄 삭제");
   if (id == "form_text") return tr("폼 입력");
   if (id == "form_check" || id == "form_choice") return tr("폼 선택");
   if (id == "set_annotation_border_width") return tr("선 두께 변경");
@@ -481,7 +489,8 @@ void MainWindow::update_edit_actions() {
     if (action != nullptr) action->setEnabled(idle && can_annotate && view_->has_selection());
   }
   delete_annotation_action_->setEnabled((annotation_edits_allowed_ && view_->selected_annotation().has_value()) ||
-                                        (content_edits_allowed_ && view_->selected_object().has_value() && !view_->selected_object_locked()));
+                                        (content_edits_allowed_ && view_->selected_object().has_value() && !view_->selected_object_locked()) ||
+                                        (content_edits_allowed_ && view_->selected_line().has_value() && view_->selected_line()->info.editable));
   color_button_->setEnabled(can_annotate);
   // 텍스트 추가는 내용 수정 권한(비트 4) + 번들 폰트. 바쁨·저장·인쇄 중 요청은 annotation_edits_allowed_ 와 같은 규칙으로 막는다
   if (QAction* text_tool = tool_actions_[static_cast<int>(AnnotationTool::kText)]; text_tool != nullptr) {
@@ -1031,6 +1040,11 @@ void MainWindow::on_text_box_selected(bool has, const DocumentView::SelectedText
     if (selection_status_shown_) show_transient(QString());
     return;
   }
+  if (!pending_line_notice_.isEmpty()) {  // 줄 수정 뒤 새 상자 선택: 선택 문구 대신 안내 (#65)
+    statusBar()->showMessage(std::exchange(pending_line_notice_, QString()), 6000);
+    selection_status_shown_ = true;
+    return;
+  }
   QStringList parts;
   if (box.kind == engine::ObjectKind::kImage) {
     parts << tr("이미지") << tr("%1×%2 px").arg(box.pixel_width).arg(box.pixel_height)
@@ -1278,12 +1292,119 @@ void MainWindow::on_object_resize_requested(int page, const QString& id, onpdf::
   edit_->run(std::make_shared<edit::ResizeObjectCommand>(page, id.toStdString(), before, after));
 }
 
+// ---- 기존 텍스트 줄 (#65) ----
+
+QString MainWindow::line_reason_text(const engine::TextLineInfo& info) const {
+  if (info.reason == "multi-line-object") return tr("이 줄은 다른 줄과 한 객체라 따로 고칠 수 없습니다");
+  if (info.reason == "vertical") return tr("세로·회전 글은 고칠 수 없습니다");
+  if (info.reason == "nested-form") return tr("Form 안의 Form 에 든 글은 고칠 수 없습니다");
+  return tr("이 줄은 고칠 수 없습니다");
+}
+
+void MainWindow::on_text_line_selected(bool has, int, const engine::TextLineInfo& info) {
+  update_edit_actions();
+  if (!has) {
+    if (selection_status_shown_) show_transient(QString());
+    return;
+  }
+  QString text;
+  if (session_.has_document() && session_.handle().info().signature_count > 0) {
+    text = tr("서명된 문서의 글자는 고칠 수 없습니다");
+  } else if (!info.editable) {
+    text = line_reason_text(info);
+  } else {
+    QStringList parts;
+    parts << tr("줄") << QStringLiteral("%1 %2pt").arg(QString::fromStdString(info.font_name)).arg(info.font_size, 0, 'f', 1);
+    if (info.mixed_fonts) parts << tr("글꼴 섞임");
+    if (!info.font_embedded || info.font_type3) parts << tr("대체 글꼴로 수정");
+    parts << QString::fromStdString(info.text).left(60);
+    text = parts.join(QStringLiteral(" · "));
+  }
+  statusBar()->showMessage(text);
+  selection_status_shown_ = true;
+}
+
+bool MainWindow::run_line_replace(int page, const std::string& line_id, const QString& text) {
+  if (!text_edits_allowed_ || text_font_ == nullptr) return false;
+  auto command = std::make_shared<edit::ReplaceTextLineCommand>(page, line_id, text.toUtf8().toStdString(), text_font_);
+  pending_line_edit_ = command;
+  if (!edit_->run(command)) {
+    pending_line_edit_.reset();
+    return false;
+  }
+  return true;
+}
+
+void MainWindow::on_text_line_edit_requested(int page, const engine::TextLineInfo& info) {
+  if (!text_edits_allowed_ || text_font_ == nullptr) return;
+  if (session_.handle().info().signature_count > 0) {
+    show_transient(tr("서명된 문서의 글자는 고칠 수 없습니다"));
+    return;
+  }
+  if (!info.editable) {
+    show_transient(line_reason_text(info));
+    return;
+  }
+  for (;;) {
+    AnnotationDialog dialog(tr("줄 수정"), QString::fromStdString(info.text), this);
+    dialog.setObjectName(QStringLiteral("text_input"));
+    if (dialog.exec() != QDialog::Accepted) return;
+    const QString text = dialog.text().normalized(QString::NormalizationForm_C).simplified();
+    if (text.isEmpty() || text.toStdString() == info.text) return;
+    const std::u32string missing = text_font_->missing(text.toUtf8().toStdString());  // 대체 글꼴에도 없는 글자는 거절
+    if (missing.empty()) {
+      run_line_replace(page, info.id, text);
+      return;
+    }
+    QMessageBox warn(QMessageBox::Warning, tr("줄 수정"),
+                     tr("글꼴에 없는 글자가 있습니다: %1\n다른 글자로 바꿔 주세요.").arg(QString::fromStdU32String(missing.substr(0, 10))),
+                     QMessageBox::Ok, this);
+    warn.setObjectName(QStringLiteral("text_missing_glyphs"));
+    warn.exec();
+  }
+}
+
+void MainWindow::on_text_line_delete_requested(int page, const engine::TextLineInfo& info) {
+  if (!content_edits_allowed_) return;
+  if (session_.handle().info().signature_count > 0) {
+    show_transient(tr("서명된 문서의 글자는 고칠 수 없습니다"));
+    return;
+  }
+  if (!info.editable) {
+    show_transient(line_reason_text(info));
+    return;
+  }
+  edit_->run(std::make_shared<edit::RemoveTextLineCommand>(page, info.id));
+}
+
+void MainWindow::announce_line_edit() {
+  if (edit_->busy()) return;
+  auto command = pending_line_edit_.lock();
+  if (!command) return;
+  pending_line_edit_.reset();
+  if (edit_->undo_command() != command) return;  // 실패했다 (on_edit_failed 가 알린다)
+  auto* replace = dynamic_cast<edit::ReplaceTextLineCommand*>(command.get());
+  if (replace == nullptr) return;
+  if (!replace->box().empty()) {  // 고친 줄은 OnPdf 텍스트 상자가 됐다: 선택 도구로 돌아가 그 상자를 고른다 (이미지 추가와 같다)
+    tool_actions_[0]->setChecked(true);
+    view_->set_tool(AnnotationTool::kSelect);
+    view_->select_after_refresh(replace->page(), replace->box());
+  }
+  // 안내는 새 상자의 선택 문구 뒤에 보여야 남는다 (재선택이 상태 표시줄을 덮는다)
+  pending_line_notice_ = replace->used_fallback() ? tr("원본 글꼴에 없는 글자가 있어 Noto Sans KR 로 넣었습니다") : QString();
+  if (replace->box().empty() && !pending_line_notice_.isEmpty()) show_transient(std::exchange(pending_line_notice_, QString()));
+}
+
 void MainWindow::explain_locked_object() {
   // 다른 프로그램이 만든 이미지를 옮기면 PDFium 이 그 쪽 내용 스트림을 통째로 다시 써 글자 모양·색이 바뀔 수 있다 (#57)
   statusBar()->showMessage(tr("문서에 원래 있던 이미지는 옮기거나 크기를 바꾸거나 지울 수 없습니다 — 쪽 내용이 손상될 수 있습니다"), 6000);
 }
 
 bool MainWindow::delete_selected_text_box() {
+  if (auto line = view_->selected_line()) {  // 기존 줄 (#65)
+    on_text_line_delete_requested(line->page, line->info);
+    return true;
+  }
   // 텍스트 상자·이미지 공용: 떼어 문서가 보관 (재생성이 아니라 빈 줄·옛 객체 문제가 없다, #49)
   auto selected = view_->selected_object();
   if (!selected || !content_edits_allowed_) return false;
@@ -1307,7 +1428,8 @@ void MainWindow::on_text_edit_requested(int, const DocumentView::SelectedTextBox
     if (text.trimmed().isEmpty() || text.toStdString() == box.text) return;  // 빈 내용·같은 내용은 무시 (삭제는 Delete)
     const std::u32string missing = text_font_->missing(text.toUtf8().toStdString());
     if (missing.empty()) {
-      replace_selected_text(text, std::nullopt, std::nullopt);
+      if (box.original_font) run_line_replace(box.page, box.box, text);  // 원본 글꼴로 고친 줄은 다시 원본 글꼴로 (#65)
+      else replace_selected_text(text, std::nullopt, std::nullopt);
       return;
     }
     QMessageBox warn(QMessageBox::Warning, tr("텍스트"),

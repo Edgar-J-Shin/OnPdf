@@ -49,6 +49,10 @@ GENERATED = {
     "perm-assemble-only.pdf": docs.make_perm_assemble_only,
     "perm-no-assemble.pdf": docs.make_perm_no_assemble,
     "perm-no-extract.pdf": docs.make_perm_no_extract,
+    "text-lines-basic.pdf": docs.make_text_lines_basic,
+    "text-lines-basic-enc.pdf": docs.make_text_lines_basic_enc,
+    "text-lines-form.pdf": docs.make_text_lines_form,
+    "text-lines-type3.pdf": docs.make_text_lines_type3,
 }
 
 

@@ -7,7 +7,23 @@
 #include <qpdf/qpdfjob-c.h>
 #include <qpdf/qpdflogger-c.h>
 
+// qpdf C++ API (수술, #65). 헤더가 -Wshadow 경고를 낸다
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wshadow"
+#endif
+#include <qpdf/Buffer.hh>
+#include <qpdf/QPDF.hh>
+#include <qpdf/QPDFObjectHandle.hh>
+#include <qpdf/QPDFPageDocumentHelper.hh>
+#include <qpdf/QPDFPageObjectHelper.hh>
+#include <qpdf/QPDFWriter.hh>
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
 #include <algorithm>
+#include <exception>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -275,6 +291,189 @@ Result<bool> QpdfTools::allows_extraction(const std::filesystem::path& file, std
   auto q = open_for_query(file, password);
   if (!q) return std::unexpected(q.error());
   return qpdf_allow_extract_all(q->get()) != 0;
+}
+
+// ---- 콘텐츠 스트림 수술 (#65) ----
+namespace {
+
+bool non_empty_show(const std::string& op, const std::vector<QPDFObjectHandle>& operands) {
+  if (operands.empty()) return false;
+  const QPDFObjectHandle& last = operands.back();
+  if (op == "TJ") {
+    if (!last.isArray()) return false;
+    for (auto& item : last.getArrayAsVector()) {
+      if (item.isString() && !item.getStringValue().empty()) return true;
+    }
+    return false;
+  }
+  return last.isString() && !last.getStringValue().empty();
+}
+
+struct ContentOp {
+  std::string name;
+  std::size_t start = 0;  // 첫 피연산자(없으면 연산자) 바이트 위치
+  std::size_t end = 0;
+  std::vector<QPDFObjectHandle> operands;
+};
+
+// parseContentStream 콜백: 연산자마다 바이트 범위와 피연산자를 모은다
+struct CollectOps : QPDFObjectHandle::ParserCallbacks {
+  std::vector<ContentOp> ops;
+  std::vector<QPDFObjectHandle> pending;
+  std::size_t pending_start = 0;
+  bool has_pending = false;
+  void handleObject(QPDFObjectHandle obj, size_t offset, size_t length) override {
+    if (obj.isOperator()) {
+      ContentOp op;
+      op.name = obj.getOperatorValue();
+      op.start = has_pending ? pending_start : offset;
+      op.end = offset + length;
+      op.operands = std::move(pending);
+      ops.push_back(std::move(op));
+      pending.clear();
+      has_pending = false;
+    } else {
+      if (!has_pending) pending_start = offset;
+      has_pending = true;
+      pending.push_back(obj);
+    }
+  }
+  void handleEOF() override {}
+};
+
+bool is_show_op(const std::string& n) { return n == "Tj" || n == "TJ" || n == "'" || n == "\""; }
+bool sets_text_line(const std::string& n) {
+  return n == "Td" || n == "TD" || n == "Tm" || n == "T*" || n == "'" || n == "\"" || n == "BT";
+}
+
+// data 에서 ordinals(비어 있지 않은 표시 연산자 순번)의 연산자만 지운 바이트. 지운 자리는 공백, '→T*, "→Tw Tc T*
+std::string rewrite_content(QPDF& scratch, const std::string& data, const std::set<int>& ordinals, int ordinal_base, int& show_ops,
+                            int& needs_displacement, std::vector<std::string>* do_names, bool* changed) {
+  CollectOps c;
+  auto stream = QPDFObjectHandle::newStream(&scratch, data);
+  QPDFObjectHandle::parseContentStream(stream, &c);
+  std::vector<int> ordinal_of(c.ops.size(), -1);
+  int n = ordinal_base;  // 쪽 콘텐츠가 여러 스트림이면 순번은 스트림을 이어서 센다
+  for (std::size_t i = 0; i < c.ops.size(); ++i) {
+    if (is_show_op(c.ops[i].name) && non_empty_show(c.ops[i].name, c.ops[i].operands)) ordinal_of[i] = n++;
+    if (do_names != nullptr && c.ops[i].name == "Do" && !c.ops[i].operands.empty() && c.ops[i].operands.back().isName()) {
+      do_names->push_back(c.ops[i].operands.back().getName());
+    }
+  }
+  show_ops = n - ordinal_base;
+  if (changed != nullptr) *changed = false;
+  std::string out;
+  std::size_t pos = 0;
+  for (std::size_t i = 0; i < c.ops.size(); ++i) {
+    if (ordinal_of[i] < 0 || !ordinals.count(ordinal_of[i])) continue;
+    if (changed != nullptr) *changed = true;
+    const ContentOp& op = c.ops[i];
+    out.append(data, pos, op.start - pos);
+    if (op.name == "'") {
+      out += " T* ";
+    } else if (op.name == "\"" && op.operands.size() >= 3) {
+      out += " " + op.operands[0].unparse() + " Tw " + op.operands[1].unparse() + " Tc T* ";
+    } else {
+      out += " ";
+    }
+    pos = op.end;
+    // 같은 BT 안에서 다음 표시 연산자가 줄 위치 연산자 없이 이어지면 그 글자가 밀린다 (Tj/TJ 는 줄 행렬을 바꾸지 않는다)
+    for (std::size_t k = i + 1; k < c.ops.size(); ++k) {
+      const std::string& nm = c.ops[k].name;
+      if (nm == "ET" || sets_text_line(nm)) break;
+      if ((nm == "Tj" || nm == "TJ") && ordinal_of[k] >= 0 && !ordinals.count(ordinal_of[k])) {
+        ++needs_displacement;
+        break;
+      }
+    }
+  }
+  out.append(data, pos, std::string::npos);
+  return out;
+}
+
+std::string stream_bytes(QPDFObjectHandle h) {
+  auto buf = h.getStreamData(qpdf_dl_all);
+  return {reinterpret_cast<const char*>(buf->getBuffer()), buf->getSize()};
+}
+
+}  // namespace
+
+Result<SurgeryReport> QpdfTools::remove_text_show_ops(const std::vector<std::uint8_t>& in, std::string_view password, int page_index,
+                                                      const ShowOpSurgery& ops) {
+  SurgeryReport report;
+  try {
+    QPDF q;
+    q.setSuppressWarnings(true);
+    const std::string pw(password);
+    q.processMemoryFile("document", reinterpret_cast<const char*>(in.data()), in.size(), pw.empty() ? nullptr : pw.c_str());
+    auto pages = QPDFPageDocumentHelper(q).getAllPages();
+    if (page_index < 0 || page_index >= static_cast<int>(pages.size())) {
+      return make_error(ErrorCode::kInvalidArgument, "page index out of range");
+    }
+    QPDFPageObjectHelper& page = pages[static_cast<std::size_t>(page_index)];
+    // /Contents 가 배열이면 스트림마다 따로 다룬다 — 하나로 합치면 PDFium 이 뒤의 편집에서 원본 스트림까지 다시 쓴다(손실)
+    std::vector<QPDFObjectHandle> streams;
+    QPDFObjectHandle contents = page.getObjectHandle().getKey("/Contents");
+    if (contents.isArray()) {
+      for (auto& item : contents.getArrayAsVector()) {
+        if (item.isStream()) streams.push_back(item);
+      }
+    } else if (contents.isStream()) {
+      streams.push_back(contents);
+    }
+    std::vector<std::string> do_names;
+    int base = 0;
+    for (QPDFObjectHandle& stream : streams) {
+      const std::string data = stream_bytes(stream);
+      int show = 0;
+      bool changed = false;
+      const std::string out = rewrite_content(q, data, ops.page_ordinals, base, show, report.needs_displacement, &do_names, &changed);
+      if (changed) stream.replaceStreamData(out, QPDFObjectHandle::newNull(), QPDFObjectHandle::newNull());
+      base += show;
+    }
+    report.page_show_ops = base;
+    if (!ops.form_ordinals.empty()) {
+      QPDFObjectHandle resources = page.getObjectHandle().getKey("/Resources");
+      QPDFObjectHandle xobjects = resources.isDictionary() ? resources.getKey("/XObject") : QPDFObjectHandle::newNull();
+      std::vector<QPDFObjectHandle> forms;  // 쪽의 Form Do 순서 (이미지 Do 제외)
+      for (const std::string& name : do_names) {
+        QPDFObjectHandle x = xobjects.isDictionary() ? xobjects.getKey(name) : QPDFObjectHandle::newNull();
+        if (x.isStream() && x.getDict().getKey("/Subtype").isNameAndEquals("/Form")) forms.push_back(x);
+      }
+      for (const auto& [form_index, ordinals] : ops.form_ordinals) {
+        if (form_index < 0 || form_index >= static_cast<int>(forms.size())) {
+          return make_error(ErrorCode::kInvalidArgument, "form index out of range");
+        }
+        QPDFObjectHandle form = forms[static_cast<std::size_t>(form_index)];
+        // 다른 쪽도 같은 Form 을 쓰면 수술이 그 쪽까지 바꾼다 → 거절 (호출자)
+        for (std::size_t p = 0; p < pages.size(); ++p) {
+          if (static_cast<int>(p) == page_index) continue;
+          QPDFObjectHandle r = pages[p].getObjectHandle().getKey("/Resources");
+          QPDFObjectHandle xo = r.isDictionary() ? r.getKey("/XObject") : QPDFObjectHandle::newNull();
+          if (!xo.isDictionary()) continue;
+          for (const auto& [key, value] : xo.ditems()) {
+            if (value.isIndirect() && form.isIndirect() && value.getObjGen() == form.getObjGen()) ++report.shared_forms;
+          }
+        }
+        int show = 0;
+        bool changed = false;
+        const std::string form_data = stream_bytes(form);
+        const std::string form_out = rewrite_content(q, form_data, ordinals, 0, show, report.needs_displacement, nullptr, &changed);
+        report.form_show_ops[form_index] = show;
+        if (changed) form.replaceStreamData(form_out, QPDFObjectHandle::newNull(), QPDFObjectHandle::newNull());
+      }
+    }
+    QPDFWriter w(q);
+    w.setOutputMemory();
+    w.setPreserveEncryption(true);
+    w.setObjectStreamMode(qpdf_o_preserve);
+    w.write();
+    auto result = w.getBufferSharedPointer();
+    report.bytes.assign(result->getBuffer(), result->getBuffer() + result->getSize());
+  } catch (const std::exception& e) {
+    return make_error(ErrorCode::kJobFailed, std::string("qpdf: ") + e.what());
+  }
+  return report;
 }
 
 }  // namespace onpdf::engine

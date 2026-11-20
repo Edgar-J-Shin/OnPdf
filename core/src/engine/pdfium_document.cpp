@@ -5,6 +5,8 @@
 #include "onpdf/core/engine/pdfium_library.h"
 #include "dest.h"
 #include "onpdf/core/engine/text_page.h"
+#include "text_lines.h"
+#include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/platform/path.h"
 
 #include <fpdf_annot.h>
@@ -26,6 +28,7 @@
 #include <iterator>
 #include <optional>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <random>
 #include <string>
@@ -111,6 +114,7 @@ PdfiumDocument& PdfiumDocument::operator=(PdfiumDocument&& other) noexcept {
   detached_.clear();
   fonts_.clear();
   snapshots_.clear();
+  states_.clear();
   doc_.reset();
   data_ = std::move(other.data_);
   doc_ = std::move(other.doc_);
@@ -124,6 +128,12 @@ PdfiumDocument& PdfiumDocument::operator=(PdfiumDocument&& other) noexcept {
   form_ = std::move(other.form_);
   field_pages_ = std::move(other.field_pages_);
   field_pages_ready_ = other.field_pages_ready_;
+  states_ = std::move(other.states_);
+  state_order_ = std::move(other.state_order_);
+  state_bytes_ = other.state_bytes_;
+  state_byte_limit_ = other.state_byte_limit_;
+  next_state_ = other.next_state_;
+  dropped_marks_ = std::move(other.dropped_marks_);
   return *this;
 }
 
@@ -834,6 +844,13 @@ Result<void> PdfiumDocument::set_annotation_border_width(int page_index, std::st
 
 Result<TextObjectsResult> PdfiumDocument::add_text_objects(int page_index, const TextObjectsSpec& spec) {
   PdfiumLibrary::assert_current_thread();
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  return add_text_objects_to(page->get(), spec);
+}
+
+// 같은 쪽 핸들 안에서 넣는다 (FPDF_LoadPage 는 호출마다 새 객체 목록을 만들어 다른 핸들의 변경을 보지 못한다, #65)
+Result<TextObjectsResult> PdfiumDocument::add_text_objects_to(FPDF_PAGE raw_page, const TextObjectsSpec& spec) {
   if (spec.lines.empty()) return make_error(ErrorCode::kInvalidArgument, "no text lines");
   if (spec.font.key.empty() || spec.font.ttf.empty()) return make_error(ErrorCode::kInvalidArgument, "font spec incomplete");
   if (!spec.ids.empty() && spec.ids.size() != spec.lines.size()) return make_error(ErrorCode::kInvalidArgument, "ids/lines mismatch");
@@ -841,8 +858,8 @@ Result<TextObjectsResult> PdfiumDocument::add_text_objects(int page_index, const
     if (line.cids.empty()) return make_error(ErrorCode::kInvalidArgument, "empty line");
     if (!(line.font_size > 0.0)) return make_error(ErrorCode::kInvalidArgument, "font size must be positive");
   }
-  auto page = load_page(page_index);
-  if (!page) return std::unexpected(page.error());
+  struct PageRef { FPDF_PAGE raw; FPDF_PAGE get() const { return raw; } } page_ref{raw_page};
+  const PageRef* page = &page_ref;
   // 폰트: 같은 서브셋은 문서당 한 번만 임베딩한다 (두 번 로드 = 두 번 임베딩, #43)
   FPDF_FONT font = nullptr;
   if (auto it = fonts_.find(spec.font.key); it != fonts_.end()) {
@@ -953,6 +970,7 @@ Result<std::vector<TextObjectInfo>> PdfiumDocument::text_objects(int page_index)
     info.text = mark_blob(mark, "text");
     info.box_text = mark_blob(mark, "box_text");
     if (const std::string width = mark_string(mark, "width"); !width.empty()) info.width = parse_points(width);
+    info.original_font = mark_string(mark, "ofont") == "1";
     if (info.text.empty()) {
       if (!text_page) text_page.reset(FPDFText_LoadPage(page->get()));
       if (text_page) {
@@ -1194,6 +1212,7 @@ Result<DetachedId> PdfiumDocument::detach_objects(int page_index, const std::vec
       (void)FPDFPage_GenerateContent(page->get());
       return make_error(ErrorCode::kInvalidState, "FPDFPage_RemoveObject failed");
     }
+    if (text_object_id_of(obj).empty()) detached.foreign = true;  // 마크 없음: 다시 열기 뒤 찾을 수 없다 (#65)
     detached.objects.emplace_back(index, ScopedFPDFPageObject(obj));
   }
   std::reverse(detached.objects.begin(), detached.objects.end());  // index 오름차순
@@ -1232,7 +1251,14 @@ Result<void> PdfiumDocument::reattach_objects(DetachedId id) {
   return {};
 }
 
-void PdfiumDocument::drop_detached(DetachedId id) noexcept { detached_.erase(id); }
+void PdfiumDocument::drop_detached(DetachedId id) noexcept {
+  auto it = detached_.find(id);
+  if (it == detached_.end()) return;
+  for (auto& [index, obj] : it->second.objects) {
+    if (const std::string mark = text_object_id_of(obj.get()); !mark.empty()) dropped_marks_.insert(mark);
+  }
+  detached_.erase(it);
+}
 
 Result<void> PdfiumDocument::set_annotation_contents(int page_index, std::string_view id, std::string_view utf8) {
   PdfiumLibrary::assert_current_thread();
@@ -1290,8 +1316,7 @@ Result<void> PdfiumDocument::save_to(const std::filesystem::path& path, bool inc
   writer.version = 1;
   writer.WriteBlock = &FileWriter::write_block;
   writer.out = &out;
-  if (FPDF_FORMHANDLE form = form_handle()) (void)FORM_ForceToKillFocus(form);  // 편집 중 값이 남지 않게 (#51)
-  if (auto ensured = ensure_annotation_appearances(); !ensured) return std::unexpected(ensured.error());
+  prepare_for_save();
   const FPDF_DWORD flags = incremental ? FPDF_INCREMENTAL : FPDF_NO_INCREMENTAL;
   const bool ok = FPDF_SaveAsCopy(doc_.get(), &writer, flags) != 0;
   out.flush();
@@ -1915,6 +1940,504 @@ Result<std::map<std::string, std::string>> PdfiumDocument::form_values() const {
     for (const auto& w : *widgets) out[w.ref.name] = w.value;
   }
   return out;
+}
+
+// ---- 기존 텍스트 줄 수정 (#65) ----
+
+namespace {
+
+// FPDF_FILEWRITE → 메모리
+struct MemoryWriter : FPDF_FILEWRITE {
+  std::vector<std::uint8_t> bytes;
+  static int write_block(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
+    auto* writer = static_cast<MemoryWriter*>(self);
+    const auto* p = static_cast<const std::uint8_t*>(data);
+    writer->bytes.insert(writer->bytes.end(), p, p + size);
+    return 1;
+  }
+};
+
+constexpr std::string_view kBoxPrefix = "onpdf-box-";
+
+std::string base_font_name(FPDF_FONT font) {
+  if (font == nullptr) return {};
+  const std::size_t n = FPDFFont_GetBaseFontName(font, nullptr, 0);
+  if (n == 0) return {};
+  std::string name(n, '\0');
+  FPDFFont_GetBaseFontName(font, name.data(), n);
+  if (!name.empty() && name.back() == '\0') name.pop_back();
+  if (name.size() > 7 && name[6] == '+') name.erase(0, 7);  // 서브셋 태그 ABCDEF+
+  return name;
+}
+
+// Type3 는 BaseFont 가 없고 글꼴 데이터도 없다
+bool is_type3(FPDF_FONT font) {
+  if (font == nullptr) return false;
+  std::size_t bytes = 0;
+  const bool has_data = FPDFFont_GetFontData(font, nullptr, 0, &bytes) && bytes > 0;
+  return base_font_name(font).empty() && !has_data;
+}
+
+TextLineInfo line_info_of(const detail::PageAnalysis& analysis, const detail::AnalyzedLine& line, const detail::PageSpace& space) {
+  TextLineInfo info;
+  info.id = detail::line_id_of(analysis, line);
+  info.bbox = space.to_rect(line.left, line.right, line.bottom, line.top);
+  info.text = detail::utf32_to_utf8(line.text);
+  const auto& first = analysis.objects[static_cast<std::size_t>(line.members.front())];
+  info.font_name = base_font_name(first.font);
+  info.font_size = first.eff_size;
+  info.color = {static_cast<std::uint8_t>(first.r), static_cast<std::uint8_t>(first.g), static_cast<std::uint8_t>(first.b), 255};
+  info.font_embedded = first.font != nullptr && FPDFFont_GetIsEmbedded(first.font) == 1;
+  info.font_type3 = is_type3(first.font);
+  info.mixed_fonts = line.mixed_fonts;
+  info.object_count = static_cast<int>(line.members.size());
+  if (line.multi_line_object) {
+    info.editable = false;
+    info.reason = "multi-line-object";
+  } else if (std::abs(line.dir_y) > 0.01 || line.dir_x < 0) {
+    info.editable = false;
+    info.reason = "vertical";
+  }
+  return info;
+}
+
+}  // namespace
+
+void PdfiumDocument::prepare_for_save() const {
+  if (FPDF_FORMHANDLE form = form_handle()) (void)FORM_ForceToKillFocus(form);  // 편집 중 값이 남지 않게 (#51)
+  (void)ensure_annotation_appearances();  // 렌더되지 않은 주석의 AP (#53)
+}
+
+Result<std::vector<std::uint8_t>> PdfiumDocument::save_to_memory() const {
+  PdfiumLibrary::assert_current_thread();
+  prepare_for_save();
+  MemoryWriter writer{};
+  writer.version = 1;
+  writer.WriteBlock = &MemoryWriter::write_block;
+  if (!FPDF_SaveAsCopy(doc_.get(), &writer, FPDF_NO_INCREMENTAL)) return make_error(ErrorCode::kIoError, "FPDF_SaveAsCopy failed");
+  return std::move(writer.bytes);
+}
+
+Result<std::vector<TextLineInfo>> PdfiumDocument::text_lines(int page_index) const {
+  PdfiumLibrary::assert_current_thread();
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  ScopedTextPage text_page(FPDFText_LoadPage(page->get()));
+  if (!text_page) return make_error(ErrorCode::kInvalidState, "FPDFText_LoadPage failed");
+  const detail::PageAnalysis analysis = detail::analyze_page(page->get(), text_page.get());
+  const detail::PageSpace space = detail::PageSpace::of(page->get());
+  std::vector<TextLineInfo> out;
+  for (const auto& line : analysis.lines) {
+    if (line.members.empty()) continue;
+    out.push_back(line_info_of(analysis, line, space));
+  }
+  return out;
+}
+
+Result<bool> PdfiumDocument::line_font_covers(int page_index, std::string_view line_id, std::string_view utf8) const {
+  PdfiumLibrary::assert_current_thread();
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  FPDF_FONT font = nullptr;
+  if (line_id.starts_with(kBoxPrefix)) {
+    const int count = FPDFPage_CountObjects(page->get());
+    for (int i = 0; i < count && font == nullptr; ++i) {
+      FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page->get(), i);
+      if (obj != nullptr && FPDFPageObj_GetType(obj) == FPDF_PAGEOBJ_TEXT && mark_string(onpdf_mark_of(obj), "box") == line_id) {
+        font = FPDFTextObj_GetFont(obj);
+      }
+    }
+  } else {
+    ScopedTextPage text_page(FPDFText_LoadPage(page->get()));
+    if (!text_page) return make_error(ErrorCode::kInvalidState, "FPDFText_LoadPage failed");
+    const detail::PageAnalysis analysis = detail::analyze_page(page->get(), text_page.get());
+    for (const auto& line : analysis.lines) {
+      if (!line.members.empty() && detail::line_id_of(analysis, line) == line_id) {
+        font = analysis.objects[static_cast<std::size_t>(line.members.front())].font;
+        break;
+      }
+    }
+  }
+  if (font == nullptr) return make_error(ErrorCode::kInvalidArgument, "line not found");
+  if (FPDFFont_GetIsEmbedded(font) != 1 || is_type3(font)) return false;
+  return detail::font_covers(font, detail::utf8_to_utf32(utf8));
+}
+
+Result<LineEditResult> PdfiumDocument::remove_text_line(int page_index, std::string_view line_id) {
+  return edit_line(page_index, line_id, nullptr);
+}
+
+Result<LineEditResult> PdfiumDocument::replace_text_line(int page_index, std::string_view line_id, const LineReplacement& replacement) {
+  if (replacement.utf8.empty()) return make_error(ErrorCode::kInvalidArgument, "empty replacement");
+  return edit_line(page_index, line_id, &replacement);
+}
+
+Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_view line_id, const LineReplacement* replacement) {
+  PdfiumLibrary::assert_current_thread();
+  if (signature_count() > 0) return make_error(ErrorCode::kUnsupported, "signed document");
+  for (const auto& [id, d] : detached_) {
+    if (d.foreign) return make_error(ErrorCode::kInvalidState, "foreign detached object");
+  }
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  const detail::PageSpace space = detail::PageSpace::of(page->get());
+
+  // ---- 1. 원래 줄 해석: OnPdf 상자(수술 없음) 또는 분석 줄(수술) ----
+  const bool onpdf_box = line_id.starts_with(kBoxPrefix);
+  std::vector<FPDF_PAGEOBJECT> old_objects;  // 지울 객체 (쪽 또는 Form 안)
+  FPDF_FONT font = nullptr;
+  float size = 0;
+  unsigned r = 0, g = 0, b = 0, a = 255;
+  std::array<double, 6> matrix{1, 0, 0, 1, 0, 0};
+  Rect line_bbox;
+  double line_eff_size = 0;
+  if (onpdf_box) {
+    const int count = FPDFPage_CountObjects(page->get());
+    for (int i = 0; i < count; ++i) {
+      FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page->get(), i);
+      if (obj == nullptr || FPDFPageObj_GetType(obj) != FPDF_PAGEOBJ_TEXT) continue;
+      if (mark_string(onpdf_mark_of(obj), "box") != line_id) continue;
+      old_objects.push_back(obj);
+      if (font == nullptr) {
+        font = FPDFTextObj_GetFont(obj);
+        FPDFTextObj_GetFontSize(obj, &size);
+        FPDFPageObj_GetFillColor(obj, &r, &g, &b, &a);
+        FS_MATRIX m{};
+        if (FPDFPageObj_GetMatrix(obj, &m)) matrix = {m.a, m.b, m.c, m.d, m.e, m.f};
+      }
+    }
+    if (old_objects.empty()) return make_error(ErrorCode::kInvalidArgument, "line not found");
+  } else {
+    ScopedTextPage text_page(FPDFText_LoadPage(page->get()));
+    if (!text_page) return make_error(ErrorCode::kInvalidState, "FPDFText_LoadPage failed");
+    const detail::PageAnalysis analysis = detail::analyze_page(page->get(), text_page.get());
+    const detail::AnalyzedLine* target = nullptr;
+    for (const auto& line : analysis.lines) {
+      if (!line.members.empty() && detail::line_id_of(analysis, line) == line_id) {
+        target = &line;
+        break;
+      }
+    }
+    if (target == nullptr) return make_error(ErrorCode::kInvalidArgument, "line not found");
+    const TextLineInfo info = line_info_of(analysis, *target, space);
+    if (!info.editable) return make_error(ErrorCode::kUnsupported, info.reason);
+    const auto& first = analysis.objects[static_cast<std::size_t>(target->members.front())];
+    for (int k : target->members) old_objects.push_back(analysis.objects[static_cast<std::size_t>(k)].handle);
+    font = first.font;
+    size = first.size;
+    r = first.r;
+    g = first.g;
+    b = first.b;
+    matrix = first.matrix;
+    line_bbox = info.bbox;
+    line_eff_size = first.eff_size;
+  }
+
+  // ---- 2. 수술 전 바이트(떼어 둔 객체를 원래 자리에 되돌려 포함) → 상태 토큰. 새 텍스트를 넣기 전 상태다 ----
+  LineEditResult result;
+  const bool needs_surgery = !onpdf_box;
+  std::vector<ParkedDetached> parked;
+  std::vector<std::uint8_t> token_bytes;
+  if (needs_surgery) {
+    auto p = park_detached();
+    if (!p) return std::unexpected(p.error());
+    parked = std::move(*p);
+    auto bytes = save_to_memory();
+    if (!bytes) {
+      (void)unpark_detached(parked);
+      return std::unexpected(bytes.error());
+    }
+    token_bytes = std::move(*bytes);
+  }
+  std::vector<FPDF_PAGEOBJECT> inserted;
+  const auto remove_inserted = [&] {
+    for (FPDF_PAGEOBJECT obj : inserted) {
+      if (FPDFPage_RemoveObject(page->get(), obj)) FPDFPageObj_Destroy(obj);
+    }
+    if (!inserted.empty()) (void)FPDFPage_GenerateContent(page->get());
+    inserted.clear();
+  };
+  const auto fail = [&](Result<LineEditResult> error) -> Result<LineEditResult> {
+    remove_inserted();
+    if (needs_surgery) (void)unpark_detached(parked);
+    return error;
+  };
+
+  // ---- 3. 새 텍스트 (덧붙인 스트림에만 쓴다 — 원본 스트림을 더럽히지 않는다) ----
+  if (replacement != nullptr) {
+    const std::u32string chars = detail::utf8_to_utf32(replacement->utf8);
+    const bool covers = font != nullptr && FPDFFont_GetIsEmbedded(font) == 1 && !is_type3(font) && detail::font_covers(font, chars);
+    if (covers) {
+      ScopedFPDFPageObject obj(FPDFPageObj_CreateTextObj(doc_.get(), font, size));
+      if (!obj) return fail(make_error(ErrorCode::kInvalidState, "FPDFPageObj_CreateTextObj failed"));
+      const std::vector<unsigned short> wide = detail::to_wide(replacement->utf8);
+      if (!FPDFText_SetText(obj.get(), reinterpret_cast<FPDF_WIDESTRING>(wide.data()))) {
+        return fail(make_error(ErrorCode::kInvalidState, "FPDFText_SetText failed"));
+      }
+      if (!FPDFPageObj_SetFillColor(obj.get(), r, g, b, 255)) return fail(make_error(ErrorCode::kInvalidState, "FPDFPageObj_SetFillColor failed"));
+      FPDFPageObj_Transform(obj.get(), matrix[0], matrix[1], matrix[2], matrix[3], matrix[4], matrix[5]);
+      const std::string id = new_text_id();
+      const std::string box = onpdf_box ? std::string(line_id) : new_box_id();
+      FPDF_PAGEOBJECTMARK mark = FPDFPageObj_AddMark(obj.get(), "OnPdf");
+      if (mark == nullptr) return fail(make_error(ErrorCode::kInvalidState, "FPDFPageObj_AddMark failed"));
+      const auto* text_bytes = reinterpret_cast<const unsigned char*>(replacement->utf8.data());
+      const auto text_len = static_cast<unsigned long>(replacement->utf8.size());
+      if (!FPDFPageObjMark_SetStringParam(doc_.get(), obj.get(), mark, "id", id.c_str()) ||
+          !FPDFPageObjMark_SetStringParam(doc_.get(), obj.get(), mark, "box", box.c_str()) ||
+          !FPDFPageObjMark_SetStringParam(doc_.get(), obj.get(), mark, "ofont", "1") ||
+          !FPDFPageObjMark_SetBlobParam(doc_.get(), obj.get(), mark, "text", text_bytes, text_len) ||
+          !FPDFPageObjMark_SetBlobParam(doc_.get(), obj.get(), mark, "box_text", text_bytes, text_len)) {
+        return fail(make_error(ErrorCode::kInvalidState, "cannot set marks"));
+      }
+      FPDF_PAGEOBJECT raw = obj.release();
+      FPDFPage_InsertObject(page->get(), raw);
+      inserted.push_back(raw);
+      if (!FPDFPage_GenerateContent(page->get())) return fail(make_error(ErrorCode::kInvalidState, "FPDFPage_GenerateContent failed"));
+      result.box = box;
+      result.ids = {id};
+    } else {
+      if (!replacement->fallback) return fail(make_error(ErrorCode::kInvalidArgument, "original font cannot draw the text"));
+      TextObjectsSpec spec = *replacement->fallback;
+      if (onpdf_box) spec.box = std::string(line_id);
+      auto added = add_text_objects_to(page->get(), spec);
+      if (!added) return fail(std::unexpected(added.error()));
+      result.used_fallback = true;
+      result.box = added->box;
+      result.ids = added->ids;
+      for (const std::string& id : result.ids) {
+        if (auto [obj, index] = find_page_object(page->get(), id); obj != nullptr) inserted.push_back(obj);
+      }
+    }
+  }
+
+  // ---- 4. OnPdf 상자: 수술 없이 옛 객체만 지운다 ----
+  if (onpdf_box) {
+    for (FPDF_PAGEOBJECT obj : old_objects) {
+      if (FPDFPage_RemoveObject(page->get(), obj)) FPDFPageObj_Destroy(obj);
+    }
+    if (!FPDFPage_GenerateContent(page->get())) return make_error(ErrorCode::kInvalidState, "FPDFPage_GenerateContent failed");
+    return result;
+  }
+
+  // ---- 5. 수술할 바이트(새 텍스트 포함)와 수술 전 렌더 (되돌린 객체가 보이는 상태 — 수술 뒤 렌더와 같은 조건) ----
+  auto current_bytes = save_to_memory();
+  if (!current_bytes) return fail(std::unexpected(current_bytes.error()));
+  RenderOptions render;
+  render.scale = 1.0f;
+  render.render_annotations = false;
+  auto before_render = render_page(page_index, render);
+  if (!before_render) return fail(std::unexpected(before_render.error()));
+  ShowOpSurgery ops;
+  int page_text_objects = 0;
+  std::vector<int> form_text_objects;
+  {
+    ScopedTextPage text_page(FPDFText_LoadPage(page->get()));
+    if (!text_page) return fail(make_error(ErrorCode::kInvalidState, "FPDFText_LoadPage failed"));
+    const detail::PageAnalysis analysis = detail::analyze_page(page->get(), text_page.get());
+    page_text_objects = analysis.page_text_objects;
+    form_text_objects = analysis.form_text_objects;
+    for (FPDF_PAGEOBJECT old : old_objects) {
+      const auto it = std::find_if(analysis.objects.begin(), analysis.objects.end(), [&](const auto& o) { return o.handle == old; });
+      if (it == analysis.objects.end() || it->ordinal < 0) return fail(make_error(ErrorCode::kUnsupported, "line object has no show operator"));
+      if (it->container < 0) ops.page_ordinals.insert(it->ordinal);
+      else ops.form_ordinals[it->container].insert(it->ordinal);
+    }
+  }
+  auto report = QpdfTools::remove_text_show_ops(*current_bytes, password_, page_index, ops);
+  if (!report) return fail(std::unexpected(report.error()));
+  bool consistent = report->page_show_ops == page_text_objects;
+  std::string mismatch;
+  if (!consistent) mismatch = " (page: qpdf " + std::to_string(report->page_show_ops) + " vs pdfium " + std::to_string(page_text_objects) + ")";
+  for (const auto& [form, count] : report->form_show_ops) {
+    if (form < 0 || form >= static_cast<int>(form_text_objects.size()) || form_text_objects[static_cast<std::size_t>(form)] != count) {
+      consistent = false;
+      mismatch += " (form " + std::to_string(form) + ")";
+    }
+  }
+  if (!consistent || report->needs_displacement > 0 || report->shared_forms > 0) {
+    return fail(make_error(ErrorCode::kUnsupported, !consistent        ? "content stream does not match page objects" + mismatch
+                                                     : report->shared_forms ? "shared-form"
+                                                                            : "displacement"));
+  }
+
+  // ---- 6. 다시 열기 → 줄 밖 보존 검증(되돌린 객체가 보이는 상태끼리) → 떼어 둔 객체 재분리 ----
+  const DocumentStateId before = store_state(std::move(token_bytes));
+  page->reset();  // 옛 문서의 쪽 핸들은 먼저 닫는다
+  if (auto replaced = replace_bytes(std::move(report->bytes)); !replaced) {
+    // 옛 문서가 그대로 살아 있다: 새 객체만 걷어 내고 떼어 둔 객체를 다시 뗀다
+    if (auto p = load_page(page_index)) {
+      for (const std::string& id : result.ids) {
+        if (auto [obj, index] = find_page_object(p->get(), id); obj != nullptr && FPDFPage_RemoveObject(p->get(), obj)) FPDFPageObj_Destroy(obj);
+      }
+      (void)FPDFPage_GenerateContent(p->get());
+    }
+    (void)unpark_detached(parked);
+    drop_document_state(before);
+    return std::unexpected(replaced.error());
+  }
+  const auto rollback = [&](Result<LineEditResult> error) -> Result<LineEditResult> {
+    // 토큰(되돌린 객체 포함)으로 복원한 뒤 다시 뗀다
+    if (auto restored = replace_bytes(states_[before]); restored) (void)unpark_detached(parked);
+    drop_document_state(before);
+    return error;
+  };
+  auto after_render = render_page(page_index, render);
+  if (!after_render) return rollback(std::unexpected(after_render.error()));
+  // 줄 영역(여유 0.35em) 밖은 픽셀 하나도 달라지면 안 된다
+  const double pad = std::max(2.0, 0.35 * line_eff_size);
+  const int x0 = static_cast<int>(std::floor(line_bbox.x - pad)), y0 = static_cast<int>(std::floor(line_bbox.y - pad));
+  const int x1 = static_cast<int>(std::ceil(line_bbox.right() + pad)), y1 = static_cast<int>(std::ceil(line_bbox.bottom() + pad));
+  const Bitmap& A = *before_render;
+  const Bitmap& B = *after_render;
+  bool same = A.width == B.width && A.height == B.height;
+  for (int y = 0; same && y < A.height; ++y) {
+    for (int x = 0; x < A.width; ++x) {
+      if (x >= x0 && x < x1 && y >= y0 && y < y1) continue;
+      const std::uint8_t* pa = A.row(y) + x * 4;
+      const std::uint8_t* pb = B.row(y) + x * 4;
+      if (pa[0] != pb[0] || pa[1] != pb[1] || pa[2] != pb[2]) {
+        same = false;
+        break;
+      }
+    }
+  }
+  if (!same) return rollback(make_error(ErrorCode::kSaveVerifyFailed, "line edit changed other content"));
+  if (auto unparked = unpark_detached(parked); !unparked) return rollback(std::unexpected(unparked.error()));
+  result.before = before;
+  return result;
+}
+
+Result<void> PdfiumDocument::replace_bytes(std::vector<std::uint8_t> bytes) {
+  auto doc = load_document(bytes, password_);
+  if (!doc) return std::unexpected(doc.error());
+  // 옛 문서에 묶인 것부터 정리: 폼 환경 → 폰트 → 필드 지도 (떼어 둔 객체는 호출자가 park 로 비웠다)
+  form_.reset();
+  fonts_.clear();
+  field_pages_.clear();
+  field_pages_ready_ = false;
+  for (auto& [id, d] : detached_) d.objects.clear();  // 혹시 남은 것은 옛 문서와 함께 버린다
+  doc_.reset();
+  data_ = std::move(bytes);
+  doc_ = std::move(*doc);
+  switch (FPDF_GetFormType(doc_.get())) {
+    case FORMTYPE_ACRO_FORM: form_type_ = FormType::kAcroForm; break;
+    case FORMTYPE_XFA_FULL: form_type_ = FormType::kXfaFull; break;
+    case FORMTYPE_XFA_FOREGROUND: form_type_ = FormType::kXfaForeground; break;
+    default: form_type_ = FormType::kNone; break;
+  }
+  form_ = detail::FormEnvironment::create(doc_.get());
+  return {};
+}
+
+Result<std::vector<PdfiumDocument::ParkedDetached>> PdfiumDocument::park_detached() {
+  std::vector<ParkedDetached> parked;
+  std::vector<DetachedId> ids;
+  for (const auto& [id, d] : detached_) ids.push_back(id);
+  std::sort(ids.begin(), ids.end());
+  for (DetachedId id : ids) {
+    Detached& d = detached_[id];
+    if (d.foreign) return make_error(ErrorCode::kInvalidState, "foreign detached object");
+    ParkedDetached record;
+    record.id = id;
+    record.page = d.page;
+    for (auto& [index, obj] : d.objects) {
+      record.mark_ids.push_back(text_object_id_of(obj.get()));
+      record.indices.push_back(index);
+    }
+    auto page = load_page(d.page);
+    if (!page) return std::unexpected(page.error());
+    // 맨 뒤에 덧붙인다: 중간에 끼우면(InsertObjectAtIndex) 이웃 객체의 원본 스트림을 물려받아 그 스트림이 재생성된다(손실).
+    // 원래 index 는 기록해 두고 다시 뗄 때 되돌린다
+    for (auto& [index, obj] : d.objects) {
+      FPDFPage_InsertObject(page->get(), obj.release());
+    }
+    if (!FPDFPage_GenerateContent(page->get())) return make_error(ErrorCode::kInvalidState, "FPDFPage_GenerateContent failed");
+    d.objects.clear();
+    parked.push_back(std::move(record));
+  }
+  return parked;
+}
+
+Result<void> PdfiumDocument::unpark_detached(const std::vector<ParkedDetached>& parked) {
+  for (const ParkedDetached& record : parked) {
+    auto page = load_page(record.page);
+    if (!page) return std::unexpected(page.error());
+    struct Found { int current = 0; int original = 0; FPDF_PAGEOBJECT obj = nullptr; };
+    std::vector<Found> found;
+    for (std::size_t k = 0; k < record.mark_ids.size(); ++k) {
+      auto [obj, index] = find_page_object(page->get(), record.mark_ids[k]);
+      if (obj == nullptr) return make_error(ErrorCode::kInvalidState, "detached object lost: " + record.mark_ids[k]);
+      found.push_back({index, record.indices[k], obj});
+    }
+    std::sort(found.begin(), found.end(), [](const Found& x, const Found& y) { return x.current > y.current; });
+    Detached d;
+    d.page = record.page;
+    for (const Found& f : found) {
+      if (!FPDFPage_RemoveObject(page->get(), f.obj)) return make_error(ErrorCode::kInvalidState, "FPDFPage_RemoveObject failed");
+      d.objects.emplace_back(f.original, ScopedFPDFPageObject(f.obj));
+    }
+    std::sort(d.objects.begin(), d.objects.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+    if (!FPDFPage_GenerateContent(page->get())) return make_error(ErrorCode::kInvalidState, "FPDFPage_GenerateContent failed");
+    detached_[record.id] = std::move(d);
+  }
+  return {};
+}
+
+DocumentStateId PdfiumDocument::store_state(std::vector<std::uint8_t> bytes) {
+  const DocumentStateId id = next_state_++;
+  state_bytes_ += bytes.size();
+  states_.emplace(id, std::move(bytes));
+  state_order_.push_back(id);
+  while (state_bytes_ > state_byte_limit_ && state_order_.size() > 1) {  // 방금 넣은 것은 남긴다
+    const DocumentStateId oldest = state_order_.front();
+    state_order_.pop_front();
+    if (auto it = states_.find(oldest); it != states_.end()) {
+      state_bytes_ -= it->second.size();
+      states_.erase(it);
+    }
+  }
+  return id;
+}
+
+Result<void> PdfiumDocument::restore_document_state(DocumentStateId id) {
+  PdfiumLibrary::assert_current_thread();
+  auto it = states_.find(id);
+  if (it == states_.end()) return make_error(ErrorCode::kInvalidState, "undo history evicted");
+  auto parked = park_detached();
+  if (!parked) return std::unexpected(parked.error());
+  if (auto replaced = replace_bytes(it->second); !replaced) {
+    (void)unpark_detached(*parked);
+    return std::unexpected(replaced.error());
+  }
+  if (auto unparked = unpark_detached(*parked); !unparked) return std::unexpected(unparked.error());
+  // 토큰 이후 버린(drop) 객체가 바이트에 살아 있으면 지운다
+  if (!dropped_marks_.empty()) {
+    const int pages = page_count();
+    for (int p = 0; p < pages; ++p) {
+      auto page = load_page(p);
+      if (!page) continue;
+      bool changed = false;
+      for (int i = FPDFPage_CountObjects(page->get()) - 1; i >= 0; --i) {
+        FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page->get(), i);
+        if (obj == nullptr) continue;
+        const std::string mark = text_object_id_of(obj);
+        if (!mark.empty() && dropped_marks_.count(mark) != 0 && FPDFPage_RemoveObject(page->get(), obj)) {
+          FPDFPageObj_Destroy(obj);
+          changed = true;
+        }
+      }
+      if (changed) (void)FPDFPage_GenerateContent(page->get());
+    }
+  }
+  return {};
+}
+
+void PdfiumDocument::drop_document_state(DocumentStateId id) noexcept {
+  auto it = states_.find(id);
+  if (it == states_.end()) return;
+  state_bytes_ -= it->second.size();
+  states_.erase(it);
+  if (auto pos = std::find(state_order_.begin(), state_order_.end(), id); pos != state_order_.end()) state_order_.erase(pos);
 }
 
 }  // namespace onpdf::engine

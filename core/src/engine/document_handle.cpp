@@ -274,6 +274,17 @@ std::future<Result<std::vector<TextObjectInfo>>> DocumentHandle::load_text_objec
       });
 }
 
+TaskHandle DocumentHandle::load_text_lines(int page_index, Priority priority,
+                                           std::function<void(Result<std::vector<TextLineInfo>>)> on_done) const {
+  return DocumentHandleAccess::post_document_task<std::vector<TextLineInfo>>(
+      *this, priority, [page_index](PdfiumDocument& doc) { return doc.text_lines(page_index); }, std::move(on_done));
+}
+
+std::future<Result<std::vector<TextLineInfo>>> DocumentHandle::load_text_lines(int page_index, Priority priority) const {
+  return DocumentHandleAccess::to_future<std::vector<TextLineInfo>>(
+      [=, this](std::function<void(Result<std::vector<TextLineInfo>>)> cb) { return load_text_lines(page_index, priority, std::move(cb)); });
+}
+
 TaskHandle DocumentHandle::load_page_objects(int page_index, Priority priority,
                                              std::function<void(Result<std::vector<PageObjectInfo>>)> on_done) const {
   return DocumentHandleAccess::post_document_task<std::vector<PageObjectInfo>>(
