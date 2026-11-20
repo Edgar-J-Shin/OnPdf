@@ -1075,7 +1075,7 @@ std::string DocumentView::text_box_id_at(int page, onpdf::Point pt) const {
 }
 
 int DocumentView::handle_at(QPointF viewport_pos) const {
-  if (!selected_text_ || layout_ == nullptr) return -1;
+  if (!selected_text_ || layout_ == nullptr || selected_object_locked()) return -1;
   const onpdf::Rect& b = selected_text_->bbox;
   if (selected_text_->kind == engine::ObjectKind::kText) {  // 좌우 폭 핸들
     const onpdf::Point sides[2] = {{b.x, b.y + b.h / 2}, {b.right(), b.y + b.h / 2}};
@@ -1258,7 +1258,9 @@ void DocumentView::paint_annotations(QPainter& painter, int page, const QRectF& 
       const bool image = selected_text_->kind == engine::ObjectKind::kImage;
       const std::vector<QPointF> handles = image ? std::vector<QPointF>{box.topLeft(), box.topRight(), box.bottomLeft(), box.bottomRight()}
                                                  : std::vector<QPointF>{mid_left, mid_right};
-      for (const QPointF& c : handles) painter.drawRect(QRectF(c.x() - 4, c.y() - 4, 8, 8));
+      if (!selected_object_locked()) {  // 기존 이미지는 핸들 없음 (#57)
+        for (const QPointF& c : handles) painter.drawRect(QRectF(c.x() - 4, c.y() - 4, 8, 8));
+      }
       painter.setBrush(Qt::NoBrush);
       if (drag_ == Drag::kResize) {
         const onpdf::Rect& p = resize_preview_;
@@ -1564,7 +1566,7 @@ void DocumentView::update_hover(QPointF viewport_pos) {
       } else if (const int handle = text_editable_ ? handle_at(viewport_pos) : -1; handle >= 0) {
         cursor = handle >= 4 ? Qt::SizeHorCursor : (handle == 0 || handle == 3) ? Qt::SizeFDiagCursor : Qt::SizeBDiagCursor;
       } else if (selected_text_ && selected_text_->page == page && selected_text_->bbox.contains(pt)) {
-        cursor = text_editable_ ? Qt::SizeAllCursor : Qt::ArrowCursor;  // 선택한 상자 안: 끌어 옮길 수 있다 (권한 있을 때)
+        cursor = text_editable_ && !selected_object_locked() ? Qt::SizeAllCursor : Qt::ArrowCursor;  // 선택한 상자 안: 끌어 옮길 수 있다 (권한 있을 때)
       } else if (!text_box_id_at(page, pt).empty()) {  // 커서 판정은 bbox 만 (리뷰 I1)
         cursor = Qt::PointingHandCursor;
       }
@@ -1643,6 +1645,11 @@ void DocumentView::keyPressEvent(QKeyEvent* event) {
   // 화살표: 선택한 객체를 1pt(Shift 10pt) 옮긴다 (#49). 선택이 없으면 기존 스크롤
   if (selected_text_ && nudge_enabled_ &&
       (event->key() == Qt::Key_Left || event->key() == Qt::Key_Right || event->key() == Qt::Key_Up || event->key() == Qt::Key_Down)) {
+    if (selected_object_locked()) {  // 기존 이미지: 화살표 이동 없음 (#57)
+      emit locked_object_edit_attempted();
+      event->accept();
+      return;
+    }
     const double step = (event->modifiers() & Qt::ShiftModifier) ? 10.0 : 1.0;
     onpdf::Point delta{event->key() == Qt::Key_Left ? -step : event->key() == Qt::Key_Right ? step : 0.0,
                        event->key() == Qt::Key_Up ? -step : event->key() == Qt::Key_Down ? step : 0.0};
@@ -1678,6 +1685,11 @@ void DocumentView::keyPressEvent(QKeyEvent* event) {
   }
   if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) && selected_annot_) {
     emit annotation_delete_requested(selected_annot_->page, QString::fromStdString(selected_annot_->info.id));
+    event->accept();
+    return;
+  }
+  if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) && selected_object_locked()) {
+    emit locked_object_edit_attempted();  // 기존 이미지 삭제 막음 (#57)
     event->accept();
     return;
   }
@@ -1805,6 +1817,11 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
           return;
         }
         if (!text_editable_) {  // 권한 없음·바쁨: 이동 드래그를 시작하지 않는다 (리뷰 I2)
+          drag_ = Drag::kNone;
+          return;
+        }
+        if (selected_object_locked()) {  // 기존 이미지: 선택만 (#57)
+          emit locked_object_edit_attempted();
           drag_ = Drag::kNone;
           return;
         }

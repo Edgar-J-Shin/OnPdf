@@ -141,6 +141,7 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(view_, &DocumentView::object_resize_requested, this, &MainWindow::on_object_resize_requested);
   connect(view_, &DocumentView::text_width_requested, this, &MainWindow::on_text_width_requested);
   connect(view_, &DocumentView::object_nudge_requested, this, &MainWindow::on_object_nudge_requested);
+  connect(view_, &DocumentView::locked_object_edit_attempted, this, &MainWindow::explain_locked_object);
   connect(view_, &DocumentView::form_field_clicked, this, &MainWindow::on_form_field_clicked);
   connect(view_, &DocumentView::form_text_committed, this, &MainWindow::on_form_text_committed);
   connect(view_, &DocumentView::ink_requested, this, &MainWindow::on_ink_requested);
@@ -480,7 +481,7 @@ void MainWindow::update_edit_actions() {
     if (action != nullptr) action->setEnabled(idle && can_annotate && view_->has_selection());
   }
   delete_annotation_action_->setEnabled((annotation_edits_allowed_ && view_->selected_annotation().has_value()) ||
-                                        (content_edits_allowed_ && view_->selected_object().has_value()));
+                                        (content_edits_allowed_ && view_->selected_object().has_value() && !view_->selected_object_locked()));
   color_button_->setEnabled(can_annotate);
   // 텍스트 추가는 내용 수정 권한(비트 4) + 번들 폰트. 바쁨·저장·인쇄 중 요청은 annotation_edits_allowed_ 와 같은 규칙으로 막는다
   if (QAction* text_tool = tool_actions_[static_cast<int>(AnnotationTool::kText)]; text_tool != nullptr) {
@@ -1043,8 +1044,16 @@ void MainWindow::on_text_box_selected(bool has, const DocumentView::SelectedText
   selection_status_shown_ = true;
 }
 
+namespace {
+// 마크 없는 기존 이미지 id ("#obj<index>") — 편집하면 원본 스트림이 재생성된다 (#57)
+bool has_foreign_object(const std::vector<std::string>& ids) {
+  return std::any_of(ids.begin(), ids.end(), [](const std::string& id) { return id.starts_with("#obj"); });
+}
+}  // namespace
+
 void MainWindow::on_text_move_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta) {
   if (!content_edits_allowed_ || ids.empty()) return;
+  if (has_foreign_object(ids)) return explain_locked_object();
   if (!warn_signature_once()) return;
   edit_->run(std::make_shared<edit::MoveObjectsCommand>(page, ids, delta));
 }
@@ -1103,6 +1112,7 @@ bool MainWindow::run_add_image(int page, engine::ImageSpec spec) {
 
 void MainWindow::on_object_nudge_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta) {
   if (!view_->has_document() || !session_.handle().info().permissions.modify_contents) return;
+  if (has_foreign_object(ids)) return explain_locked_object();
   if (pending_nudge_ && (pending_nudge_->page != page || pending_nudge_->ids != ids)) pending_nudge_.reset();
   if (!pending_nudge_) pending_nudge_ = PendingNudge{page, ids, {0.0, 0.0}};
   pending_nudge_->delta.x += delta.x;
@@ -1263,14 +1273,24 @@ void MainWindow::on_text_width_requested(int page, const QString& box, double le
 
 void MainWindow::on_object_resize_requested(int page, const QString& id, onpdf::Rect before, onpdf::Rect after) {
   if (!content_edits_allowed_) return;
+  if (has_foreign_object({id.toStdString()})) return explain_locked_object();
   if (!warn_signature_once()) return;
   edit_->run(std::make_shared<edit::ResizeObjectCommand>(page, id.toStdString(), before, after));
+}
+
+void MainWindow::explain_locked_object() {
+  // 다른 프로그램이 만든 이미지를 옮기면 PDFium 이 그 쪽 내용 스트림을 통째로 다시 써 글자 모양·색이 바뀔 수 있다 (#57)
+  statusBar()->showMessage(tr("문서에 원래 있던 이미지는 옮기거나 크기를 바꾸거나 지울 수 없습니다 — 쪽 내용이 손상될 수 있습니다"), 6000);
 }
 
 bool MainWindow::delete_selected_text_box() {
   // 텍스트 상자·이미지 공용: 떼어 문서가 보관 (재생성이 아니라 빈 줄·옛 객체 문제가 없다, #49)
   auto selected = view_->selected_object();
   if (!selected || !content_edits_allowed_) return false;
+  if (view_->selected_object_locked()) {
+    explain_locked_object();
+    return false;
+  }
   if (!warn_signature_once()) return false;
   if (!edit_->run(std::make_shared<edit::RemoveObjectsCommand>(selected->page, selected->ids))) return false;
   view_->clear_text_box_selection();

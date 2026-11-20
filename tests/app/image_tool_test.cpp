@@ -229,7 +229,8 @@ TEST_F(ImageToolTest, MoveResizeDeleteAndUndo) {
   EXPECT_NEAR(images(0)[0].bbox.w, 150, 1.5) << "같은 객체가 돌아온다";
 }
 
-TEST_F(ImageToolTest, ExistingImageCanBeSelectedAndMoved) {
+// 문서에 원래 있던(마크 없는) 이미지는 선택만 된다 — 옮기면 PDFium 이 원본 스트림을 다시 써 내용이 손상된다 (#57)
+TEST_F(ImageToolTest, ExistingImageIsSelectableButLocked) {
   open_copy("scanned.pdf");
   ASSERT_TRUE(wait_images(0, 1));
   const auto foreign = images(0)[0];
@@ -237,22 +238,34 @@ TEST_F(ImageToolTest, ExistingImageCanBeSelectedAndMoved) {
   click(vp(0, foreign.bbox.x + foreign.bbox.w / 2, foreign.bbox.y + foreign.bbox.h / 2));
   ASSERT_TRUE(view()->selected_object().has_value());
   EXPECT_EQ(view()->selected_object()->kind, engine::ObjectKind::kImage);
-  // 쪽 전체를 덮는 스캔 이미지: 우하 핸들로 먼저 줄인 뒤(자유 비율) 옮긴다
+  EXPECT_TRUE(view()->selected_object_locked());
+  EXPECT_FALSE(window_.delete_annotation_action()->isEnabled()) << "삭제 버튼도 꺼진다";
+
+  int attempts = 0;
+  QObject::connect(view(), &DocumentView::locked_object_edit_attempted, [&] { ++attempts; });
+  // 모서리 끌기(크기), 안쪽 끌기(이동), 화살표, Delete — 모두 문서를 바꾸지 않는다
   settle_clicks();
-  drag(vp(0, foreign.bbox.right(), foreign.bbox.bottom()), vp(0, foreign.bbox.right() - 200, foreign.bbox.bottom() - 200),
-       Qt::ShiftModifier);
-  ASSERT_TRUE(spin_until([&] { return wait_idle() && !images(0).empty() && images(0)[0].marked; })) << "첫 편집에서 마크가 붙는다";
-  EXPECT_NEAR(images(0)[0].bbox.w, foreign.bbox.w - 200, 1.5);
+  drag(vp(0, foreign.bbox.x + 50, foreign.bbox.y + 50), vp(0, foreign.bbox.x + 90, foreign.bbox.y + 70));
+  EXPECT_EQ(attempts, 1) << "선택한 이미지 안쪽 끌기는 안내 신호를 낸다";
+  // 핸들이 없으므로 모서리 끌기는 크기 조절이 아니다 (다시 선택될 뿐)
+  settle_clicks();
+  drag(vp(0, foreign.bbox.right() - 1, foreign.bbox.bottom() - 1), vp(0, foreign.bbox.right() - 200, foreign.bbox.bottom() - 200));
   ASSERT_TRUE(spin_until([&] { return view()->selected_object().has_value(); }));
-  const auto shrunk = images(0)[0].bbox;
-  settle_clicks();
-  drag(vp(0, shrunk.x + 50, shrunk.y + 50), vp(0, shrunk.x + 90, shrunk.y + 70));
-  ASSERT_TRUE(spin_until([&] { return wait_idle() && !images(0).empty() && std::abs(images(0)[0].bbox.x - (shrunk.x + 40)) < 1.0; }));
-  ASSERT_TRUE(spin_until([&] {
-    if (!idle()) { return false; }
-    if (window_.edit_controller()->can_undo()) { window_.edit_controller()->undo(); return false; }
-    return !images(0).empty() && std::abs(images(0)[0].bbox.w - foreign.bbox.w) < 1.0;
-  })) << "실행 취소로 원래 크기·자리";
+  ASSERT_TRUE(view()->selected_object_locked()) << "선택은 유지된다";
+  attempts = 0;
+  QKeyEvent right(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+  QApplication::sendEvent(view(), &right);
+  QKeyEvent del(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+  QApplication::sendEvent(view(), &del);
+  ASSERT_TRUE(wait_idle());
+  EXPECT_EQ(attempts, 2) << "화살표·Delete 도 안내 신호를 낸다";
+  EXPECT_FALSE(window_.edit_controller()->can_undo()) << "Command 가 실행되지 않았다";
+  EXPECT_FALSE(window_.isWindowModified());
+  EXPECT_FALSE(window_.statusBar()->currentMessage().isEmpty()) << "상태 표시줄에 이유를 알린다";
+  ASSERT_EQ(images(0).size(), 1u);
+  EXPECT_FALSE(images(0)[0].marked) << "마크도 붙지 않는다";
+  EXPECT_NEAR(images(0)[0].bbox.x, foreign.bbox.x, 0.01);
+  EXPECT_NEAR(images(0)[0].bbox.w, foreign.bbox.w, 0.01);
 }
 
 TEST_F(ImageToolTest, UnreadableFileIsExplainedAndPermissionGates) {
