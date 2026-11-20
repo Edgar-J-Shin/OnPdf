@@ -1,6 +1,7 @@
 #include "document_view.h"
 
 #include "document_tile_source.h"
+#include "form_field_editor.h"
 #include "onpdf/core/view/tile.h"
 #include "qt_image.h"
 
@@ -86,6 +87,11 @@ void DocumentView::set_document(const engine::DocumentHandle& handle, UiDispatch
   selected_text_.reset();
   reselect_text_page_ = -1;
   reselect_text_box_.clear();
+  form_cache_.clear();
+  for (auto& [page, h] : form_requested_) h.cancel();
+  form_requested_.clear();
+  cancel_form_editor();
+  pending_form_open_.reset();
   ink_points_.clear();
   ink_page_ = -1;
   clear_selection();
@@ -126,6 +132,11 @@ void DocumentView::invalidate_pages(const std::vector<int>& pages, bool sizes_ch
     if (auto it = text_box_requested_.find(page); it != text_box_requested_.end()) {
       it->second.cancel();
       text_box_requested_.erase(it);
+    }
+    form_cache_.erase(page);  // 값·외형이 바뀌었다 (열린 편집기는 칸 위치만 쓰므로 그대로)
+    if (auto it = form_requested_.find(page); it != form_requested_.end()) {
+      it->second.cancel();
+      form_requested_.erase(it);
     }
     if (selected_text_ && selected_text_->page == page) {  // 편집 뒤 같은 상자를 조용히 다시 고른다
       reselect_text_page_ = page;
@@ -195,6 +206,11 @@ void DocumentView::rebuild_pages(int keep_page) {
   for (auto& [page, task] : annot_requested_) task.cancel();
   annot_requested_.clear();
   clear_annotation_selection();
+  form_cache_.clear();  // 쪽 번호가 바뀌었다
+  for (auto& [page, task] : form_requested_) task.cancel();
+  form_requested_.clear();
+  cancel_form_editor();
+  pending_form_open_.reset();
   ink_points_.clear();
   ink_page_ = -1;
   clear_selection();
@@ -222,6 +238,11 @@ void DocumentView::rebuild_pages(int keep_page) {
 void DocumentView::clear_document(const QString& placeholder) {
   scheduler_.reset();
   source_.reset();
+  form_cache_.clear();
+  for (auto& [page, h] : form_requested_) h.cancel();
+  form_requested_.clear();
+  cancel_form_editor();
+  pending_form_open_.reset();
   annot_cache_.clear();
   for (auto& [page, h] : annot_requested_) h.cancel();
   annot_requested_.clear();
@@ -422,6 +443,7 @@ void DocumentView::schedule_update() {
   if (!scheduler_) return;
   scheduler_->update(viewport_doc());
   request_text_indexes();
+  place_form_editor();  // 스크롤·확대·크기 변경 때 칸을 따라간다
   if (first_view_pending_ && scheduler_->pending_visible() == 0) {
     first_view_pending_ = false;
     emit first_view_rendered();
@@ -532,11 +554,230 @@ void DocumentView::paint_page(QPainter& painter, int page, const QRectF& page_lo
                       to_qimage_shared(bitmap, d));  // 복사 없음
   }
 
-  // 4. 검색 결과 (선택 아래)
+  // 4. 폼 칸 강조 (#51), 검색 결과 (선택 아래)
+  paint_form(painter, page, page_logical);
   paint_search(painter, page, page_logical);
   // 5. 선택 하이라이트
   paint_selection(painter, page, page_logical);
   paint_annotations(painter, page, page_logical);
+}
+
+// ---------------------------------------------------------------- 폼 (#51)
+
+const std::vector<engine::FormWidgetInfo>* DocumentView::form_widgets(int page) const {
+  auto it = form_cache_.find(page);
+  return it == form_cache_.end() ? nullptr : it->second.get();
+}
+
+void DocumentView::set_form_fillable(bool fillable) {
+  if (form_fillable_ == fillable) return;
+  form_fillable_ = fillable;
+  viewport()->update();
+}
+
+void DocumentView::request_form_widgets() {
+  if (!layout_ || !handle_.valid() || dispatcher_ == nullptr) return;
+  if (handle_.info().form_type == engine::FormType::kNone) return;
+  const std::vector<int> visible = layout_->pages_in(viewport_doc());
+  if (visible.empty()) return;
+  const int first = std::max(0, visible.front() - 1);
+  const int last = std::min(layout_->page_count() - 1, visible.back() + 1);
+  const int keep = std::max(kTextKeepPages, last - first + 1);
+  const int center = current_page();
+  for (auto it = form_requested_.begin(); it != form_requested_.end();) {
+    const bool wanted = (it->first >= first && it->first <= last) || (pending_form_open_ && pending_form_open_->page == it->first);
+    if (!wanted) {
+      it->second.cancel();
+      it = form_requested_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  for (auto it = form_cache_.begin(); it != form_cache_.end();) {
+    const bool editing = form_editor_ && form_editor_->page() == it->first;
+    if (std::abs(it->first - center) > keep && !editing) {
+      it = form_cache_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  std::vector<int> pages;
+  for (int page = first; page <= last; ++page) pages.push_back(page);
+  if (pending_form_open_) pages.push_back(pending_form_open_->page);
+  for (int page : pages) {
+    if (form_cache_.contains(page) || form_requested_.contains(page)) continue;
+    UiDispatcher* dispatcher = dispatcher_;
+    QPointer<DocumentView> self(this);
+    const int generation = doc_generation_;
+    engine::TaskHandle handle = handle_.load_form_widgets(
+        page, engine::Priority::kLow,
+        // 워커 스레드: 메인으로 넘기기만
+        [dispatcher, self, page, generation](onpdf::Result<std::vector<engine::FormWidgetInfo>> result) {
+          std::shared_ptr<const std::vector<engine::FormWidgetInfo>> list;
+          const bool cancelled = !result && (result.error().code == onpdf::ErrorCode::kCancelled ||
+                                             result.error().code == onpdf::ErrorCode::kInvalidState);
+          if (result) list = std::make_shared<const std::vector<engine::FormWidgetInfo>>(std::move(*result));
+          dispatcher->post_to(self, [page, generation, list, cancelled](DocumentView* view) {
+            view->on_form_widgets(page, generation, list, cancelled);
+          });
+        });
+    form_requested_[page] = std::move(handle);
+  }
+}
+
+void DocumentView::on_form_widgets(int page, int generation, std::shared_ptr<const std::vector<engine::FormWidgetInfo>> list,
+                                   bool cancelled) {
+  if (generation != doc_generation_) return;
+  form_requested_.erase(page);
+  if (cancelled) return;
+  form_cache_[page] = list ? std::move(list) : std::make_shared<const std::vector<engine::FormWidgetInfo>>();
+  update_page(page);
+  if (pending_form_open_ && pending_form_open_->page == page) open_pending_form_editor();
+}
+
+const engine::FormWidgetInfo* DocumentView::widget_at(int page, onpdf::Point pt) const {
+  const auto* list = form_widgets(page);
+  if (list == nullptr) return nullptr;
+  for (auto it = list->rbegin(); it != list->rend(); ++it) {  // 뒤의 주석이 위에 그려진다
+    if (engine::is_fillable(it->type) && it->rect.contains(pt)) return &*it;
+  }
+  return nullptr;
+}
+
+QRectF DocumentView::page_rect_to_viewport(int page, const onpdf::Rect& r) const {
+  const QPointF a = page_point_to_viewport(page, {r.x, r.y});
+  const QPointF b = page_point_to_viewport(page, {r.right(), r.bottom()});
+  return QRectF(a, b).normalized();
+}
+
+void DocumentView::paint_form(QPainter& painter, int page, const QRectF& page_logical) {
+  if (!form_fillable_) return;
+  const auto* list = form_widgets(page);
+  if (list == nullptr) return;
+  const double k = layout_->scale() / dpr();  // 포인트 → 논리 px
+  painter.setPen(Qt::NoPen);
+  painter.setBrush(QColor(0, 110, 230, 34));
+  for (const auto& w : *list) {
+    if (!engine::is_fillable(w.type) || w.read_only) continue;
+    if (form_editor_ && form_editor_->page() == page && form_editor_->widget().ref == w.ref) continue;
+    painter.drawRect(QRectF(page_logical.x() + w.rect.x * k, page_logical.y() + w.rect.y * k, w.rect.w * k, w.rect.h * k));
+  }
+  painter.setBrush(Qt::NoBrush);
+}
+
+void DocumentView::open_form_editor(int page, const engine::FormWidgetInfo& widget) {
+  commit_form_editor();
+  pending_form_open_.reset();
+  auto* editor = new FormFieldEditor(page, widget, viewport());  // 뷰포트가 소유 (Qt 부모)
+  form_editor_ = editor;
+  connect(editor, &FormFieldEditor::committed, this, [this](int advance) { on_form_editor_done(true, advance); });
+  connect(editor, &FormFieldEditor::cancelled, this, [this] { on_form_editor_done(false, 0); });
+  place_form_editor();
+  editor->show();
+  editor->focus_editor();
+  update_page(page);
+}
+
+void DocumentView::place_form_editor() {
+  if (!form_editor_ || !layout_) return;
+  form_editor_->place(page_rect_to_viewport(form_editor_->page(), form_editor_->widget().rect), layout_->scale() / dpr());
+}
+
+void DocumentView::commit_form_editor() {
+  if (form_editor_) form_editor_->commit(0);
+}
+
+void DocumentView::cancel_form_editor() {
+  if (!form_editor_) return;
+  FormFieldEditor* editor = form_editor_.data();
+  form_editor_.clear();
+  editor->disconnect(this);
+  editor->hide();
+  editor->deleteLater();
+}
+
+FormFieldEditor* DocumentView::form_editor() const { return form_editor_.data(); }
+
+void DocumentView::on_form_editor_done(bool commit, int advance) {
+  if (!form_editor_) return;
+  FormFieldEditor* editor = form_editor_.data();
+  const int page = editor->page();
+  const engine::FormWidgetInfo widget = editor->widget();
+  const QString text = editor->text();
+  form_editor_.clear();
+  editor->disconnect(this);
+  editor->hide();
+  editor->deleteLater();  // 신호를 보내는 중인 객체: 이벤트 루프에서 지운다
+  update_page(page);
+  if (commit) emit form_text_committed(page, widget, text);
+  if (commit && advance != 0) {
+    go_to_adjacent_text_widget(page, widget.ref, advance < 0);
+  } else {
+    setFocus(Qt::OtherFocusReason);
+  }
+}
+
+namespace {
+bool typeable(const engine::FormWidgetInfo& w) {
+  return !w.read_only && (w.type == engine::FieldType::kText || w.editable_combo);
+}
+}  // namespace
+
+void DocumentView::go_to_adjacent_text_widget(int page, const engine::FieldRef& from, bool backward) {
+  // 같은 쪽: 주석 순서로 다음(이전) 입력 칸. 없으면 이웃 쪽의 첫(마지막) 입력 칸 (목록이 없으면 받아서 연다)
+  if (const auto* list = form_widgets(page)) {
+    std::vector<const engine::FormWidgetInfo*> order;
+    for (const auto& w : *list) if (typeable(w)) order.push_back(&w);
+    std::sort(order.begin(), order.end(), [](const auto* a, const auto* b) { return a->annot_index < b->annot_index; });
+    auto it = std::find_if(order.begin(), order.end(), [&](const auto* w) { return w->ref == from; });
+    if (it != order.end()) {
+      if (!backward && it + 1 != order.end()) {
+        open_form_editor(page, **(it + 1));
+        return;
+      }
+      if (backward && it != order.begin()) {
+        open_form_editor(page, **(it - 1));
+        return;
+      }
+    }
+  }
+  const int next = page + (backward ? -1 : 1);
+  if (!layout_ || next < 0 || next >= layout_->page_count()) {
+    setFocus(Qt::OtherFocusReason);
+    return;
+  }
+  pending_form_open_ = PendingFormOpen{next, backward};
+  if (form_cache_.contains(next)) {
+    open_pending_form_editor();
+  } else {
+    request_form_widgets();
+  }
+}
+
+void DocumentView::open_pending_form_editor() {
+  if (!pending_form_open_) return;
+  const PendingFormOpen pending = *pending_form_open_;
+  const auto* list = form_widgets(pending.page);
+  if (list == nullptr) return;
+  pending_form_open_.reset();
+  std::vector<const engine::FormWidgetInfo*> order;
+  for (const auto& w : *list) if (typeable(w)) order.push_back(&w);
+  std::sort(order.begin(), order.end(), [](const auto* a, const auto* b) { return a->annot_index < b->annot_index; });
+  if (order.empty()) {  // 입력 칸이 없는 쪽은 건너뛴다
+    const int next = pending.page + (pending.backward ? -1 : 1);
+    if (layout_ && next >= 0 && next < layout_->page_count()) {
+      pending_form_open_ = PendingFormOpen{next, pending.backward};
+      if (form_cache_.contains(next)) {
+        open_pending_form_editor();
+      } else {
+        request_form_widgets();
+      }
+    }
+    return;
+  }
+  const engine::FormWidgetInfo target = pending.backward ? *order.back() : *order.front();
+  scroll_to_page_point(pending.page, {target.rect.x, target.rect.y});
+  open_form_editor(pending.page, target);
 }
 
 // ---------------------------------------------------------------- 텍스트 인덱스
@@ -596,6 +837,7 @@ void DocumentView::request_text_indexes() {
   }
   request_annotations();
   request_text_boxes();
+  request_form_widgets();
 }
 
 void DocumentView::request_annotations() {
@@ -1316,6 +1558,9 @@ void DocumentView::update_hover(QPointF viewport_pos) {
       if (const engine::AnnotationInfo* a = annotation_at(page, pt)) {
         cursor = Qt::PointingHandCursor;
         if (a->kind == engine::AnnotationKind::kText && !a->contents.empty()) tooltip = QString::fromStdString(a->contents);
+      } else if (const engine::FormWidgetInfo* widget = widget_at(page, pt)) {
+        const bool typing = widget->type == engine::FieldType::kText || widget->editable_combo;
+        cursor = widget->read_only ? Qt::ArrowCursor : typing ? Qt::IBeamCursor : Qt::PointingHandCursor;
       } else if (const int handle = text_editable_ ? handle_at(viewport_pos) : -1; handle >= 0) {
         cursor = handle >= 4 ? Qt::SizeHorCursor : (handle == 0 || handle == 3) ? Qt::SizeFDiagCursor : Qt::SizeBDiagCursor;
       } else if (selected_text_ && selected_text_->page == page && selected_text_->bbox.contains(pt)) {
@@ -1529,6 +1774,15 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
     if (selected_annot_) clear_annotation_selection();
     if (auto hit = page_point_at(event->position())) {
       const auto [page, pt] = *hit;
+      // 폼 칸 (#51): 주석 다음, 쪽 객체보다 먼저. 처리는 수신자(MainWindow)가 종류·권한에 따라
+      if (const engine::FormWidgetInfo* widget = widget_at(page, pt)) {
+        if (selected_text_ || reselect_text_page_ >= 0) clear_text_box_selection();
+        clear_selection();
+        const engine::FormWidgetInfo copy = *widget;  // 수신자가 캐시를 바꿀 수 있다
+        drag_ = Drag::kNone;
+        emit form_field_clicked(page, copy);
+        return;
+      }
       // 선택한 상자의 두 번 클릭은 핸들보다 먼저: 폭 핸들이 상자 안쪽 가장자리와 겹친다 (#49)
       if (click_count_ == 2 && selected_text_ && selected_text_->page == page && selected_text_->bbox.contains(pt) &&
           selected_text_->kind == engine::ObjectKind::kText) {

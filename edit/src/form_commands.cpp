@@ -95,7 +95,11 @@ Result<engine::ChangeSet> SetFormCheckedCommand::undo(engine::EditableDocument& 
     if (!pages) return std::unexpected(pages.error());
     return pages_change(std::move(*pages));
   }
-  if (previous_page_ < 0) return make_error(ErrorCode::kUnsupported, "the first choice in a radio group cannot be undone");
+  if (previous_page_ < 0) {
+    // 처음 선택 없던 그룹: PDFium 이 라디오 해제를 지원하지 않는다. 실패로 두면 이 단계가 스택에 걸려 그 앞의 편집까지
+    // 되돌릴 수 없게 되므로, 문서를 바꾸지 않고 성공한다 (다시 실행도 같은 선택이라 변화 없음). 앱이 undoable() 로 안내
+    return engine::ChangeSet{};
+  }
   auto pages = doc.set_form_checked(previous_page_, previous_ref_, true);
   if (!pages) return std::unexpected(pages.error());
   return pages_change(std::move(*pages));

@@ -107,9 +107,11 @@ TEST(FormCommands, FirstRadioChoiceCannotBeUndone) {
   ASSERT_TRUE(pick.execute(doc));
   EXPECT_FALSE(pick.undoable());
   auto undone = pick.undo(doc);
-  ASSERT_FALSE(undone);
-  EXPECT_EQ(undone.error().code, ErrorCode::kUnsupported);
+  ASSERT_TRUE(undone) << "스택이 막히지 않게 성공한다";
+  EXPECT_TRUE(undone->pages.empty()) << "바뀐 쪽 없음";
   EXPECT_TRUE(doc.widget(0, {"gender", 0})->checked) << "문서는 그대로";
+  ASSERT_TRUE(pick.execute(doc)) << "다시 실행도 같은 선택";
+  EXPECT_TRUE(doc.widget(0, {"gender", 0})->checked);
 }
 
 TEST(FormCommands, ChoiceExecuteUndoRedoOnFake) {
@@ -171,7 +173,10 @@ TEST(FormCommands, RoundTripOnPdfium) {
   EXPECT_FALSE(widget(*doc, 0, "gender", 2).checked);
   ASSERT_TRUE(second.execute(*doc));
   EXPECT_TRUE(widget(*doc, 0, "gender", 2).checked);
-  EXPECT_FALSE(first.undo(*doc)) << "첫 선택은 취소 불가";
+  auto noop = first.undo(*doc);
+  ASSERT_TRUE(noop);
+  EXPECT_TRUE(noop->pages.empty()) << "첫 선택의 취소는 문서를 바꾸지 않는다";
+  EXPECT_TRUE(widget(*doc, 0, "gender", 2).checked);
 
   SetFormChoiceCommand city(0, {"city", 0}, {1});
   ASSERT_TRUE(city.execute(*doc));

@@ -34,6 +34,8 @@ class EditController : public QObject {
   [[nodiscard]] bool can_redo() const noexcept { return !busy_ && stack_.can_redo(); }
   [[nodiscard]] std::string_view undo_id() const;  // 없으면 빈 문자열
   [[nodiscard]] std::string_view redo_id() const;
+  // 다음 실행 취소 대상 (없으면 nullptr). 앱이 안내 문구를 고를 때만 읽는다
+  [[nodiscard]] std::shared_ptr<const edit::Command> undo_command() const { return stack_.undo_target(); }
   [[nodiscard]] bool is_modified() const noexcept { return !stack_.is_clean(); }
   void mark_saved();  // 현재 상태를 저장 지점으로
 

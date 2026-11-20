@@ -19,6 +19,7 @@ add_library(onpdf_app_lib STATIC
   edit_controller.h edit_controller.cpp
   annotation_dialog.h annotation_dialog.cpp
   image_import.h image_import.cpp
+  form_field_editor.h form_field_editor.cpp
   structure_job.h structure_job.cpp
   main_window.h main_window.cpp
 )

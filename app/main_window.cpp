@@ -3,6 +3,7 @@
 #include "document_view.h"
 #include "onpdf/core/platform/path.h"
 #include "annotation_dialog.h"
+#include "form_field_editor.h"
 #include "image_import.h"
 #include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/engine/save.h"
@@ -34,6 +35,7 @@
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QEventLoop>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QInputDialog>
@@ -139,6 +141,8 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(view_, &DocumentView::object_resize_requested, this, &MainWindow::on_object_resize_requested);
   connect(view_, &DocumentView::text_width_requested, this, &MainWindow::on_text_width_requested);
   connect(view_, &DocumentView::object_nudge_requested, this, &MainWindow::on_object_nudge_requested);
+  connect(view_, &DocumentView::form_field_clicked, this, &MainWindow::on_form_field_clicked);
+  connect(view_, &DocumentView::form_text_committed, this, &MainWindow::on_form_text_committed);
   connect(view_, &DocumentView::ink_requested, this, &MainWindow::on_ink_requested);
   connect(view_, &DocumentView::shape_requested, this, &MainWindow::on_shape_requested);
   connect(view_, &DocumentView::annotation_selected, this, &MainWindow::on_annotation_selected);
@@ -153,6 +157,8 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
     update_edit_actions();
     update_title();
     flush_pending_nudge();
+    if (!edit_->busy()) form_in_flight_ = false;
+    flush_form_commands();
   });
   connect(edit_, &EditController::failed, this, &MainWindow::on_edit_failed);
 
@@ -234,7 +240,14 @@ void MainWindow::build_menus() {
   quit->setMenuRole(QAction::QuitRole);
 
   QMenu* edit = menuBar()->addMenu(tr("편집(&E)"));
-  undo_action_ = edit->addAction(tr("실행 취소(&U)"), QKeySequence::Undo, this, [this] { edit_->undo(); });
+  undo_action_ = edit->addAction(tr("실행 취소(&U)"), QKeySequence::Undo, this, [this] {
+    // 처음 선택 없던 라디오 그룹의 첫 선택: PDFium 이 해제를 지원하지 않아 문서는 그대로다 (#51)
+    const auto target = edit_->undo_command();
+    const auto* radio = dynamic_cast<const edit::SetFormCheckedCommand*>(target.get());
+    if (edit_->undo() && radio != nullptr && !radio->undoable()) {
+      show_transient(tr("라디오 단추는 선택을 해제할 수 없어 첫 선택은 그대로 둡니다"));
+    }
+  });
   redo_action_ = edit->addAction(tr("다시 실행(&R)"), QKeySequence::Redo, this, [this] { edit_->redo(); });
   edit->addSeparator();
   paste_action_ = edit->addAction(tr("이미지 붙여넣기(&V)"), QKeySequence::Paste, this, [this] { paste_image(); });
@@ -330,6 +343,11 @@ void MainWindow::on_opened(const QString& path, int page_count) {
   edit_->set_document(page_count > 0 ? session_.handle() : engine::DocumentHandle{});
   update_title();
   statusBar()->clearMessage();  // "여는 중" 임시 메시지가 문서 정보를 가리지 않게
+  pending_form_commands_.clear();
+  form_in_flight_ = false;
+  if (page_count > 0 && session_.handle().info().form_type == engine::FormType::kXfaFull) {
+    show_transient(tr("XFA 양식은 지원하지 않습니다 (AcroForm 부분만 표시합니다)"));
+  }
   if (page_count <= 0) {
     if (!screenshot_path_.isEmpty()) {
       fail_screenshot(QStringLiteral("no pages"));
@@ -402,6 +420,8 @@ QString MainWindow::command_label(std::string_view id) const {
   if (id == "remove_text") return tr("텍스트 삭제");
   if (id == "replace_text") return tr("텍스트 수정");
   if (id == "resize_text") return tr("텍스트 폭 변경");
+  if (id == "form_text") return tr("폼 입력");
+  if (id == "form_check" || id == "form_choice") return tr("폼 선택");
   if (id == "set_annotation_border_width") return tr("선 두께 변경");
   if (id == "set_annotation_opacity") return tr("불투명도 변경");
   if (id == "remove_annotation") return tr("주석 삭제");
@@ -429,6 +449,8 @@ void MainWindow::update_edit_actions() {
   // 편집 가능 상태(작업 중이 아님)와 편집 종류별 문서 권한을 따로 본다
   const bool idle = has_pages && !edit_->busy() && !saving_ && !printing;
   const bool can_assemble = has_pages && session_.handle().info().permissions.assemble;  // 쪽 회전·삭제·삽입
+  form_edits_allowed_ = has_pages && session_.handle().info().permissions.fill_forms;  // 폼 (#51): 바쁘면 대기열
+  view_->set_form_fillable(form_edits_allowed_);
   rotate_cw_action_->setEnabled(idle && can_assemble);
   rotate_ccw_action_->setEnabled(idle && can_assemble);
   const QString assemble_tip = has_pages && !can_assemble ? tr("이 문서는 쪽 편집(회전·삭제·삽입)이 허용되지 않습니다")
@@ -1097,6 +1119,117 @@ void MainWindow::flush_pending_nudge() {
   edit_->run(std::make_shared<edit::MoveObjectsCommand>(nudge.page, nudge.ids, nudge.delta, true));
 }
 
+// ---------------------------------------------------------------- 폼 채우기 (#51)
+
+void MainWindow::on_form_field_clicked(int page, const engine::FormWidgetInfo& widget) {
+  if (!form_edits_allowed_) {
+    show_transient(tr("이 문서는 폼 채우기가 허용되지 않습니다"));
+    return;
+  }
+  if (widget.read_only) {
+    show_transient(tr("읽기 전용 칸입니다: %1").arg(QString::fromStdString(widget.ref.name)));
+    return;
+  }
+  statusBar()->showMessage(tr("폼 · %1").arg(QString::fromStdString(widget.ref.name)), 4000);
+  switch (widget.type) {
+    case engine::FieldType::kText:
+      view_->open_form_editor(page, widget);
+      break;
+    case engine::FieldType::kCheckBox:
+      run_form_command(std::make_shared<edit::SetFormCheckedCommand>(page, widget.ref, !widget.checked));
+      break;
+    case engine::FieldType::kRadio:
+      if (!widget.checked) run_form_command(std::make_shared<edit::SetFormCheckedCommand>(page, widget.ref, true));
+      break;
+    case engine::FieldType::kComboBox:
+    case engine::FieldType::kListBox:
+      show_form_choice_menu(page, widget);
+      break;
+    default:
+      show_transient(tr("이 칸은 채울 수 없습니다"));
+      break;
+  }
+}
+
+void MainWindow::show_form_choice_menu(int page, const engine::FormWidgetInfo& widget) {
+  QMenu menu(this);
+  menu.setObjectName(QStringLiteral("form_choice_menu"));
+  for (int i = 0; i < static_cast<int>(widget.options.size()); ++i) {
+    QAction* action = menu.addAction(QString::fromStdString(widget.options[static_cast<std::size_t>(i)]));
+    action->setCheckable(true);
+    action->setChecked(std::find(widget.selected.begin(), widget.selected.end(), i) != widget.selected.end());
+    connect(action, &QAction::triggered, this, [this, page, widget, i] {
+      std::vector<int> indices{i};
+      if (widget.multi_select) {  // 다중 선택: 누른 항목만 켜고 끈다
+        indices = widget.selected;
+        if (auto it = std::find(indices.begin(), indices.end(), i); it != indices.end()) {
+          indices.erase(it);
+        } else {
+          indices.push_back(i);
+        }
+      }
+      choose_form_option(page, widget.ref, std::move(indices));
+    });
+  }
+  if (widget.editable_combo) {
+    menu.addSeparator();
+    QAction* typed = menu.addAction(tr("직접 입력…"));
+    connect(typed, &QAction::triggered, this, [this, page, widget] { view_->open_form_editor(page, widget); });
+  }
+  const QRectF rect = view_->page_rect_to_viewport(page, widget.rect);
+  menu.exec(view_->viewport()->mapToGlobal(rect.bottomLeft().toPoint()));
+}
+
+bool MainWindow::choose_form_option(int page, const engine::FieldRef& ref, std::vector<int> indices) {
+  if (!form_edits_allowed_ || !view_->has_document()) return false;
+  std::sort(indices.begin(), indices.end());
+  run_form_command(std::make_shared<edit::SetFormChoiceCommand>(page, ref, std::move(indices)));
+  return true;
+}
+
+void MainWindow::on_form_text_committed(int page, const engine::FormWidgetInfo& widget, const QString& text) {
+  if (!form_edits_allowed_) return;
+  const std::string value = text.normalized(QString::NormalizationForm_C).toStdString();  // 한글은 NFC 로 (#45 와 같다)
+  if (value == widget.value) return;  // 바뀌지 않았으면 Command 를 만들지 않는다
+  run_form_command(std::make_shared<edit::SetFormTextCommand>(page, widget.ref, value));
+}
+
+void MainWindow::run_form_command(std::shared_ptr<edit::Command> command) {
+  pending_form_commands_.push_back(std::move(command));
+  flush_form_commands();
+}
+
+void MainWindow::flush_form_commands() {
+  // 하나씩 순서대로: 앞 Command 가 끝나면(state_changed) 다음을 보낸다
+  if (pending_form_commands_.empty() || edit_->busy() || saving_) return;
+  auto command = std::move(pending_form_commands_.front());
+  pending_form_commands_.pop_front();
+  if (edit_->run(command)) {
+    form_in_flight_ = true;
+  } else {
+    pending_form_commands_.clear();  // 문서 없음: 버린다
+  }
+}
+
+void MainWindow::settle_form_edits() {
+  view_->commit_form_editor();
+  // 폼 편집만 기다린다 (다른 편집이 바쁜 경우는 호출자가 기존 규칙대로 "잠시 후" 안내)
+  if (pending_form_commands_.empty() && !form_in_flight_) return;
+  // 폼 Command 는 수 ms 다. 끝날 때까지 이벤트를 돌리며 기다린다 (상한 5초)
+  QEventLoop loop;
+  QTimer timeout;
+  timeout.setSingleShot(true);
+  connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+  const auto check = [this, &loop] {
+    if (pending_form_commands_.empty() && !form_in_flight_) loop.quit();
+  };
+  const QMetaObject::Connection connection = connect(edit_, &EditController::state_changed, &loop, check, Qt::QueuedConnection);
+  timeout.start(5000);
+  QTimer::singleShot(0, &loop, check);
+  loop.exec(QEventLoop::ExcludeUserInputEvents);
+  disconnect(connection);
+}
+
 bool MainWindow::paste_image() {
   if (!content_edits_allowed_ || !view_->has_document()) return false;
   const QMimeData* mime = QApplication::clipboard()->mimeData();
@@ -1564,6 +1697,7 @@ bool MainWindow::save_to(const QString& path) { return start_save(path, [] {}); 
 
 bool MainWindow::start_save(const QString& path, std::function<void()> then) {
   if (!session_.has_document() || path.isEmpty()) return false;
+  settle_form_edits();  // 입력 중인 칸까지 저장한다 (#51)
   if (saving_ || edit_->busy()) {  // 몇 ms 의 창이지만 조용히 멈추지 않는다 (리뷰 I1)
     show_transient(tr("지금은 저장할 수 없습니다. 잠시 후 다시 시도하세요"));
     return false;
@@ -1582,6 +1716,7 @@ bool MainWindow::start_save(const QString& path, std::function<void()> then) {
         auto shared = std::make_shared<onpdf::Result<engine::SaveResult>>(std::move(result));
         dispatcher->post_to(self, [path, generation, then, shared](MainWindow* window) {
           window->saving_ = false;
+          QTimer::singleShot(0, window, [window] { window->flush_form_commands(); });  // 저장 중 쌓인 폼 입력 (#51)
           if (generation != window->document_generation_) return;  // 다른 문서로 바뀌었다
           if (!*shared) {
             window->update_edit_actions();
@@ -1610,6 +1745,7 @@ bool MainWindow::start_save(const QString& path, std::function<void()> then) {
 }
 
 void MainWindow::maybe_save(std::function<void()> then) {
+  settle_form_edits();  // 입력 중인 칸도 "저장하지 않은 변경" 에 들어간다 (#51)
   if (!session_.has_document() || !edit_->is_modified()) {
     then();
     return;
@@ -1689,6 +1825,7 @@ void MainWindow::on_print() {
 bool MainWindow::print_with(QPrinter& printer) {
   if (!session_.has_document() || !session_.handle().valid()) return false;
   if (print_job_ && print_job_->active()) return false;
+  settle_form_edits();  // 입력 중인 칸 값으로 인쇄한다 (#51)
   if (edit_->busy()) {  // 편집 결과(쪽 크기)가 반영되기 전의 배치로 인쇄하지 않는다 (리뷰 I6)
     show_transient(tr("편집을 반영하는 중입니다. 잠시 후 다시 인쇄하세요"));
     return false;
