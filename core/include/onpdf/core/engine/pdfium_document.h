@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -82,6 +83,13 @@ class PdfiumDocument final : public EditableDocument {
   [[nodiscard]] Result<DetachedId> detach_objects(int page_index, const std::vector<std::string>& ids) override;
   [[nodiscard]] Result<void> reattach_objects(DetachedId id) override;
   void drop_detached(DetachedId id) noexcept override;
+  [[nodiscard]] Result<std::vector<FormWidgetInfo>> form_widgets(int page_index) const override;
+  [[nodiscard]] Result<std::vector<int>> set_form_text(int page_index, const FieldRef& ref, std::string_view utf8) override;
+  [[nodiscard]] Result<std::vector<int>> set_form_checked(int page_index, const FieldRef& ref, bool checked) override;
+  [[nodiscard]] Result<std::vector<int>> set_form_selection(int page_index, const FieldRef& ref,
+                                                            const std::vector<int>& indices) override;
+  // 문서 전체 필드 값 (이름 → 값, 체크·라디오는 상태 이름). 저장 검증용. 폼이 없으면 빈 지도
+  [[nodiscard]] Result<std::map<std::string, std::string>> form_values() const;
   [[nodiscard]] int detached_count() const noexcept { return static_cast<int>(detached_.size()); }  // 테스트용
   [[nodiscard]] int snapshot_count() const noexcept { return static_cast<int>(snapshots_.size()); }  // 테스트용
   [[nodiscard]] int font_cache_size() const noexcept { return static_cast<int>(fonts_.size()); }     // 테스트용
@@ -122,6 +130,8 @@ class PdfiumDocument final : public EditableDocument {
   [[nodiscard]] FPDF_FORMHANDLE form_handle() const noexcept;
   // 구조 편집(쪽 삭제·이동·삽입) 뒤 필드·페이지 뷰를 다시 맞춘다
   void reset_form();
+  // 필드 이름 → 위젯이 있는 쪽들 (첫 사용 때 전체 쪽을 훑는다, reset_form 이 비운다)
+  [[nodiscard]] std::vector<int> pages_of_field(const std::string& name, int control_count, int page_index) const;
   // 쪽 위젯을 그린다 (렌더 뒤). start·size 는 쪽 전체를 그렸을 때의 장치 좌표
   void draw_form(FPDF_BITMAP bitmap, FPDF_PAGE page, int start_x, int start_y, int size_x, int size_y, int rotate,
                  int flags) const;
@@ -151,6 +161,8 @@ class PdfiumDocument final : public EditableDocument {
   // 폼 필 환경 (#51). 마지막에 선언 → 가장 먼저 소멸 (FPDFDOC_ExitFormFillEnvironment 는 문서를 닫기 전에)
   FormType form_type_ = FormType::kNone;
   std::unique_ptr<detail::FormEnvironment> form_;
+  mutable std::unordered_map<std::string, std::vector<int>> field_pages_;
+  mutable bool field_pages_ready_ = false;
 };
 
 }  // namespace onpdf::engine

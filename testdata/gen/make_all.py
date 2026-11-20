@@ -29,6 +29,7 @@ GENERATED = {
     "perm-modify-only.pdf": docs.make_perm_modify_only,
     "scanned.pdf": docs.make_scanned,
     "form-acro.pdf": docs.make_form_acro,
+    "form-fields.pdf": docs.make_form_fields,
     "bookmarks.pdf": docs.make_bookmarks,
     "large-1000.pdf": docs.make_large,
     "mixed-sizes.pdf": docs.make_mixed_sizes,

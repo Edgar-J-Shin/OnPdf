@@ -4,6 +4,7 @@
 // 구현(PdfiumDocument)은 워커 스레드에서만 쓴다.
 
 #include "onpdf/core/engine/annotation.h"
+#include "onpdf/core/engine/form.h"
 #include "onpdf/core/engine/render_types.h"
 #include "onpdf/core/engine/page_object.h"
 #include "onpdf/core/engine/text_object.h"
@@ -122,6 +123,17 @@ class EditableDocument {
   [[nodiscard]] virtual Result<void> reattach_objects(DetachedId id) = 0;
   // 보관한 객체를 버린다 (밀려난 Command 의 discard). 없는 토큰은 무시
   virtual void drop_detached(DetachedId id) noexcept = 0;
+
+  // ---- 폼 채우기 (#51). 위젯은 필드 이름 + 컨트롤 index 로 가리킨다. 결과는 값이 바뀐 쪽들 (같은 필드의 다른 위젯 포함) ----
+  // 쪽의 위젯 (폼이 없으면 빈 목록)
+  [[nodiscard]] virtual Result<std::vector<FormWidgetInfo>> form_widgets(int page_index) const = 0;
+  // 텍스트 필드·편집 가능 콤보의 값. 읽기 전용은 kPermissionDenied. MaxLen 을 넘으면 잘린 값이 남는다
+  [[nodiscard]] virtual Result<std::vector<int>> set_form_text(int page_index, const FieldRef& ref, std::string_view utf8) = 0;
+  // 체크박스 켜기·끄기, 라디오 위젯 선택. 라디오 해제는 kUnsupported (PDFium 공개 API 로 불가 — #51 프로브)
+  [[nodiscard]] virtual Result<std::vector<int>> set_form_checked(int page_index, const FieldRef& ref, bool checked) = 0;
+  // 콤보·목록 선택 (선택지 index). 다중 선택이 아니면 하나만
+  [[nodiscard]] virtual Result<std::vector<int>> set_form_selection(int page_index, const FieldRef& ref,
+                                                                    const std::vector<int>& indices) = 0;
 };
 
 }  // namespace onpdf::engine

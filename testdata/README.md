@@ -15,6 +15,7 @@
 | `encrypted-aes256.pdf` | password | user `user` / owner `owner` | 2 | gen+qpdf | Apache-2.0 | AESV3 R6 256-bit (qpdf) |
 | `scanned.pdf` | ok |  | 3 | gen | Apache-2.0 | 이미지 전용 3쪽(8-bit Gray, Flate), 텍스트 없음 |
 | `form-acro.pdf` | ok |  | 1 | gen | Apache-2.0 | AcroForm: 텍스트·체크박스·라디오·콤보(외형 스트림 포함). 위젯은 폼 필 환경의 FPDF_FFLDraw 로 그린다 (#51) |
+| `form-fields.pdf` | ok |  | 2 | gen | Apache-2.0 | 폼 채우기(#51): 한 줄·여러 줄·읽기 전용·MaxLen 텍스트, 체크박스, 기본 선택 없는 라디오, 편집 가능 콤보, 다중 목록. 2쪽(/Rotate 90)에 이름 필드 둘째 위젯·서명 칸 |
 | `bookmarks.pdf` | ok |  | 10 | gen | Apache-2.0 | 3단계 Outline(한글 제목), 10쪽 |
 | `large-1000.pdf` | ok |  | 1000 | gen | Apache-2.0 | 1,000쪽, xref 스트림 + 객체 스트림 |
 | `mixed-sizes.pdf` | ok |  | 7 | gen | Apache-2.0 | A4/Letter/A5/명함, /Rotate 90·270 (p5 렌더 비교) |

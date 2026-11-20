@@ -68,6 +68,7 @@ struct DocumentHandleAccess {
     if (auto print = doc->print_preferences()) info.print = std::move(*print);
     info.permissions = doc->edit_permissions();
     info.signature_count = doc->signature_count();
+    info.form_type = doc->form_type();
 
     std::shared_ptr<State> state(new State(), [](State* s) {
       s->request_close();
@@ -277,6 +278,12 @@ TaskHandle DocumentHandle::load_page_objects(int page_index, Priority priority,
                                              std::function<void(Result<std::vector<PageObjectInfo>>)> on_done) const {
   return DocumentHandleAccess::post_document_task<std::vector<PageObjectInfo>>(
       *this, priority, [page_index](PdfiumDocument& doc) { return doc.page_objects(page_index); }, std::move(on_done));
+}
+
+TaskHandle DocumentHandle::load_form_widgets(int page_index, Priority priority,
+                                             std::function<void(Result<std::vector<FormWidgetInfo>>)> on_done) const {
+  return DocumentHandleAccess::post_document_task<std::vector<FormWidgetInfo>>(
+      *this, priority, [page_index](PdfiumDocument& doc) { return doc.form_widgets(page_index); }, std::move(on_done));
 }
 
 TaskHandle DocumentHandle::load_text(int page_index, Priority priority,
