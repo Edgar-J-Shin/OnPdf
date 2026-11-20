@@ -127,4 +127,12 @@ if(ONPDF_BUILD_SPIKES)
   target_link_libraries(onpdf_spike_m3_regen PRIVATE onpdf::core)
   onpdf_set_warnings(onpdf_spike_m3_regen)
   onpdf_set_runtime_rpath(onpdf_spike_m3_regen)
+
+  # Spike (#59): 미참조 폰트 정리(qpdf 재작성)·OTF/TTC 서브셋 임베딩 — core+edit, qpdf 헤더 직접
+  add_executable(onpdf_spike_font_cleanup spike/font_cleanup_spike.cpp)
+  target_include_directories(onpdf_spike_font_cleanup PRIVATE ${_spike_qpdf_inc})
+  target_link_libraries(onpdf_spike_font_cleanup PRIVATE onpdf::core onpdf::edit GTest::gtest GTest::gtest_main)
+  target_compile_definitions(onpdf_spike_font_cleanup PRIVATE ONPDF_TESTDATA_DIR="${ONPDF_TESTDATA_DIR}" ONPDF_TEST_GLOBAL_PDFIUM=1)
+  onpdf_set_warnings(onpdf_spike_font_cleanup)
+  onpdf_set_runtime_rpath(onpdf_spike_font_cleanup)
 endif()
