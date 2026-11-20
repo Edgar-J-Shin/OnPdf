@@ -435,9 +435,9 @@ TEST(TextLines, DetachedTextBoxOnSamePageDoesNotBlockEdits) {
   ASSERT_NE(hello, nullptr);
   auto added = doc->add_text_objects(0, fallback_for(*hello, "Temporary box"));
   ASSERT_TRUE(added);
+  EXPECT_EQ(doc->text_lines(0)->size(), 10u) << "OnPdf 상자는 줄 목록에 들어가지 않는다";
   auto detached = doc->detach_objects(0, added->ids);
   ASSERT_TRUE(detached);
-  EXPECT_EQ(doc->text_lines(0)->size(), 10u) << "OnPdf 상자는 줄 목록에 들어가지 않는다";
   auto lines2 = doc->text_lines(0);
   const TextLineInfo* target = find_line(*lines2, "Delete me entirely");
   ASSERT_NE(target, nullptr);
@@ -474,6 +474,33 @@ TEST(TextLines, ArrayAndQuoteOperatorsAreRemovedInPlace) {
   ASSERT_TRUE(removed2) << removed2.error().message;
   EXPECT_EQ(page_text(*doc).find("Array show line"), std::string::npos);
   EXPECT_EQ(diff_outside(mid, render(*doc), array->bbox, 5.0), 0);
+  // " 연산자 줄: 지워도 자간·어간 설정과 줄 이동은 남는다
+  auto lines3 = doc->text_lines(0);
+  ASSERT_TRUE(lines3);
+  const TextLineInfo* dq = find_line(*lines3, "Double quote third");
+  ASSERT_NE(dq, nullptr);
+  const Bitmap mid2 = render(*doc);
+  auto removed3 = doc->remove_text_line(0, dq->id);
+  ASSERT_TRUE(removed3) << removed3.error().message;
+  EXPECT_EQ(page_text(*doc).find("Double quote third"), std::string::npos);
+  EXPECT_EQ(diff_outside(mid2, render(*doc), dq->bbox, 5.0), 0);
+}
+
+// 리뷰 W4: 두 쪽이 같은 Form 을 그린다(직접 /Resources) → 그 안의 줄은 고칠 수 없다
+TEST(TextLines, SharedFormXObjectIsRefused) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-form.pdf"));
+  ASSERT_TRUE(doc);
+  auto lines = doc->text_lines(2);
+  ASSERT_TRUE(lines);
+  const TextLineInfo* shared = find_line(*lines, "Shared form line");
+  ASSERT_NE(shared, nullptr);
+  EXPECT_TRUE(shared->id.starts_with("f0/"));
+  auto removed = doc->remove_text_line(2, shared->id);
+  ASSERT_FALSE(removed);
+  EXPECT_EQ(removed.error().code, ErrorCode::kUnsupported);
+  EXPECT_EQ(removed.error().message, "shared-form");
+  EXPECT_EQ(doc->document_state_count(), 0);
+  EXPECT_NE(page_text(*doc, 3).find("Shared form line"), std::string::npos) << "4쪽도 그대로";
 }
 
 // 리뷰 W3: /Contents 배열이 BT 안에서 나뉘어 앞 스트림의 Tj 를 지우면 뒤 스트림의 Tj 가 밀린다 → 거절

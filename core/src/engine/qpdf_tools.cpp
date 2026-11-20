@@ -466,22 +466,30 @@ Result<SurgeryReport> QpdfTools::remove_text_show_ops(const std::vector<std::uin
           return make_error(ErrorCode::kInvalidArgument, "form index out of range");
         }
         QPDFObjectHandle form = forms[static_cast<std::size_t>(form_index)];
-        // 같은 Form 을 다른 자원 사전(다른 쪽·다른 Form)이 참조하거나 이 쪽이 두 번 그리면 수술이 그쪽까지 바꾼다 → 거절 (호출자)
-        int references = 0;
-        for (QPDFObjectHandle& object : q.getAllObjects()) {
-          QPDFObjectHandle dict = object.isStream() ? object.getDict() : object;
-          if (!dict.isDictionary()) continue;
-          QPDFObjectHandle xo = dict.getKey("/XObject");
-          if (!xo.isDictionary()) continue;
+        // 같은 Form 을 쓰는 "사용자"(쪽, 또는 자원을 가진 스트림 — 다른 Form·주석 외형·패턴)가 둘 이상이거나 이 쪽이 두 번 그리면
+        // 수술이 그쪽까지 바꾼다 → 거절 (호출자). 쪽의 /Resources 는 대개 직접 사전이라 객체 순회로는 안 보인다 → 쪽은 따로 센다
+        const auto uses_form = [&](QPDFObjectHandle resources) {
+          if (!resources.isDictionary()) return false;
+          QPDFObjectHandle xo = resources.getKey("/XObject");
+          if (!xo.isDictionary()) return false;
           for (const auto& [key, value] : xo.ditems()) {
-            if (value.isIndirect() && form.isIndirect() && value.getObjGen() == form.getObjGen()) ++references;
+            if (value.isIndirect() && form.isIndirect() && value.getObjGen() == form.getObjGen()) return true;
           }
+          return false;
+        };
+        int users = 0;
+        for (QPDFPageObjectHelper& other : pages) {
+          if (uses_form(other.getAttribute("/Resources", false))) ++users;
+        }
+        for (QPDFObjectHandle& object : q.getAllObjects()) {
+          if (!object.isStream()) continue;  // Form·외형·패턴 스트림의 자원 (쪽은 위에서 셌다)
+          if (uses_form(object.getDict().getKey("/Resources"))) ++users;
         }
         int drawn_here = 0;
         for (const QPDFObjectHandle& f : forms) {
           if (f.isIndirect() && form.isIndirect() && f.getObjGen() == form.getObjGen()) ++drawn_here;
         }
-        if (references > 1 || drawn_here > 1) ++report.shared_forms;
+        if (users > 1 || drawn_here > 1) ++report.shared_forms;
         bool form_carry = false;
         const std::string form_data = stream_bytes(form);
         RewriteResult r = rewrite_content(q, form_data, ordinals, 0, report.needs_displacement, nullptr, form_carry);

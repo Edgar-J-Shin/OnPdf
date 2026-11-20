@@ -2424,6 +2424,7 @@ Result<void> PdfiumDocument::restore_document_state(DocumentStateId id) {
   if (it == states_.end()) return make_error(ErrorCode::kInvalidState, "undo history evicted");
   // 토큰 바이트에 없는 떼어 둔 객체(줄 수정 뒤에 추가했다가 뗀 것)는 되돌릴 곳이 없다 → lost 로 표시하고 되돌리지 않는다.
   // 그 객체의 reattach 는 거절된다 (리뷰 C1: 비어 있는 채로 성공을 보고하면 안 된다)
+  std::vector<DetachedId> lost_ids;
   {
     auto scratch = load_document(it->second, password_);
     if (!scratch) return std::unexpected(scratch.error());
@@ -2437,15 +2438,24 @@ Result<void> PdfiumDocument::restore_document_state(DocumentStateId id) {
         present = !mark.empty() && find_page_object(page.get(), mark).first != nullptr;
       }
       if (!present) {
-        d.objects.clear();  // 옛 문서와 함께 버린다 (replace_bytes 전에)
-        d.lost = true;
+        d.lost = true;  // park 가 건너뛴다. 객체는 replace_bytes 가 옛 문서와 함께 버린다; 복원이 실패하면 되돌린다
+        lost_ids.push_back(detached_id);
       }
     }
   }
+  const auto revert_lost = [&] {
+    for (DetachedId lost_id : lost_ids) {
+      if (auto d = detached_.find(lost_id); d != detached_.end()) d->second.lost = false;
+    }
+  };
   auto parked = park_detached();
-  if (!parked) return std::unexpected(parked.error());
+  if (!parked) {
+    revert_lost();
+    return std::unexpected(parked.error());
+  }
   if (auto replaced = replace_bytes(it->second); !replaced) {
     (void)unpark_detached(*parked);
+    revert_lost();
     return std::unexpected(replaced.error());
   }
   if (auto unparked = unpark_detached(*parked); !unparked) return std::unexpected(unparked.error());

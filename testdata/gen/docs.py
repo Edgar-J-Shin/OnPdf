@@ -864,7 +864,14 @@ def make_text_lines_form() -> bytes:
     s2 = w.stream(b"", content("(Split two) Tj ET", "BT /F1 12 Tf 72 670 Td (Second page plain line) Tj ET"), compress=False)
     p2 = w.add(b"<< /Type /Page /Parent %d 0 R /MediaBox [0 0 612 792] /Contents [%d 0 R %d 0 R] "
                b"/Resources << /Font << /F1 %d 0 R >> >> >>" % (pages, s1, s2, helv))
-    g.pages_tree(w, pages, [p, p2])
+    # 3·4쪽: 같은 Form 을 두 쪽이 그린다 (직접 /Resources) — 그 안의 줄은 공유 Form 이라 고칠 수 없다
+    shared = w.stream(b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 %d 0 R >> >>" % helv,
+                      content("BT /F1 12 Tf 72 700 Td (Shared form line on two pages) Tj ET"))
+    shared_c = w.stream(b"", content("/FmS Do"), compress=False)
+    shared_res = b"<< /Font << /F1 %d 0 R >> /XObject << /FmS %d 0 R >> >>" % (helv, shared)
+    p3 = g.page(w, pages, g.LETTER, shared_c, shared_res)
+    p4 = g.page(w, pages, g.LETTER, shared_c, shared_res)
+    g.pages_tree(w, pages, [p, p2, p3, p4])
     root = g.catalog(w, pages)
     info = g.info_dict(w, "Text lines inside form XObjects")
     return w.write(root=root, info=info, file_id=g.file_id_for("text-lines-form.pdf"))
