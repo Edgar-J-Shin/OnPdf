@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <fstream>
 #include <iterator>
 
@@ -213,5 +214,39 @@ TEST(TextObjects, RemoveFindsByMarkAndPreservesOriginalContent) {
   EXPECT_TRUE(save_document_safely(*doc, dir / "removed.pdf", {}));
 }
 
+
+// 미참조 폰트 판정 (#61): 캐시가 비면 false, 쓰이는 동안 false, 지운 뒤 true, 같은 글자 집합을 다시 넣으면 false
+TEST(TextObjects, HasUnreferencedFonts) {
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc);
+  EXPECT_FALSE(doc->has_unreferenced_fonts()) << "텍스트를 넣은 적 없음";
+  auto first = doc->add_text_objects(0, spec_for("한글 텍스트", {72, 100}, 20, {0, 0, 0, 255}));
+  ASSERT_TRUE(first);
+  EXPECT_FALSE(doc->has_unreferenced_fonts());
+  ASSERT_TRUE(doc->remove_text_objects(0, first->ids));
+  EXPECT_TRUE(doc->has_unreferenced_fonts()) << "지운 텍스트의 서브셋이 캐시에만 남는다";
+  auto again = doc->add_text_objects(0, spec_for("한글 텍스트", {72, 140}, 20, {0, 0, 0, 255}));
+  ASSERT_TRUE(again);
+  EXPECT_EQ(doc->font_cache_size(), 1) << "같은 서브셋 key 재사용";
+  EXPECT_FALSE(doc->has_unreferenced_fonts());
+  auto other = doc->add_text_objects(1, spec_for("둘째 쪽", {72, 100}, 20, {0, 0, 0, 255}));  // 다른 글자 집합 → 폰트 2개
+  ASSERT_TRUE(other);
+  EXPECT_EQ(doc->font_cache_size(), 2);
+  EXPECT_FALSE(doc->has_unreferenced_fonts()) << "두 쪽에 걸쳐 모두 쓰인다";
+  ASSERT_TRUE(doc->remove_text_objects(1, other->ids));
+  EXPECT_TRUE(doc->has_unreferenced_fonts());
+}
+
+TEST(TextObjects, HasUnreferencedFontsScansLargeDocumentQuickly) {
+  auto doc = PdfiumDocument::open(testdata("large-1000.pdf"));
+  ASSERT_TRUE(doc);
+  auto added = doc->add_text_objects(999, spec_for("한글", {72, 100}, 20, {0, 0, 0, 255}));
+  ASSERT_TRUE(added);
+  ASSERT_TRUE(doc->remove_text_objects(999, added->ids));
+  const auto t0 = std::chrono::steady_clock::now();
+  EXPECT_TRUE(doc->has_unreferenced_fonts());
+  const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  EXPECT_LT(ms, 2000.0) << "1,000쪽을 훑어도 저장 시간을 눈에 띄게 늘리지 않는다";
+}
 }  // namespace
 }  // namespace onpdf::engine

@@ -3,6 +3,7 @@
 #include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/engine/save.h"
 #include "onpdf/core/platform/path.h"
+#include "onpdf/edit/add_text_command.h"
 
 #include "../test_support.h"
 
@@ -208,5 +209,65 @@ TEST(QpdfTools, ExtractRangesAllOrNothing) {
   EXPECT_EQ(files_in(dir2.path()), 0u) << "실패하면 결과 0개, 임시 0개";
 }
 
+
+// 재작성 (#61): 미참조 객체 폐기, 암호 유지, 손상 복구 경고는 성공, 오류는 실패
+TEST(QpdfTools, RewriteDropsUnreferencedAndKeepsEncryption) {
+  ScopedTempDir dir;
+  {
+    // 평문: 텍스트 추가 → 제거 → PDFium 저장본에는 폰트가 남고, 재작성본에는 없다
+    auto face = edit::FontFace::load(testdata("fonts") / "NotoSansKR-subset.ttf");
+    ASSERT_TRUE(face);
+    auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+    ASSERT_TRUE(doc);
+    edit::TextBoxSpec spec;
+    spec.page = 0;
+    spec.origin = {72, 100};
+    spec.utf8 = "한글 텍스트";
+    spec.face = *face;
+    edit::AddTextCommand add(spec);
+    ASSERT_TRUE(add.execute(*doc));
+    ASSERT_TRUE(add.undo(*doc));
+    const auto bloated = dir / "bloated.pdf";
+    ASSERT_TRUE(doc->save_to(bloated, false));
+    const auto original_size = std::filesystem::file_size(testdata("simple.pdf"));
+    EXPECT_GT(std::filesystem::file_size(bloated), original_size + 2000) << "PDFium 저장은 미참조 폰트를 남긴다";
+    const auto slim = dir / "slim.pdf";
+    auto r = QpdfTools::rewrite(bloated, slim);
+    ASSERT_TRUE(r) << r.error().message;
+    EXPECT_TRUE(r->warnings.empty());
+    EXPECT_LT(std::filesystem::file_size(slim), original_size + 2000);
+    auto check = QpdfTools::check(slim);
+    ASSERT_TRUE(check);
+    EXPECT_TRUE(check->warnings.empty());
+    ASSERT_TRUE(PdfiumDocument::open(slim));
+    EXPECT_FALSE(QpdfTools::rewrite(bloated, bloated)) << "같은 파일은 거절";
+  }
+  {
+    // 암호: 결과도 같은 암호 문서, 권한 동일
+    const auto out = dir / "enc.pdf";
+    auto r = QpdfTools::rewrite(testdata("encrypted-aes256.pdf"), out, "user");
+    ASSERT_TRUE(r) << r.error().message;
+    auto no_password = PdfiumDocument::open(out);
+    ASSERT_FALSE(no_password);
+    EXPECT_EQ(no_password.error().code, ErrorCode::kPasswordRequired);
+    auto with = PdfiumDocument::open(out, "user");
+    ASSERT_TRUE(with) << with.error().message;
+    auto before = PdfiumDocument::open(testdata("encrypted-aes256.pdf"), "user");
+    ASSERT_TRUE(before);
+    EXPECT_EQ(with->edit_permissions().assemble, before->edit_permissions().assemble);
+    EXPECT_EQ(with->edit_permissions().annotate, before->edit_permissions().annotate);
+    auto wrong = QpdfTools::rewrite(testdata("encrypted-aes256.pdf"), dir / "wrong.pdf", "nope");
+    ASSERT_FALSE(wrong);
+    EXPECT_EQ(wrong.error().code, ErrorCode::kPasswordRequired);
+  }
+  {
+    auto recovered = QpdfTools::rewrite(testdata("bad-xref.pdf"), dir / "recovered.pdf");
+    ASSERT_TRUE(recovered) << recovered.error().message;
+    EXPECT_FALSE(recovered->warnings.empty()) << "복구 경고와 함께 성공";
+    auto broken = QpdfTools::rewrite(testdata("truncated.pdf"), dir / "broken.pdf");
+    ASSERT_FALSE(broken);
+    EXPECT_EQ(broken.error().code, ErrorCode::kJobFailed);
+  }
+}
 }  // namespace
 }  // namespace onpdf::engine

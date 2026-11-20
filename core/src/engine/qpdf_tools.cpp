@@ -227,6 +227,20 @@ Result<JobReport> QpdfTools::check(const std::filesystem::path& file, std::strin
   return run_job(json, {});
 }
 
+Result<JobReport> QpdfTools::rewrite(const std::filesystem::path& input, const std::filesystem::path& output,
+                                     std::string_view password) {
+  std::error_code ec;
+  if (!std::filesystem::exists(input, ec)) return make_error(ErrorCode::kFileNotFound, "file not found: " + path_to_utf8(input));
+  if (std::filesystem::exists(output, ec) && std::filesystem::equivalent(input, output, ec)) {
+    return make_error(ErrorCode::kInvalidArgument, "output must differ from input");
+  }
+  std::string json = "{\"inputFile\": " + json_path(input);
+  if (!password.empty()) json += ", \"password\": " + json_string(password);
+  // decrypt 를 넣지 않으면 입력의 암호화가 그대로 유지된다 (병합·분할과 다르다 — 저장 검증은 같은 암호로 다시 연다)
+  json += ", \"outputFile\": " + json_path(output) + ", \"objectStreams\": \"preserve\"}";
+  return run_job(json, {});
+}
+
 Result<int> QpdfTools::page_count(const std::filesystem::path& file, std::string_view password) {
   auto q = open_for_query(file, password);
   if (!q) return std::unexpected(q.error());

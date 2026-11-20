@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <string_view>
 #include <vector>
 
 namespace onpdf::engine {
@@ -16,14 +17,20 @@ class PdfiumDocument;
 
 struct SaveOptions {
   bool incremental = false;  // 원본 바이트 뒤에 변경만 덧붙인다 (서명 문서는 호출자가 참으로)
+  // 비증분 저장에서 취소한 텍스트의 서브셋 폰트 등 미참조 객체를 qpdf 재작성으로 떨어뜨린다 (#61). 증분 저장은 무시
+  bool clean_unreferenced_fonts = true;
   // 테스트용: 임시 파일을 쓴 뒤·검증 전에 호출된다 (검증 실패 주입)
   std::function<void(const std::filesystem::path& temp)> after_write_for_testing;
+  // 테스트용: 재작성 함수 대체 (실패·손상 주입). 비면 QpdfTools::rewrite
+  std::function<Result<void>(const std::filesystem::path& input, const std::filesystem::path& output, std::string_view password)>
+      rewrite_for_testing;
 };
 
 struct SaveResult {
   std::filesystem::path path;
   bool incremental = false;
   std::uintmax_t bytes = 0;
+  bool fonts_cleaned = false;  // qpdf 재작성으로 미참조 폰트를 떨어뜨렸다 (#61)
 };
 
 [[nodiscard]] Result<SaveResult> save_document_safely(const PdfiumDocument& doc, const std::filesystem::path& target,

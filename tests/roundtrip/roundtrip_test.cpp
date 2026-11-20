@@ -699,5 +699,42 @@ TEST(Roundtrip, FormValuesSurviveSave) {
   }
 }
 
+
+// 추가 → 취소 → 저장 → 다시 열기: 취소한 텍스트의 폰트가 파일을 불리지 않는다 (#61)
+TEST(Roundtrip, UndoneTextDoesNotBloatFile) {
+  auto face = edit::FontFace::load(testdata("fonts") / "NotoSansKR-subset.ttf");
+  ASSERT_TRUE(face);
+  struct Case { const char* file; const char* password; };
+  const Case cases[] = {{"simple.pdf", ""}, {"korean-embedded.pdf", ""}, {"encrypted-aes256.pdf", "owner"}};
+  for (const Case& c : cases) {
+    auto doc = PdfiumDocument::open(testdata(c.file), c.password);
+    ASSERT_TRUE(doc) << c.file;
+    const auto original_text = doc->load_text(0);
+    ASSERT_TRUE(original_text);
+    edit::TextBoxSpec spec;
+    spec.page = 0;
+    spec.origin = {60, 120};
+    spec.utf8 = "한글 텍스트 추가 검증\nOnPdf (M3)";
+    spec.face = *face;
+    edit::AddTextCommand add(spec);
+    ASSERT_TRUE(add.execute(*doc)) << c.file;
+    ASSERT_TRUE(add.undo(*doc)) << c.file;
+    ScopedTempDir dir;
+    const auto target = dir / "undone.pdf";
+    auto saved = save_document_safely(*doc, target, {});
+    ASSERT_TRUE(saved) << c.file << ": " << saved.error().message;
+    EXPECT_TRUE(saved->fonts_cleaned) << c.file;
+    EXPECT_LT(saved->bytes, std::filesystem::file_size(testdata(c.file)) + 2000) << c.file;
+    auto reopened = PdfiumDocument::open(target, c.password);
+    ASSERT_TRUE(reopened) << c.file;
+    auto text = reopened->load_text(0);
+    ASSERT_TRUE(text);
+    EXPECT_EQ(text->all_text(), original_text->all_text()) << c.file;
+    EXPECT_TRUE(reopened->text_objects(0)->empty()) << c.file;
+    auto check = engine::QpdfTools::check(target, c.password);
+    ASSERT_TRUE(check) << c.file << ": " << check.error().message;
+    EXPECT_TRUE(check->warnings.empty()) << c.file;
+  }
+}
 }  // namespace
 }  // namespace onpdf::engine
