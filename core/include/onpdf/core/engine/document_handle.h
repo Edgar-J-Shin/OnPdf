@@ -97,6 +97,11 @@ class DocumentHandle {
                                std::function<void(Result<std::vector<TextObjectInfo>>)> on_done) const;
   [[nodiscard]] std::future<Result<std::vector<TextObjectInfo>>> load_text_objects(int page_index,
                                                                                  Priority priority = Priority::kLow) const;
+  // 기존 텍스트 줄 목록 (뷰 hover·선택용 스냅샷, #65). 계약은 load_annotations 와 같다
+  TaskHandle load_text_lines(int page_index, Priority priority,
+                             std::function<void(Result<std::vector<TextLineInfo>>)> on_done) const;
+  [[nodiscard]] std::future<Result<std::vector<TextLineInfo>>> load_text_lines(int page_index,
+                                                                             Priority priority = Priority::kLow) const;
   // 쪽 객체(텍스트·이미지) 목록 (뷰 선택·이동·크기용 스냅샷, #49). 계약은 load_annotations 와 같다
   TaskHandle load_page_objects(int page_index, Priority priority,
                                std::function<void(Result<std::vector<PageObjectInfo>>)> on_done) const;

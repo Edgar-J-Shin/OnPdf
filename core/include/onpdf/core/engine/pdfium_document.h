@@ -18,7 +18,9 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <deque>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace onpdf::engine {
@@ -100,6 +102,19 @@ class PdfiumDocument final : public EditableDocument {
   // 캐시가 비어 있으면 쪽을 열지 않고 false. 쪽을 못 열면 보수적으로 false (쓰이는지 모르면 지우지 않는다)
   [[nodiscard]] bool has_unreferenced_fonts() const;
 
+  // ---- 기존 텍스트 줄 수정 (#65) ----
+  [[nodiscard]] Result<std::vector<TextLineInfo>> text_lines(int page_index) const override;
+  [[nodiscard]] Result<bool> line_font_covers(int page_index, std::string_view line_id, std::string_view utf8) const override;
+  [[nodiscard]] Result<LineEditResult> remove_text_line(int page_index, std::string_view line_id) override;
+  [[nodiscard]] Result<LineEditResult> replace_text_line(int page_index, std::string_view line_id,
+                                                         const LineReplacement& replacement) override;
+  [[nodiscard]] Result<void> restore_document_state(DocumentStateId id) override;
+  void drop_document_state(DocumentStateId id) noexcept override;
+  [[nodiscard]] int document_state_count() const noexcept { return static_cast<int>(states_.size()); }  // 테스트용
+  void set_state_byte_limit(std::size_t bytes) noexcept { state_byte_limit_ = bytes; }                   // 테스트용
+  // 현재 문서를 메모리에 저장 (FPDF_SaveAsCopy, 비증분). 수술·상태 토큰용
+  [[nodiscard]] Result<std::vector<std::uint8_t>> save_to_memory() const;
+
   // ---- 저장 ----
   // 파일에 스트림으로 저장한다 (FPDF_SaveAsCopy). incremental 이면 원본 바이트 뒤에 변경만 덧붙인다(서명 보존).
   // 원자적 교체·검증은 save_document_safely 가 맡는다
@@ -142,6 +157,24 @@ class PdfiumDocument final : public EditableDocument {
   void draw_form(FPDF_BITMAP bitmap, FPDF_PAGE page, int start_x, int start_y, int size_x, int size_y, int rotate,
                  int flags) const;
   [[nodiscard]] Result<SnapshotId> store_snapshot(std::vector<std::uint8_t> data, ScopedDocument doc);
+  // 저장 전처리 (포커스 해제·주석 AP) — save_to 와 save_to_memory 공용
+  [[nodiscard]] Result<void> prepare_for_save() const;
+  [[nodiscard]] Result<TextObjectsResult> add_text_objects_to(FPDF_PAGE page, const TextObjectsSpec& spec);
+  // 줄 삭제·교체 공용 (replacement == nullptr 이면 삭제)
+  [[nodiscard]] Result<LineEditResult> edit_line(int page_index, std::string_view line_id, const LineReplacement* replacement);
+  // 문서를 새 바이트로 다시 연다 (같은 객체 안에서). 실패하면 옛 문서 유지. 폼 환경·폰트 캐시·필드 지도는 재설정
+  [[nodiscard]] Result<void> replace_bytes(std::vector<std::uint8_t> bytes);
+  // 떼어 둔 객체를 원래 자리에 임시로 되돌려 저장 바이트에 포함시키고(park), 다시 연 뒤 마크 id 로 다시 떼어 낸다(unpark)
+  struct ParkedDetached {
+    DetachedId id = 0;
+    int page = 0;
+    std::vector<std::string> mark_ids;
+    std::vector<int> indices;  // 원래 쪽 객체 index (되돌릴 때 복원)
+  };
+  [[nodiscard]] Result<std::vector<ParkedDetached>> park_detached();
+  [[nodiscard]] Result<void> unpark_detached(const std::vector<ParkedDetached>& parked);
+  // 상태 토큰 저장 (상한을 넘으면 오래된 것부터 폐기)
+  DocumentStateId store_state(std::vector<std::uint8_t> bytes);
 
   // 보조 문서: 삭제 취소용 쪽 사본 또는 삽입 소스 파일. data 가 doc 보다 오래 살아야 한다 (선언 순서)
   struct Snapshot {
@@ -161,9 +194,18 @@ class PdfiumDocument final : public EditableDocument {
   struct Detached {
     int page = 0;
     std::vector<std::pair<int, ScopedFPDFPageObject>> objects;  // (원래 쪽 객체 index, 객체) — index 오름차순
+    bool foreign = false;  // 마크 없는 기존 객체가 섞여 있다 → 줄 수정의 다시 열기에서 이월할 수 없다 (#65)
+    bool lost = false;     // 줄 수정 취소로 이 객체가 없던 바이트로 돌아갔다 → 다시 붙일 수 없다 (#65 리뷰 C1)
   };
   std::unordered_map<DetachedId, Detached> detached_;
   DetachedId next_detached_ = 1;
+  // 줄 수정의 상태 토큰 (#65): 수술 전 문서 바이트. 합계 상한을 넘으면 오래된 것부터 폐기한다
+  std::unordered_map<DocumentStateId, std::vector<std::uint8_t>> states_;
+  std::deque<DocumentStateId> state_order_;
+  std::size_t state_bytes_ = 0;
+  std::size_t state_byte_limit_ = static_cast<std::size_t>(256) << 20;
+  DocumentStateId next_state_ = 1;
+  std::unordered_map<int, std::unordered_set<std::string>> dropped_marks_;  // 쪽 → drop_detached 로 버린 마크 id (복원 뒤 되살아나면 지운다)
   // 폼 필 환경 (#51). 마지막에 선언 → 가장 먼저 소멸 (FPDFDOC_ExitFormFillEnvironment 는 문서를 닫기 전에)
   FormType form_type_ = FormType::kNone;
   std::unique_ptr<detail::FormEnvironment> form_;

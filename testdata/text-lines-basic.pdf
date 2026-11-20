@@ -1,0 +1,52 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Pages /Kids [5 0 R] /Count 1 >>
+endobj
+2 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Length 640 >>
+stream
+BT /F1 14 Tf 72 700 Td (The quick brown fox jumps over the lazy dog) Tj ET
+BT /F1 12 Tf 0.5 Tc 2 Tw 72 670 Td (Spaced words with char and word spacing) Tj ET
+BT /F2 12 Tf 72 640 Td (Bold start) Tj ET
+BT /F1 12 Tf 140 640 Td (then regular end of the mixed line) Tj ET
+BT /F1 12 Tf 72 610 Td (Shifted one ) Tj (Shifted two) Tj ET
+BT /F1 12 Tf 72 580 Td (Delete me entirely) Tj ET
+BT /F1 12 Tf 72 550 Td (Hello world line) Tj ET
+BT /F1 12 Tf 72 520 Td [(Array) -500 (show line)] TJ ET
+BT /F1 12 Tf 14 TL 72 500 Td (Quote first) Tj (Quote second) ' 1 0.2 (Double quote third) " ET
+0 0 1 rg 72 360 200 80 re f
+1 0 0 RG 3 w 300 360 m 500 440 l S
+
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 1 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 2 0 R /F2 3 0 R >> >> >>
+endobj
+6 0 obj
+<< /Type /Catalog /Pages 1 0 R >>
+endobj
+7 0 obj
+<< /Title (Text lines for line editing) /Author (OnPdf testdata) /Producer (onpdf pdfgen) /CreationDate (D:20260101000000Z) >>
+endobj
+xref
+0 8
+0000000000 65535 f 
+0000000015 00000 n 
+0000000072 00000 n 
+0000000169 00000 n 
+0000000271 00000 n 
+0000000962 00000 n 
+0000001098 00000 n 
+0000001147 00000 n 
+trailer
+<< /Size 8 /Root 6 0 R /Info 7 0 R /ID [<FE49F326F77149128C861EC86092514E> <FE49F326F77149128C861EC86092514E>] >>
+startxref
+1289
+%%EOF

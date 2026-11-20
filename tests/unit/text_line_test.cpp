@@ -1,0 +1,531 @@
+// 기존 텍스트 줄 수정 (#65) 엔진: 줄 묶기, qpdf 수술 삭제·교체(원본 글꼴·대체 글꼴), 줄 밖 보존, 상태 토큰, 떼어 둔 객체 이월,
+// Form XObject, 암호·서명 문서, 거절 조건
+#include "onpdf/core/engine/pdfium_document.h"
+#include "onpdf/core/engine/qpdf_tools.h"
+#include "onpdf/core/engine/save.h"
+#include "onpdf/edit/add_text_command.h"
+#include "onpdf/edit/font_face.h"
+#include "onpdf/edit/text_box_commands.h"
+
+#include "../test_support.h"
+
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <cmath>
+
+namespace onpdf::engine {
+namespace {
+
+using onpdf::test::ScopedTempDir;
+using onpdf::test::testdata;
+
+std::shared_ptr<const edit::FontFace> bundled_face() {
+  auto face = edit::FontFace::load(testdata("fonts") / "NotoSansKR-subset.ttf");
+  EXPECT_TRUE(face);
+  return face ? *face : nullptr;
+}
+
+const TextLineInfo* find_line(const std::vector<TextLineInfo>& lines, const std::string& needle) {
+  for (const auto& l : lines) {
+    if (l.text.find(needle) != std::string::npos) return &l;
+  }
+  return nullptr;
+}
+
+TextObjectsSpec fallback_for(const TextLineInfo& line, const std::string& utf8) {
+  edit::TextBoxSpec spec;
+  spec.page = 0;
+  spec.origin = {line.bbox.x, line.bbox.y};
+  spec.size = line.font_size;
+  spec.color = line.color;
+  spec.utf8 = utf8;
+  spec.face = bundled_face();
+  auto built = edit::build_text_objects_spec(spec, make_text_box_id(), {});
+  EXPECT_TRUE(built) << (built ? "" : built.error().message);
+  return built ? *built : TextObjectsSpec{};
+}
+
+Bitmap render(const PdfiumDocument& doc, int page = 0) {
+  RenderOptions o;
+  o.scale = 1.0f;
+  o.render_annotations = false;
+  auto b = doc.render_page(page, o);
+  EXPECT_TRUE(b);
+  return b ? *b : Bitmap{};
+}
+
+// 쪽 포인트 사각형(여유 pad) 밖에서 다른 픽셀 수 (배율 1)
+long diff_outside(const Bitmap& a, const Bitmap& b, const Rect& mask, double pad) {
+  if (a.width != b.width || a.height != b.height) return -1;
+  long n = 0;
+  for (int y = 0; y < a.height; ++y) {
+    for (int x = 0; x < a.width; ++x) {
+      if (x >= mask.x - pad && x <= mask.right() + pad && y >= mask.y - pad && y <= mask.bottom() + pad) continue;
+      const auto* pa = a.row(y) + x * 4;
+      const auto* pb = b.row(y) + x * 4;
+      if (pa[0] != pb[0] || pa[1] != pb[1] || pa[2] != pb[2]) ++n;
+    }
+  }
+  return n;
+}
+
+std::string page_text(const PdfiumDocument& doc, int page = 0) {
+  auto t = doc.load_text(page);
+  EXPECT_TRUE(t);
+  return t ? t->all_text() : std::string();
+}
+
+TEST(TextLines, GroupsLinesAndFlagsFontsAndEditability) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-basic.pdf"));
+  ASSERT_TRUE(doc);
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines) << lines.error().message;
+  EXPECT_EQ(lines->size(), 10u);
+  const TextLineInfo* fox = find_line(*lines, "quick brown fox");
+  ASSERT_NE(fox, nullptr);
+  EXPECT_EQ(fox->font_name, "Helvetica");
+  EXPECT_NEAR(fox->font_size, 14.0, 0.01);
+  EXPECT_FALSE(fox->font_embedded) << "표준 14 글꼴은 임베딩이 아니다";
+  EXPECT_TRUE(fox->editable);
+  EXPECT_EQ(fox->object_count, 1);
+  EXPECT_NEAR(fox->bbox.x, 72.0, 2.0);
+  const TextLineInfo* mixed = find_line(*lines, "Bold start");
+  ASSERT_NE(mixed, nullptr);
+  EXPECT_TRUE(mixed->mixed_fonts);
+  EXPECT_EQ(mixed->object_count, 2);
+  EXPECT_NE(mixed->text.find("mixed line"), std::string::npos) << "두 객체가 한 줄로 묶인다: " << mixed->text;
+  const TextLineInfo* spaced = find_line(*lines, "Spaced words");
+  ASSERT_NE(spaced, nullptr);
+  EXPECT_TRUE(spaced->editable);
+  // id 는 같은 바이트에서 결정적
+  auto again = doc->text_lines(0);
+  ASSERT_TRUE(again);
+  for (std::size_t i = 0; i < lines->size(); ++i) EXPECT_EQ((*lines)[i].id, (*again)[i].id);
+  // 없는 줄
+  auto missing = doc->line_font_covers(0, "p/99/0", "x");
+  EXPECT_FALSE(missing);
+}
+
+TEST(TextLines, RemoveLinePreservesEverythingElse) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-basic.pdf"));
+  ASSERT_TRUE(doc);
+  const Bitmap before = render(*doc);
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines);
+  const TextLineInfo* target = find_line(*lines, "Delete me entirely");
+  ASSERT_NE(target, nullptr);
+  const Rect bbox = target->bbox;
+  auto removed = doc->remove_text_line(0, target->id);
+  ASSERT_TRUE(removed) << removed.error().message;
+  EXPECT_NE(removed->before, 0u);
+  EXPECT_EQ(doc->document_state_count(), 1);
+  const std::string text = page_text(*doc);
+  EXPECT_EQ(text.find("Delete me entirely"), std::string::npos);
+  EXPECT_NE(text.find("quick brown fox"), std::string::npos);
+  EXPECT_NE(text.find("Spaced words"), std::string::npos);
+  auto after_lines = doc->text_lines(0);
+  ASSERT_TRUE(after_lines);
+  EXPECT_EQ(after_lines->size(), 9u);
+  const Bitmap after = render(*doc);
+  EXPECT_EQ(diff_outside(before, after, bbox, 5.0), 0) << "줄 밖은 픽셀 하나도 안 바뀐다";
+  EXPECT_GT(diff_outside(before, after, Rect{0, 0, 0, 0}, 0.0), 100) << "줄 자체는 지워졌다";
+  // 상태 복원 → 원래대로
+  ASSERT_TRUE(doc->restore_document_state(removed->before));
+  EXPECT_EQ(render(*doc).pixels, before.pixels);
+  EXPECT_NE(page_text(*doc).find("Delete me entirely"), std::string::npos);
+  doc->drop_document_state(removed->before);
+  EXPECT_EQ(doc->document_state_count(), 0);
+  // 저장 → 다시 열기 → qpdf check
+  ASSERT_TRUE(doc->remove_text_line(0, target->id));
+  ScopedTempDir dir;
+  const auto out = dir / "removed.pdf";
+  auto saved = save_document_safely(*doc, out, {});
+  ASSERT_TRUE(saved) << saved.error().message;
+  auto reopened = PdfiumDocument::open(out);
+  ASSERT_TRUE(reopened);
+  EXPECT_EQ(page_text(*reopened).find("Delete me entirely"), std::string::npos);
+  auto check = QpdfTools::check(out);
+  ASSERT_TRUE(check);
+  EXPECT_TRUE(check->warnings.empty());
+}
+
+TEST(TextLines, ReplaceNonEmbeddedLineUsesFallbackFont) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-basic.pdf"));
+  ASSERT_TRUE(doc);
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines);
+  const TextLineInfo* hello = find_line(*lines, "Hello world line");
+  ASSERT_NE(hello, nullptr);
+  auto covers = doc->line_font_covers(0, hello->id, "Hello there");
+  ASSERT_TRUE(covers);
+  EXPECT_FALSE(*covers) << "비임베딩 글꼴은 재사용하지 않는다";
+  LineReplacement without_fallback{"Hello there", std::nullopt};
+  auto refused = doc->replace_text_line(0, hello->id, without_fallback);
+  ASSERT_FALSE(refused);
+  EXPECT_EQ(refused.error().code, ErrorCode::kInvalidArgument);
+  EXPECT_EQ(doc->document_state_count(), 0) << "거절은 토큰을 만들지 않는다";
+  const Bitmap before = render(*doc);
+  LineReplacement replacement{"Hello there", fallback_for(*hello, "Hello there")};
+  auto replaced = doc->replace_text_line(0, hello->id, replacement);
+  ASSERT_TRUE(replaced) << replaced.error().message;
+  EXPECT_TRUE(replaced->used_fallback);
+  EXPECT_FALSE(replaced->box.empty());
+  ASSERT_EQ(replaced->ids.size(), 1u);
+  const std::string text = page_text(*doc);
+  EXPECT_NE(text.find("Hello there"), std::string::npos);
+  EXPECT_EQ(text.find("Hello world line"), std::string::npos);
+  auto objects = doc->text_objects(0);
+  ASSERT_TRUE(objects);
+  ASSERT_EQ(objects->size(), 1u);
+  EXPECT_EQ((*objects)[0].box, replaced->box);
+  EXPECT_FALSE((*objects)[0].original_font);
+  EXPECT_NEAR((*objects)[0].bbox.y, hello->bbox.y, 6.0) << "같은 자리";
+  EXPECT_EQ(diff_outside(before, render(*doc), hello->bbox, 6.0), 0);
+  // 새 상자는 OnPdf 텍스트 상자로 다시 고칠 수 있다 (수술 없음)
+  LineReplacement again{"Hello again", fallback_for(*hello, "Hello again")};
+  auto rewritten = doc->replace_text_line(0, replaced->box, again);
+  ASSERT_TRUE(rewritten) << rewritten.error().message;
+  EXPECT_EQ(rewritten->before, 0u);
+  EXPECT_EQ(rewritten->box, replaced->box);
+  EXPECT_NE(page_text(*doc).find("Hello again"), std::string::npos);
+}
+
+TEST(TextLines, DisplacedFollowerIsRefused) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-basic.pdf"));
+  ASSERT_TRUE(doc);
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines);
+  const TextLineInfo* shifted = find_line(*lines, "Shifted one");
+  ASSERT_NE(shifted, nullptr);
+  EXPECT_EQ(shifted->object_count, 2);
+  const Bitmap before = render(*doc);
+  // 줄 전체(두 객체)를 지우는 것은 밀림이 없다
+  auto removed = doc->remove_text_line(0, shifted->id);
+  ASSERT_TRUE(removed) << removed.error().message;
+  ASSERT_TRUE(doc->restore_document_state(removed->before));
+  doc->drop_document_state(removed->before);
+  EXPECT_EQ(render(*doc).pixels, before.pixels);
+}
+
+TEST(TextLines, EncryptedDocumentKeepsPasswordThroughSurgery) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-basic-enc.pdf"), "user");
+  ASSERT_TRUE(doc) << doc.error().message;
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines);
+  const TextLineInfo* target = find_line(*lines, "Delete me entirely");
+  ASSERT_NE(target, nullptr);
+  auto removed = doc->remove_text_line(0, target->id);
+  ASSERT_TRUE(removed) << removed.error().message;
+  EXPECT_EQ(page_text(*doc).find("Delete me entirely"), std::string::npos);
+  ScopedTempDir dir;
+  const auto out = dir / "enc.pdf";
+  ASSERT_TRUE(save_document_safely(*doc, out, {}));
+  EXPECT_FALSE(PdfiumDocument::open(out)) << "여전히 암호가 필요하다";
+  auto reopened = PdfiumDocument::open(out, "user");
+  ASSERT_TRUE(reopened);
+  EXPECT_EQ(page_text(*reopened).find("Delete me entirely"), std::string::npos);
+}
+
+TEST(TextLines, SignedDocumentIsRefused) {
+  auto doc = PdfiumDocument::open(testdata("signed-dummy.pdf"));
+  ASSERT_TRUE(doc);
+  auto removed = doc->remove_text_line(0, "p/0/0");
+  ASSERT_FALSE(removed);
+  EXPECT_EQ(removed.error().code, ErrorCode::kUnsupported);
+}
+
+TEST(TextLines, FormXObjectLinesAreEditableOneLevelDeep) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-form.pdf"));
+  ASSERT_TRUE(doc);
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines);
+  EXPECT_EQ(lines->size(), 4u) << "2단계 Form 안의 줄은 목록에 없다";
+  EXPECT_EQ(find_line(*lines, "Nested form line"), nullptr);
+  const TextLineInfo* inside = find_line(*lines, "Inside form first line");
+  ASSERT_NE(inside, nullptr);
+  EXPECT_TRUE(inside->id.starts_with("f0/"));
+  const Bitmap before = render(*doc);
+  auto removed = doc->remove_text_line(0, inside->id);
+  ASSERT_TRUE(removed) << removed.error().message;
+  const std::string text = page_text(*doc);
+  EXPECT_EQ(text.find("Inside form first line"), std::string::npos);
+  EXPECT_NE(text.find("Inside form second line"), std::string::npos);
+  EXPECT_NE(text.find("Nested form line stays"), std::string::npos);
+  EXPECT_NE(text.find("Page level line below"), std::string::npos);
+  EXPECT_EQ(diff_outside(before, render(*doc), inside->bbox, 5.0), 0) << "이미지·다른 줄 보존";
+  auto objects = doc->page_objects(0);
+  ASSERT_TRUE(objects);
+  EXPECT_EQ(std::count_if(objects->begin(), objects->end(), [](const auto& o) { return o.kind == ObjectKind::kImage; }), 1);
+}
+
+TEST(TextLines, EmbeddedCidLineReusesOriginalFontAndType3FallsBack) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-type3.pdf"));
+  ASSERT_TRUE(doc);
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines);
+  EXPECT_EQ(lines->size(), 4u);
+  const TextLineInfo* korean = find_line(*lines, "한글 텍스트 줄");
+  ASSERT_NE(korean, nullptr);
+  EXPECT_TRUE(korean->font_embedded);
+  EXPECT_FALSE(korean->font_type3);
+  EXPECT_EQ(korean->font_name, "NotoSansKR-subset") << "서브셋 태그를 뗀 이름";
+  const TextLineInfo* type3 = find_line(*lines, "ABAB");
+  ASSERT_NE(type3, nullptr);
+  EXPECT_TRUE(type3->font_type3);
+  const TextLineInfo* invisible = find_line(*lines, "Invisible OCR layer text");
+  ASSERT_NE(invisible, nullptr);
+  EXPECT_FALSE(invisible->editable) << "보이지 않는 글(3 Tr)은 고치면 보이게 된다 → 거절";
+  EXPECT_EQ(invisible->reason, "invisible");
+  EXPECT_FALSE(doc->remove_text_line(0, invisible->id));
+  // 원본 글꼴 커버리지: 서브셋에 있는 글자만
+  EXPECT_TRUE(*doc->line_font_covers(0, korean->id, "줄 텍스트 한글"));
+  EXPECT_FALSE(*doc->line_font_covers(0, korean->id, "서브셋에 없는 글자 ㉿"));
+  EXPECT_FALSE(*doc->line_font_covers(0, type3->id, "AB"));
+  const Bitmap before = render(*doc);
+  LineReplacement replacement{"줄 텍스트 한글", std::nullopt};
+  auto replaced = doc->replace_text_line(0, korean->id, replacement);
+  ASSERT_TRUE(replaced) << replaced.error().message;
+  EXPECT_FALSE(replaced->used_fallback);
+  auto objects = doc->text_objects(0);
+  ASSERT_TRUE(objects);
+  ASSERT_EQ(objects->size(), 1u);
+  EXPECT_TRUE((*objects)[0].original_font);
+  EXPECT_EQ((*objects)[0].text, "줄 텍스트 한글");
+  EXPECT_NEAR((*objects)[0].font_size, 18.0, 0.01);
+  const std::string text = page_text(*doc);
+  EXPECT_NE(text.find("줄 텍스트 한글"), std::string::npos);
+  EXPECT_EQ(text.find("한글 텍스트 줄"), std::string::npos);
+  EXPECT_EQ(diff_outside(before, render(*doc), korean->bbox, 7.0), 0);
+  // 같은 상자를 다시 원본 글꼴로 고친다 (수술 없음)
+  LineReplacement again{"한글 줄", std::nullopt};
+  auto rewritten = doc->replace_text_line(0, replaced->box, again);
+  ASSERT_TRUE(rewritten) << rewritten.error().message;
+  EXPECT_EQ(rewritten->before, 0u);
+  EXPECT_FALSE(rewritten->used_fallback);
+  EXPECT_NE(page_text(*doc).find("한글 줄"), std::string::npos);
+  // Type3 줄은 대체 글꼴
+  auto lines2 = doc->text_lines(0);
+  ASSERT_TRUE(lines2);
+  const TextLineInfo* type3_now = find_line(*lines2, "ABAB");
+  ASSERT_NE(type3_now, nullptr);
+  LineReplacement t3{"BA", fallback_for(*type3_now, "BA")};
+  auto t3_replaced = doc->replace_text_line(0, type3_now->id, t3);
+  ASSERT_TRUE(t3_replaced) << t3_replaced.error().message;
+  EXPECT_TRUE(t3_replaced->used_fallback);
+  // 저장·왕복
+  ScopedTempDir dir;
+  const auto out = dir / "type3.pdf";
+  auto saved = save_document_safely(*doc, out, {});
+  ASSERT_TRUE(saved) << saved.error().message;
+  auto reopened = PdfiumDocument::open(out);
+  ASSERT_TRUE(reopened);
+  const std::string saved_text = page_text(*reopened);
+  EXPECT_NE(saved_text.find("한글 줄"), std::string::npos);
+  EXPECT_NE(saved_text.find("BA"), std::string::npos);
+  EXPECT_EQ(saved_text.find("ABAB"), std::string::npos);
+  auto check = QpdfTools::check(out);
+  ASSERT_TRUE(check);
+  EXPECT_TRUE(check->warnings.empty());
+}
+
+TEST(TextLines, DetachedObjectsSurviveReopenAndRestore) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-basic.pdf"));
+  ASSERT_TRUE(doc);
+  ImagePixels px{4, 4, std::vector<std::uint8_t>(64, 0)};
+  for (std::size_t k = 0; k < px.bgra.size(); k += 4) px.bgra[k + 3] = 255;
+  auto image = doc->add_image_object(0, ImageSpec{px, Rect{300, 100, 40, 40}, {}});
+  ASSERT_TRUE(image) << image.error().message;
+  auto detached = doc->detach_objects(0, {*image});
+  ASSERT_TRUE(detached);
+  EXPECT_EQ(doc->detached_count(), 1);
+  const Bitmap without_image = render(*doc);
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines);
+  const TextLineInfo* target = find_line(*lines, "Delete me entirely");
+  ASSERT_NE(target, nullptr);
+  auto removed = doc->remove_text_line(0, target->id);
+  ASSERT_TRUE(removed) << removed.error().message;
+  EXPECT_EQ(doc->detached_count(), 1) << "다시 열어도 떼어 둔 객체가 이월된다";
+  EXPECT_EQ(diff_outside(without_image, render(*doc), target->bbox, 5.0), 0) << "되돌린 이미지가 보이면 안 된다";
+  // 되살리기 (반대 순서): 줄 복원 → 이미지 재부착
+  ASSERT_TRUE(doc->restore_document_state(removed->before));
+  doc->drop_document_state(removed->before);
+  EXPECT_EQ(render(*doc).pixels, without_image.pixels);
+  EXPECT_EQ(doc->detached_count(), 1);
+  ASSERT_TRUE(doc->reattach_objects(*detached));
+  auto objects = doc->page_objects(0);
+  ASSERT_TRUE(objects);
+  EXPECT_EQ(std::count_if(objects->begin(), objects->end(), [&](const auto& o) { return o.id == *image; }), 1);
+  // 버린(drop) 객체는 상태 복원 뒤 되살아나지 않는다
+  auto detached2 = doc->detach_objects(0, {*image});
+  ASSERT_TRUE(detached2);
+  auto lines2 = doc->text_lines(0);
+  ASSERT_TRUE(lines2);
+  const TextLineInfo* target2 = find_line(*lines2, "Delete me entirely");
+  ASSERT_NE(target2, nullptr);
+  auto removed2 = doc->remove_text_line(0, target2->id);
+  ASSERT_TRUE(removed2) << removed2.error().message;
+  doc->drop_detached(*detached2);
+  ASSERT_TRUE(doc->restore_document_state(removed2->before));
+  doc->drop_document_state(removed2->before);
+  auto objects2 = doc->page_objects(0);
+  ASSERT_TRUE(objects2);
+  EXPECT_EQ(std::count_if(objects2->begin(), objects2->end(), [&](const auto& o) { return o.id == *image; }), 0);
+  EXPECT_EQ(doc->detached_count(), 0);
+}
+
+TEST(TextLines, StateTokenLimitEvictsOldest) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-basic.pdf"));
+  ASSERT_TRUE(doc);
+  doc->set_state_byte_limit(1);  // 토큰 하나(방금 것)만 남는다
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines);
+  const TextLineInfo* first = find_line(*lines, "Delete me entirely");
+  ASSERT_NE(first, nullptr);
+  auto removed1 = doc->remove_text_line(0, first->id);
+  ASSERT_TRUE(removed1) << removed1.error().message;
+  auto lines2 = doc->text_lines(0);
+  ASSERT_TRUE(lines2);
+  const TextLineInfo* second = find_line(*lines2, "Hello world line");
+  ASSERT_NE(second, nullptr);
+  auto removed2 = doc->remove_text_line(0, second->id);
+  ASSERT_TRUE(removed2) << removed2.error().message;
+  EXPECT_EQ(doc->document_state_count(), 1);
+  auto evicted = doc->restore_document_state(removed1->before);
+  ASSERT_FALSE(evicted);
+  EXPECT_EQ(evicted.error().code, ErrorCode::kInvalidState);
+  ASSERT_TRUE(doc->restore_document_state(removed2->before));
+}
+
+
+// 리뷰 C1: 줄 수정 뒤에 추가해 떼어 둔 객체는 토큰에 없다 → 취소는 성공하되 그 객체는 lost (reattach 거절)
+TEST(TextLines, DetachedObjectAddedAfterTokenIsLostNotSilentlyEmpty) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-basic.pdf"));
+  ASSERT_TRUE(doc);
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines);
+  const TextLineInfo* target = find_line(*lines, "Delete me entirely");
+  ASSERT_NE(target, nullptr);
+  const Bitmap initial = render(*doc);
+  auto removed = doc->remove_text_line(0, target->id);
+  ASSERT_TRUE(removed) << removed.error().message;
+  ImagePixels px{4, 4, std::vector<std::uint8_t>(64, 0)};
+  for (std::size_t k = 0; k < px.bgra.size(); k += 4) px.bgra[k + 3] = 255;
+  auto image = doc->add_image_object(0, ImageSpec{px, Rect{300, 100, 40, 40}, {}});
+  ASSERT_TRUE(image);
+  auto detached = doc->detach_objects(0, {*image});  // AddImage 취소
+  ASSERT_TRUE(detached);
+  ASSERT_TRUE(doc->restore_document_state(removed->before)) << "줄 삭제 취소는 성공한다";
+  EXPECT_EQ(render(*doc).pixels, initial.pixels);
+  auto reattached = doc->reattach_objects(*detached);  // AddImage 다시 실행
+  ASSERT_FALSE(reattached) << "토큰에 없던 객체는 되살릴 수 없다고 알려야 한다";
+  EXPECT_EQ(reattached.error().code, ErrorCode::kInvalidState);
+  doc->drop_detached(*detached);
+  EXPECT_EQ(doc->detached_count(), 0);
+}
+
+// 리뷰 W1: 같은 쪽의 떼어 둔 OnPdf 텍스트 상자(삭제 취소용)가 있어도 줄 수정이 거절되지 않는다
+TEST(TextLines, DetachedTextBoxOnSamePageDoesNotBlockEdits) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-basic.pdf"));
+  ASSERT_TRUE(doc);
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines);
+  const TextLineInfo* hello = find_line(*lines, "Hello world line");
+  ASSERT_NE(hello, nullptr);
+  auto added = doc->add_text_objects(0, fallback_for(*hello, "Temporary box"));
+  ASSERT_TRUE(added);
+  EXPECT_EQ(doc->text_lines(0)->size(), 10u) << "OnPdf 상자는 줄 목록에 들어가지 않는다";
+  auto detached = doc->detach_objects(0, added->ids);
+  ASSERT_TRUE(detached);
+  auto lines2 = doc->text_lines(0);
+  const TextLineInfo* target = find_line(*lines2, "Delete me entirely");
+  ASSERT_NE(target, nullptr);
+  auto removed = doc->remove_text_line(0, target->id);
+  ASSERT_TRUE(removed) << removed.error().message;
+  EXPECT_EQ(doc->detached_count(), 1);
+  ASSERT_TRUE(doc->reattach_objects(*detached));
+  EXPECT_NE(page_text(*doc).find("Temporary box"), std::string::npos);
+  EXPECT_EQ(page_text(*doc).find("Delete me entirely"), std::string::npos);
+}
+
+// 리뷰 I1·I3: TJ 배열, ' 와 " 연산자 줄 — 지우면 줄 이동(T*)은 남아 다음 줄이 제자리
+TEST(TextLines, ArrayAndQuoteOperatorsAreRemovedInPlace) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-basic.pdf"));
+  ASSERT_TRUE(doc);
+  const Bitmap before = render(*doc);
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines);
+  const TextLineInfo* quote = find_line(*lines, "Quote second");
+  ASSERT_NE(quote, nullptr);
+  auto removed = doc->remove_text_line(0, quote->id);
+  ASSERT_TRUE(removed) << removed.error().message;
+  const std::string text = page_text(*doc);
+  EXPECT_EQ(text.find("Quote second"), std::string::npos);
+  EXPECT_NE(text.find("Quote first"), std::string::npos);
+  EXPECT_NE(text.find("Double quote third"), std::string::npos);
+  EXPECT_EQ(diff_outside(before, render(*doc), quote->bbox, 5.0), 0) << "' 를 지워도 뒤 줄(\")은 제자리";
+  auto lines2 = doc->text_lines(0);
+  ASSERT_TRUE(lines2);
+  const TextLineInfo* array = find_line(*lines2, "Array show line");
+  ASSERT_NE(array, nullptr);
+  const Bitmap mid = render(*doc);
+  auto removed2 = doc->remove_text_line(0, array->id);
+  ASSERT_TRUE(removed2) << removed2.error().message;
+  EXPECT_EQ(page_text(*doc).find("Array show line"), std::string::npos);
+  EXPECT_EQ(diff_outside(mid, render(*doc), array->bbox, 5.0), 0);
+  // " 연산자 줄: 지워도 자간·어간 설정과 줄 이동은 남는다
+  auto lines3 = doc->text_lines(0);
+  ASSERT_TRUE(lines3);
+  const TextLineInfo* dq = find_line(*lines3, "Double quote third");
+  ASSERT_NE(dq, nullptr);
+  const Bitmap mid2 = render(*doc);
+  auto removed3 = doc->remove_text_line(0, dq->id);
+  ASSERT_TRUE(removed3) << removed3.error().message;
+  EXPECT_EQ(page_text(*doc).find("Double quote third"), std::string::npos);
+  EXPECT_EQ(diff_outside(mid2, render(*doc), dq->bbox, 5.0), 0);
+}
+
+// 리뷰 W4: 두 쪽이 같은 Form 을 그린다(직접 /Resources) → 그 안의 줄은 고칠 수 없다
+TEST(TextLines, SharedFormXObjectIsRefused) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-form.pdf"));
+  ASSERT_TRUE(doc);
+  auto lines = doc->text_lines(2);
+  ASSERT_TRUE(lines);
+  const TextLineInfo* shared = find_line(*lines, "Shared form line");
+  ASSERT_NE(shared, nullptr);
+  EXPECT_TRUE(shared->id.starts_with("f0/"));
+  auto removed = doc->remove_text_line(2, shared->id);
+  ASSERT_FALSE(removed);
+  EXPECT_EQ(removed.error().code, ErrorCode::kUnsupported);
+  EXPECT_EQ(removed.error().message, "shared-form");
+  EXPECT_EQ(doc->document_state_count(), 0);
+  EXPECT_NE(page_text(*doc, 3).find("Shared form line"), std::string::npos) << "4쪽도 그대로";
+}
+
+// 리뷰 W3: /Contents 배열이 BT 안에서 나뉘어 앞 스트림의 Tj 를 지우면 뒤 스트림의 Tj 가 밀린다 → 거절
+TEST(TextLines, DisplacementAcrossContentStreamsIsRefused) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-form.pdf"));
+  ASSERT_TRUE(doc);
+  auto lines = doc->text_lines(1);
+  ASSERT_TRUE(lines);
+  const TextLineInfo* split = find_line(*lines, "Split one");
+  ASSERT_NE(split, nullptr);
+  EXPECT_EQ(split->object_count, 2) << "두 스트림의 Tj 가 한 줄로 묶인다";
+  // 줄 전체(두 객체)를 지우는 것은 된다
+  const Bitmap before = render(*doc, 1);
+  auto removed = doc->remove_text_line(1, split->id);
+  ASSERT_TRUE(removed) << removed.error().message;
+  ASSERT_TRUE(doc->restore_document_state(removed->before));
+  doc->drop_document_state(removed->before);
+  EXPECT_EQ(render(*doc, 1).pixels, before.pixels);
+  // 앞 객체만 지우는 수술은 qpdf 가 밀림으로 거절한다
+  ShowOpSurgery ops;
+  ops.page_ordinals = {0};
+  auto report = QpdfTools::remove_text_show_ops(doc->original_bytes(), "", 1, ops);
+  ASSERT_TRUE(report) << report.error().message;
+  EXPECT_EQ(report->needs_displacement, 1);
+  EXPECT_EQ(report->page_show_ops, 3);
+}
+}  // namespace
+}  // namespace onpdf::engine

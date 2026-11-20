@@ -196,6 +196,13 @@ class MainWindow : public QMainWindow {
   void on_text_move_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta);
   void on_text_delete_requested(int page, const QString& box);
   void on_text_edit_requested(int page, const DocumentView::SelectedTextBox& box);
+  // 기존 텍스트 줄 (#65)
+  void on_text_line_selected(bool has, int page, const engine::TextLineInfo& info);
+  void on_text_line_edit_requested(int page, const engine::TextLineInfo& info);
+  void on_text_line_delete_requested(int page, const engine::TextLineInfo& info);
+  bool run_line_replace(int page, const std::string& line_id, const QString& text);
+  void announce_line_edit();  // 줄 수정 Command 가 끝나면 새 상자를 고르고 대체 글꼴 안내
+  [[nodiscard]] QString line_reason_text(const engine::TextLineInfo& info) const;
   bool replace_selected_text(std::optional<QString> utf8, std::optional<double> size, std::optional<engine::Color> color);
   void load_bundled_text_font();
   void on_ink_requested(int page, const std::vector<onpdf::Point>& points, onpdf::Rect bbox);
@@ -281,6 +288,8 @@ class MainWindow : public QMainWindow {
   double shape_border_width_ = 2.0;
   std::uint8_t shape_alpha_ = 255;
   std::shared_ptr<const edit::FontFace> text_font_;  // 새 텍스트 글꼴 (불변, Command 와 공유)
+  std::weak_ptr<edit::Command> pending_line_edit_;  // 실행 중인 줄 수정 Command (#65)
+  QString pending_line_notice_;                    // 새 상자가 선택된 뒤 보여 줄 안내 (대체 글꼴)
   QString text_font_path_;
   QComboBox* text_size_combo_ = nullptr;
   double text_size_ = 24.0;

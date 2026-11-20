@@ -277,6 +277,68 @@ class FakeDocument final : public engine::EditableDocument {
     }
     return out;
   }
+  // ---- 기존 텍스트 줄 (#65): 가짜 줄 목록 + 상태 토큰(전체 가짜 상태 복사) ----
+  struct FakeLine {
+    std::string id;
+    std::string text;
+    bool editable = true;
+    bool covers = true;  // 원본 글꼴이 새 글자를 그릴 수 있다
+    double size = 12.0;
+  };
+  void add_line(int page, std::string id, std::string text, bool covers = true, bool editable = true) {
+    lines_[page].push_back(FakeLine{std::move(id), std::move(text), editable, covers, 12.0});
+  }
+  [[nodiscard]] const std::vector<FakeLine>& lines_on(int page) const {
+    static const std::vector<FakeLine> kEmpty;
+    const auto it = lines_.find(page);
+    return it == lines_.end() ? kEmpty : it->second;
+  }
+  [[nodiscard]] int document_state_count() const noexcept { return static_cast<int>(states_.size()); }
+  bool fail_next_line_edit = false;
+  [[nodiscard]] Result<std::vector<engine::TextLineInfo>> text_lines(int page) const override {
+    if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
+    std::vector<engine::TextLineInfo> out;
+    double y = 100.0;
+    for (const auto& l : lines_on(page)) {
+      engine::TextLineInfo info;
+      info.id = l.id;
+      info.text = l.text;
+      info.bbox = {72.0, y, 200.0, l.size * 1.2};
+      info.font_size = l.size;
+      info.font_name = "Fake";
+      info.font_embedded = true;
+      info.editable = l.editable;
+      if (!l.editable) info.reason = "fake";
+      out.push_back(std::move(info));
+      y += l.size * 1.5;
+    }
+    return out;
+  }
+  [[nodiscard]] Result<bool> line_font_covers(int page, std::string_view line_id, std::string_view) const override {
+    if (line_id.starts_with("onpdf-box-") || line_id.rfind("fake-box-", 0) == 0) {
+      for (const auto& t : text_objects_on(page)) if (t.box == line_id) return t.font_key == "original";
+      return make_error(ErrorCode::kInvalidArgument, "line not found");
+    }
+    for (const auto& l : lines_on(page)) if (l.id == line_id) return l.covers;
+    return make_error(ErrorCode::kInvalidArgument, "line not found");
+  }
+  [[nodiscard]] Result<engine::LineEditResult> remove_text_line(int page, std::string_view line_id) override {
+    return edit_fake_line(page, line_id, nullptr);
+  }
+  [[nodiscard]] Result<engine::LineEditResult> replace_text_line(int page, std::string_view line_id,
+                                                                 const engine::LineReplacement& r) override {
+    return edit_fake_line(page, line_id, &r);
+  }
+  [[nodiscard]] Result<void> restore_document_state(engine::DocumentStateId id) override {
+    auto it = states_.find(id);
+    if (it == states_.end()) return make_error(ErrorCode::kInvalidState, "undo history evicted");
+    texts_ = it->second.texts;
+    lines_ = it->second.lines;
+    images_ = it->second.images;
+    return {};
+  }
+  void drop_document_state(engine::DocumentStateId id) noexcept override { states_.erase(id); }
+
   // ---- 폼 (#51): 쪽별 위젯. 같은 이름의 위젯은 값을 공유한다 ----
   void add_widget(int page, engine::FormWidgetInfo info) { widgets_[page].push_back(std::move(info)); }
   bool fail_form = false;
@@ -590,6 +652,59 @@ class FakeDocument final : public engine::EditableDocument {
     for (std::size_t k = 0; k < images.size(); ++k) {
       if (!images[k].marked) images[k].id = "#obj" + std::to_string(base + static_cast<int>(k));
     }
+  }
+  std::map<int, std::vector<FakeLine>> lines_;
+  struct FakeState {
+    std::map<int, std::vector<FakeTextObject>> texts;
+    std::map<int, std::vector<FakeLine>> lines;
+    std::map<int, std::vector<FakeImage>> images;
+  };
+  std::map<engine::DocumentStateId, FakeState> states_;
+  engine::DocumentStateId next_state_ = 1;
+  Result<engine::LineEditResult> edit_fake_line(int page, std::string_view line_id, const engine::LineReplacement* r) {
+    if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
+    if (fail_next_line_edit) {
+      fail_next_line_edit = false;
+      return make_error(ErrorCode::kJobFailed, "injected");
+    }
+    engine::LineEditResult result;
+    const bool onpdf_box = line_id.starts_with("onpdf-box-") || line_id.rfind("fake-box-", 0) == 0;
+    auto covers = line_font_covers(page, line_id, r ? r->utf8 : "");
+    if (!covers) return std::unexpected(covers.error());
+    if (!onpdf_box) {
+      auto& lines = lines_[page];
+      auto it = std::find_if(lines.begin(), lines.end(), [&](const FakeLine& l) { return l.id == line_id; });
+      if (it == lines.end()) return make_error(ErrorCode::kInvalidArgument, "line not found");
+      if (!it->editable) return make_error(ErrorCode::kUnsupported, "fake");
+      if (r != nullptr && !*covers && !r->fallback) return make_error(ErrorCode::kInvalidArgument, "original font cannot draw the text");
+      result.before = next_state_++;
+      states_[result.before] = FakeState{texts_, lines_, images_};
+      lines.erase(it);
+    } else {
+      auto& texts = texts_[page];
+      const bool any = std::any_of(texts.begin(), texts.end(), [&](const FakeTextObject& t) { return t.box == line_id; });
+      if (!any) return make_error(ErrorCode::kInvalidArgument, "text box not found");
+      texts.erase(std::remove_if(texts.begin(), texts.end(), [&](const FakeTextObject& t) { return t.box == line_id; }), texts.end());
+    }
+    if (r != nullptr) {
+      FakeTextObject t;
+      t.id = "fake-text-" + std::to_string(next_text_++);
+      t.box = onpdf_box ? std::string(line_id) : "fake-box-" + std::to_string(next_text_++);
+      t.line.text = r->utf8;
+      t.line.font_size = 12.0;
+      t.box_text = r->utf8;
+      if (*covers) {
+        t.font_key = "original";
+      } else {
+        t.font_key = r->fallback ? r->fallback->font.key : "";
+        font_keys_[t.font_key] = r->fallback ? r->fallback->font.ttf.size() : 0;
+        result.used_fallback = true;
+      }
+      result.box = t.box;
+      result.ids = {t.id};
+      texts_[page].push_back(std::move(t));
+    }
+    return result;
   }
   std::map<std::string, std::size_t> font_keys_;  // key → ttf 크기
   int next_text_ = 1;
