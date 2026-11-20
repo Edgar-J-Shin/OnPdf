@@ -1,5 +1,7 @@
 #include "onpdf/core/engine/pdfium_document.h"
 
+#include "form_env.h"
+
 #include "onpdf/core/engine/pdfium_library.h"
 #include "dest.h"
 #include "onpdf/core/engine/text_page.h"
@@ -89,7 +91,56 @@ Result<void> check_page_list(const std::vector<int>& pages, int count, const cha
 }  // namespace
 
 PdfiumDocument::PdfiumDocument(std::vector<std::uint8_t> data, ScopedDocument doc)
-    : data_(std::move(data)), doc_(std::move(doc)) {}
+    : data_(std::move(data)), doc_(std::move(doc)) {
+  switch (FPDF_GetFormType(doc_.get())) {
+    case FORMTYPE_ACRO_FORM: form_type_ = FormType::kAcroForm; break;
+    case FORMTYPE_XFA_FULL: form_type_ = FormType::kXfaFull; break;
+    case FORMTYPE_XFA_FOREGROUND: form_type_ = FormType::kXfaForeground; break;
+    default: form_type_ = FormType::kNone; break;
+  }
+  form_ = detail::FormEnvironment::create(doc_.get());
+}
+
+PdfiumDocument::PdfiumDocument(PdfiumDocument&&) noexcept = default;
+
+PdfiumDocument& PdfiumDocument::operator=(PdfiumDocument&& other) noexcept {
+  if (this == &other) return *this;
+  // 정리 순서: 폼 환경 → 문서에 딸린 객체 → 문서 → 바이트 (문서가 data_ 를 참조한다)
+  form_.reset();
+  detached_.clear();
+  fonts_.clear();
+  snapshots_.clear();
+  doc_.reset();
+  data_ = std::move(other.data_);
+  doc_ = std::move(other.doc_);
+  password_ = std::move(other.password_);
+  snapshots_ = std::move(other.snapshots_);
+  next_snapshot_ = other.next_snapshot_;
+  fonts_ = std::move(other.fonts_);
+  detached_ = std::move(other.detached_);
+  next_detached_ = other.next_detached_;
+  form_type_ = other.form_type_;
+  form_ = std::move(other.form_);
+  return *this;
+}
+
+PdfiumDocument::~PdfiumDocument() = default;
+
+FPDF_FORMHANDLE PdfiumDocument::form_handle() const noexcept { return form_ ? form_->handle.get() : nullptr; }
+
+void PdfiumDocument::reset_form() {
+  if (!form_) return;
+  form_.reset();  // 필드 목록·페이지 뷰가 이전 쪽 구조를 가리키지 않게 새로 만든다
+  form_ = detail::FormEnvironment::create(doc_.get());
+}
+
+void PdfiumDocument::draw_form(FPDF_BITMAP bitmap, FPDF_PAGE page, int start_x, int start_y, int size_x, int size_y,
+                               int rotate, int flags) const {
+  FPDF_FORMHANDLE form = form_handle();
+  if (form == nullptr || !detail::page_has_widgets(page)) return;
+  detail::FormPageView view(page, form);
+  FPDF_FFLDraw(form, bitmap, page, start_x, start_y, size_x, size_y, rotate, flags);
+}
 
 Result<PdfiumDocument> PdfiumDocument::open(const std::filesystem::path& path,
                                             std::string_view password) {
@@ -149,6 +200,7 @@ Result<void> PdfiumDocument::delete_pages(const std::vector<int>& pages) {
   // 내림차순으로 지워야 앞쪽 번호가 밀리지 않는다. FPDFPage_Delete 는 반환값이 없어 쪽 수로 확인한다
   for (auto it = pages.rbegin(); it != pages.rend(); ++it) FPDFPage_Delete(doc_.get(), *it);
   if (page_count() != count - n) return make_error(ErrorCode::kInvalidState, "page count mismatch after delete");
+  reset_form();
   return {};
 }
 
@@ -167,6 +219,7 @@ Result<void> PdfiumDocument::move_pages(const std::vector<int>& pages, int dest)
   if (!FPDF_MovePages(doc_.get(), pages.data(), static_cast<unsigned long>(pages.size()), dest)) {
     return make_error(ErrorCode::kInvalidState, "FPDF_MovePages failed");
   }
+  reset_form();
   return {};
 }
 
@@ -231,6 +284,7 @@ Result<void> PdfiumDocument::insert_from_snapshot(SnapshotId id, const std::vect
                                                      static_cast<unsigned long>(src_pages.size()), at);
   if (!ok) return make_error(ErrorCode::kInvalidState, "FPDF_ImportPagesByIndex failed");
   if (page_count() != count + n) return make_error(ErrorCode::kInvalidState, "page count mismatch after insert");
+  reset_form();
   return {};
 }
 
@@ -1182,6 +1236,7 @@ Result<void> PdfiumDocument::save_to(const std::filesystem::path& path, bool inc
   writer.version = 1;
   writer.WriteBlock = &FileWriter::write_block;
   writer.out = &out;
+  if (FPDF_FORMHANDLE form = form_handle()) (void)FORM_ForceToKillFocus(form);  // 편집 중 값이 남지 않게 (#51)
   const FPDF_DWORD flags = incremental ? FPDF_INCREMENTAL : FPDF_NO_INCREMENTAL;
   const bool ok = FPDF_SaveAsCopy(doc_.get(), &writer, flags) != 0;
   out.flush();
@@ -1279,6 +1334,7 @@ Result<Bitmap> PdfiumDocument::render_page(int page_index, const RenderOptions& 
   if (options.printing) flags |= FPDF_PRINTING;
   if (options.grayscale) flags |= FPDF_GRAYSCALE;
   FPDF_RenderPageBitmap(bitmap.get(), page->get(), 0, 0, width, height, rotate, flags);
+  if (options.render_annotations) draw_form(bitmap.get(), page->get(), 0, 0, width, height, rotate, flags);  // 위젯 (#51)
 
   const int stride = FPDFBitmap_GetStride(bitmap.get());
   const auto* buffer = static_cast<const std::uint8_t*>(FPDFBitmap_GetBuffer(bitmap.get()));
@@ -1328,6 +1384,13 @@ Result<Bitmap> PdfiumDocument::render_region(int page_index, const RenderOptions
   if (options.printing) flags |= FPDF_PRINTING;
   if (options.grayscale) flags |= FPDF_GRAYSCALE;
   FPDF_RenderPageBitmapWithMatrix(bitmap.get(), page->get(), &matrix, &clip, flags);
+  if (options.render_annotations) {
+    // 위젯은 행렬을 받지 않는다: 쪽 전체를 그린 장치 평면에서 영역 원점만큼 음수로 시작 (#51 프로브: 전체 렌더와 일치)
+    const double page_w = FPDF_GetPageWidthF(page->get()) * options.scale;
+    const double page_h = FPDF_GetPageHeightF(page->get()) * options.scale;
+    draw_form(bitmap.get(), page->get(), static_cast<int>(std::lround(-region_px.x)), static_cast<int>(std::lround(-region_px.y)),
+              std::max(1, static_cast<int>(std::lround(page_w))), std::max(1, static_cast<int>(std::lround(page_h))), 0, flags);
+  }
 
   const int stride = FPDFBitmap_GetStride(bitmap.get());
   const auto* buffer = static_cast<const std::uint8_t*>(FPDFBitmap_GetBuffer(bitmap.get()));

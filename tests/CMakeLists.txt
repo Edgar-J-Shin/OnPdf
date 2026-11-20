@@ -98,7 +98,7 @@ endif()
 
 # ---- Spike (#43): 한글 폰트 임베딩. 제품 코드가 아니며 PDFium 헤더를 직접 쓴다. ctest 에는 넣지 않는다 ----
 if(ONPDF_BUILD_SPIKES)
-  add_executable(onpdf_spike_korean_text spike/korean_text_spike.cpp spike/image_object_spike.cpp)
+  add_executable(onpdf_spike_korean_text spike/korean_text_spike.cpp spike/image_object_spike.cpp spike/form_fill_spike.cpp)
   target_link_libraries(onpdf_spike_korean_text PRIVATE onpdf::core GTest::gtest GTest::gtest_main pdfium)
   target_compile_definitions(onpdf_spike_korean_text PRIVATE ONPDF_TESTDATA_DIR="${ONPDF_TESTDATA_DIR}" ONPDF_TEST_GLOBAL_PDFIUM=1)
   onpdf_set_warnings(onpdf_spike_korean_text)

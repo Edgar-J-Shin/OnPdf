@@ -2,6 +2,7 @@
 
 #include "onpdf/core/bitmap.h"
 #include "onpdf/core/engine/editable_document.h"
+#include "onpdf/core/engine/form.h"
 #include "onpdf/core/engine/pdfium_handles.h"
 #include "onpdf/core/engine/render_types.h"
 #include "onpdf/core/error.h"
@@ -13,12 +14,17 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
 
 namespace onpdf::engine {
+
+namespace detail {
+struct FormEnvironment;
+}
 
 // 열린 PDF 문서. 이동만 가능하며 PDFium 워커 스레드에서만 사용한다.
 // 파일 내용은 메모리에 통째로 올린다 (M1 에서 FPDF_LoadCustomDocument 로 전환 예정).
@@ -29,11 +35,15 @@ class PdfiumDocument final : public EditableDocument {
   static Result<PdfiumDocument> open_from_memory(std::vector<std::uint8_t> data,
                                                  std::string_view password = {});
 
-  PdfiumDocument(PdfiumDocument&&) noexcept = default;
-  PdfiumDocument& operator=(PdfiumDocument&&) noexcept = default;
+  PdfiumDocument(PdfiumDocument&&) noexcept;
+  // 폼 환경 → 문서 → 원본 바이트 순으로 정리한다 (기본 대입은 옛 문서를 폼 환경보다 먼저 닫는다)
+  PdfiumDocument& operator=(PdfiumDocument&&) noexcept;
   PdfiumDocument(const PdfiumDocument&) = delete;
   PdfiumDocument& operator=(const PdfiumDocument&) = delete;
-  ~PdfiumDocument() override = default;
+  ~PdfiumDocument() override;
+
+  // AcroForm 이 있으면 폼 필 환경을 갖는다 (#51). XFA 는 AcroForm 부분만
+  [[nodiscard]] FormType form_type() const noexcept { return form_type_; }
 
   [[nodiscard]] int page_count() const noexcept override;
   [[nodiscard]] Result<PageSize> page_size(int page_index) const override;
@@ -109,6 +119,12 @@ class PdfiumDocument final : public EditableDocument {
 
   Result<ScopedPage> load_page(int page_index) const;
   [[nodiscard]] static EditPermissions permissions_of(FPDF_DOCUMENT doc);
+  [[nodiscard]] FPDF_FORMHANDLE form_handle() const noexcept;
+  // 구조 편집(쪽 삭제·이동·삽입) 뒤 필드·페이지 뷰를 다시 맞춘다
+  void reset_form();
+  // 쪽 위젯을 그린다 (렌더 뒤). start·size 는 쪽 전체를 그렸을 때의 장치 좌표
+  void draw_form(FPDF_BITMAP bitmap, FPDF_PAGE page, int start_x, int start_y, int size_x, int size_y, int rotate,
+                 int flags) const;
   [[nodiscard]] Result<SnapshotId> store_snapshot(std::vector<std::uint8_t> data, ScopedDocument doc);
 
   // 보조 문서: 삭제 취소용 쪽 사본 또는 삽입 소스 파일. data 가 doc 보다 오래 살아야 한다 (선언 순서)
@@ -132,6 +148,9 @@ class PdfiumDocument final : public EditableDocument {
   };
   std::unordered_map<DetachedId, Detached> detached_;
   DetachedId next_detached_ = 1;
+  // 폼 필 환경 (#51). 마지막에 선언 → 가장 먼저 소멸 (FPDFDOC_ExitFormFillEnvironment 는 문서를 닫기 전에)
+  FormType form_type_ = FormType::kNone;
+  std::unique_ptr<detail::FormEnvironment> form_;
 };
 
 }  // namespace onpdf::engine
