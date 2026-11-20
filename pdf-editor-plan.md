@@ -93,7 +93,7 @@ PDFium을 엔진으로 삼아 Windows·macOS용 C++ PDF 뷰어를 먼저 완성�
 | **M1 뷰어** | 6주 | 연속 스크롤, 확대·축소, 타일 캐시, 텍스트 선택·복사, 검색, 썸네일, 목차, 인쇄 | 1,000쪽 문서 스크롤 끊김 없음. **v0.1 공개** |
 | **M2 주석·페이지** | 6주 | 하이라이트·밑줄·메모·펜·도형, 페이지 회전·삭제·재배열·병합·분할, 저장, 실행 취소 | 주석이 Adobe Reader에서 동일하게 보임. **v0.2** |
 | **M3 객체 편집** | 8주 | 텍스트 상자·이미지 추가, 기존 객체 선택·이동·크기 조절·삭제, 폼 채우기, 폰트 임베딩 | 한글 텍스트 추가 후 타 뷰어에서 정상 표시. **v0.3** |
-| **M4 텍스트 수정** | 12주 | 기존 텍스트 줄 단위 수정, 텍스트 블록 인식, 폰트 대체, 서식(크기·색) 변경 | 일반 문서 50개에서 수정 결과가 원본과 어울림. **v0.5** |
+| **M4 텍스트 수정** | 12주 | 기존 텍스트 줄 단위 수정, 폰트 대체(원본 글꼴 재사용 우선), 서식(크기·색) 변경. 블록 인식·자동 줄바꿈은 1.0 이후 | 일반 문서 50개에서 수정한 줄 밖 내용이 그대로(픽셀 동일)이고, 원본 글꼴을 쓸 수 있는 줄은 폭 차이 ±5% 이내. **v0.5** |
 | **M5 마무리** | 10주 | 성능 최적화, 설치 파일(Windows 설치기 + macOS DMG·공증), 코드 서명 2종, 설정, 다국어, 충돌 보고, 문서화 | 성공 기준 전부 충족. **v1.0** |
 
 합계 약 44주입니다. M4가 가장 불확실하므로, 일정이 밀리면 M4 범위를 "줄 단위 수정"으로 고정하고 나머지는 1.0 이후로 넘깁니다. M5 가 밀리면 **macOS 배포(DMG·공증)를 1.0.1 로 이월**하고 1.0 은 Windows 설치 파일 + macOS 는 개발자용 압축본으로 냅니다.
@@ -103,7 +103,7 @@ PDFium을 엔진으로 삼아 Windows·macOS용 C++ PDF 뷰어를 먼저 완성�
 - M1: `FPDF_LoadCustomDocument`, `FPDF_RenderPageBitmap`, `FPDFText_LoadPage`, `FPDFText_FindStart`, `FPDFBookmark_*`
 - M2: `FPDFPage_CreateAnnot`와 `FPDFAnnot_*`, `FPDF_ImportPages`, `FPDFPage_Delete`, `FPDF_SaveAsCopy`
 - M3: `FPDFPageObj_CreateTextObj`, `FPDFText_LoadCidType2Font`(ToUnicode·CIDToGIDMap 을 직접 제공), `FPDFText_SetCharcodes`, `FPDFImageObj_SetBitmap`, `FPDFPageObj_Transform`, `FPDFPage_InsertObject`, `FPDFPage_GenerateContent`, `FORM_*`. (`FPDFText_LoadFont` 의 자동 ToUnicode 는 공유 글리프에서 틀려 쓰지 않는다 — #43)
-- M4: `FPDFText_SetText`, `FPDFPage_RemoveObject`, 텍스트 객체의 폰트·행렬 조회 함수
+- M4: 분석은 PDFium(`FPDFTextObj_*`·`FPDFFont_*`·`FPDFText_GetTextObject`), 줄 삭제는 qpdf 콘텐츠 스트림 수술(해당 표시 연산자만 지우고 나머지 바이트 보존), 새 텍스트는 `FPDFPageObj_CreateTextObj`(원본 `FPDF_FONT` 재사용) 로 덧붙인 스트림에. `FPDFPage_RemoveObject` + `GenerateContent` 는 쓰지 않는다 — #55
 
 ---
 
@@ -115,7 +115,7 @@ PDF에는 문단이 없고 글자 조각이 좌표에 놓여 있을 뿐입니다
 
 1. 페이지의 텍스트 객체를 읽어 기준선, 폰트, 크기가 같은 것끼리 **줄**로 묶습니다.
 2. 줄 간격과 왼쪽 정렬선을 보고 줄을 **블록**으로 묶습니다.
-3. 수정할 때는 해당 줄의 객체를 지우고, 같은 위치에 새 텍스트 객체를 만듭니다.
+3. 수정할 때는 해당 줄의 글자 출력 연산자만 qpdf 로 지우고(나머지 바이트는 그대로), 같은 위치에 새 텍스트 객체를 덧붙인 스트림으로 만듭니다. PDFium 의 콘텐츠 재생성은 Type3 글꼴·자간(Tc/Tw)·선 폭·CMYK·소프트 마스크·셰이딩·인라인 이미지를 잃어 실제 문서의 47% 쪽을 손상시켰습니다(#55). 원본 글꼴에 새 글자가 없거나 Type3 이면 대체 글꼴로 바꾸고 알립니다.
 4. 줄이 길어지면 자간을 줄이거나 사용자에게 알립니다. 자동 줄바꿈은 1.0 이후 과제입니다.
 
 **폰트**
@@ -179,7 +179,8 @@ PDF에는 문단이 없고 글자 조각이 좌표에 놓여 있을 뿐입니다
 
 | 위험 | 영향 | 대응 |
 |---|---|---|
-| 기존 텍스트 수정 품질이 기대에 못 미침 | 높음 | M4 범위를 줄 단위로 제한. M3 끝에 2주짜리 사전 검증 진행 |
+| 기존 텍스트 수정 품질이 기대에 못 미침 | 높음 | M4 범위를 줄 단위로 고정. 사전 검증(#55) 완료: qpdf 수술로 보존 100%, 원본 글꼴 재사용 줄 80% |
+| PDFium 콘텐츠 재생성 손실 | 높음 | 기존 문서 객체를 바꾸면 그 스트림 전체가 다시 쓰여 Type3·Tc/Tw·선 폭·CMYK 등을 잃는다(#55). 기존 내용 삭제·수정은 qpdf 수술로 하고, M3 객체 편집(#47·#49)이 기존 객체에 GenerateContent 를 부르는지 v0.3 전에 점검 |
 | PDFium API 변경·문서 부족 | 중간 | 버전 고정, 래퍼 계층으로 격리, PDFium 테스트 코드를 참고 자료로 활용 |
 | 한글 폰트 임베딩 문제 | 중간(완화됨, #43 스파이크) | PDFium CID 임베딩 왕복(렌더·추출·qpdf) 확인. 남은 조건: 서브셋(hb-subset)과 ToUnicode 를 직접 생성. M3 첫 PR 에 한글 왕복 테스트 + Adobe Reader·Chrome·Edge 수동 확인 |
 | 저장 시 파일 손상 | 높음 | 임시 파일 저장 + 검증 후 교체, 왕복 테스트를 CI에 포함 |
