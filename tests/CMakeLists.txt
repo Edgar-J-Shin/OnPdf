@@ -121,4 +121,10 @@ if(ONPDF_BUILD_SPIKES)
   target_link_libraries(onpdf_spike_text_edit PRIVATE onpdf::core pdfium)
   onpdf_set_warnings(onpdf_spike_text_edit)
   onpdf_set_runtime_rpath(onpdf_spike_text_edit)
+
+  # Spike (#55 후속): M3 객체 편집의 재생성 손실 — 제품 엔진으로 측정
+  add_executable(onpdf_spike_m3_regen spike/m3_regen_spike.cpp)
+  target_link_libraries(onpdf_spike_m3_regen PRIVATE onpdf::core)
+  onpdf_set_warnings(onpdf_spike_m3_regen)
+  onpdf_set_runtime_rpath(onpdf_spike_m3_regen)
 endif()
