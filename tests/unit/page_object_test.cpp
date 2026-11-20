@@ -230,5 +230,69 @@ TEST(PageObjects, DetachReattachKeepsOrderAndRender) {
   EXPECT_FALSE(doc->detach_objects(0, {"onpdf-image-ffffffffffffffff"}));
 }
 
+// 다른 프로그램이 뒤집어 넣은 이미지 (cm 의 d < 0): 1×2 회색, 저장 순서로 위 검정·아래 흰색 → 화면에서는 위 흰색·아래 검정
+std::vector<std::uint8_t> flipped_image_pdf() {
+  std::vector<std::string> objects = {
+      "<< /Type /Catalog /Pages 2 0 R >>",
+      "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>",
+  };
+  const std::string content = "q 100 0 0 -200 100 600 cm /Im0 Do Q";
+  objects.push_back("<< /Length " + std::to_string(content.size()) + " >>\nstream\n" + content + "\nendstream");
+  const std::string pixels("\x00\xff", 2);
+  objects.push_back("<< /Type /XObject /Subtype /Image /Width 1 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 2 >>\nstream\n" +
+                    pixels + "\nendstream");
+  std::string pdf = "%PDF-1.7\n";
+  std::vector<std::size_t> offsets;
+  for (std::size_t i = 0; i < objects.size(); ++i) {
+    offsets.push_back(pdf.size());
+    pdf += std::to_string(i + 1) + " 0 obj\n" + objects[i] + "\nendobj\n";
+  }
+  const std::size_t xref = pdf.size();
+  pdf += "xref\n0 " + std::to_string(objects.size() + 1) + "\n0000000000 65535 f \n";
+  for (std::size_t off : offsets) {
+    char line[21];
+    std::snprintf(line, sizeof line, "%010zu 00000 n \n", off);
+    pdf += line;
+  }
+  pdf += "trailer\n<< /Size " + std::to_string(objects.size() + 1) + " /Root 1 0 R >>\nstartxref\n" + std::to_string(xref) + "\n%%EOF\n";
+  return {pdf.begin(), pdf.end()};
+}
+
+// 크기 조절은 기존 행렬의 회전·뒤집기를 유지하고, 이전 사각형으로 되돌리면 렌더가 원래와 같다 (리뷰 W2)
+TEST(PageObjects, ResizeKeepsForeignFlipAndUndoRestoresRender) {
+  auto doc = PdfiumDocument::open_from_memory(flipped_image_pdf());
+  ASSERT_TRUE(doc) << doc.error().message;
+  RenderOptions o;
+  o.scale = 1.0f;
+  auto before = doc->render_page(0, o);
+  ASSERT_TRUE(before);
+  auto dark = [](int R, int G, int B) { return R < 60 && G < 60 && B < 60; };
+  auto light = [](int R, int G, int B) { return R > 200 && G > 200 && B > 200; };
+  // 쪽 포인트: 이미지는 x 100..200, y 192..392. 위 절반 흰색, 아래 절반 검정
+  EXPECT_GT(fraction(*before, {110, 300, 80, 80}, dark), 0.95);
+  auto list = doc->page_objects(0);
+  ASSERT_TRUE(list);
+  ASSERT_EQ(list->size(), 1u);
+  const PageObjectInfo image = list->front();
+  EXPECT_NEAR(image.bbox.x, 100, 0.5);
+  EXPECT_NEAR(image.bbox.y, 192, 0.5);
+  // 기준: 같은 사각형으로 한 번 (콘텐츠 재생성 뒤 렌더 — 원본 스트림과 경계 보간이 1px 다를 수 있다)
+  ASSERT_TRUE(doc->set_object_rect(0, image.id, image.bbox));
+  before = doc->render_page(0, o);
+  ASSERT_TRUE(before);
+  ASSERT_TRUE(doc->set_object_rect(0, image.id, {300, 100, 200, 300}));
+  auto resized = doc->render_page(0, o);
+  ASSERT_TRUE(resized);
+  EXPECT_GT(fraction(*resized, {310, 260, 180, 130}, dark), 0.95) << "뒤집기 유지: 아래 절반이 검정";
+  EXPECT_GT(fraction(*resized, {310, 110, 180, 130}, light), 0.95);
+  ASSERT_TRUE(doc->set_object_rect(0, image.id, image.bbox));
+  auto restored = doc->render_page(0, o);
+  ASSERT_TRUE(restored);
+  int diff = 0;
+  for (std::size_t k = 0; k < before->pixels.size(); ++k) diff += before->pixels[k] != restored->pixels[k];
+  EXPECT_EQ(diff, 0) << "이전 사각형으로 되돌리면 원래 렌더";
+}
+
 }  // namespace
 }  // namespace onpdf::engine

@@ -389,6 +389,34 @@ struct MemoryFileAccess {
   }
 };
 
+// 마크의 포인트 값 (폭): 로캘과 무관하게 "123.456" 으로 쓰고 읽는다 — printf/strtod 는 LC_NUMERIC 을 따른다 (리뷰 W1)
+std::string format_points(double value) {
+  const long long milli = std::llround(std::max(0.0, value) * 1000.0);
+  char buf[32];
+  std::snprintf(buf, sizeof buf, "%lld.%03lld", milli / 1000, milli % 1000);
+  return buf;
+}
+
+double parse_points(std::string_view text) {
+  const std::size_t dot = text.find('.');
+  long long whole = 0;
+  const std::string_view int_part = text.substr(0, dot);
+  if (auto [ptr, ec] = std::from_chars(int_part.data(), int_part.data() + int_part.size(), whole);
+      ec != std::errc{} || ptr != int_part.data() + int_part.size() || whole < 0) {
+    return 0.0;
+  }
+  double value = static_cast<double>(whole);
+  if (dot != std::string_view::npos) {
+    double scale = 0.1;
+    for (char c : text.substr(dot + 1)) {
+      if (c < '0' || c > '9') return 0.0;
+      value += (c - '0') * scale;
+      scale /= 10.0;
+    }
+  }
+  return value;
+}
+
 std::string image_filter_of(FPDF_PAGEOBJECT obj) {
   if (FPDFImageObj_GetImageFilterCount(obj) <= 0) return {};
   const unsigned long len = FPDFImageObj_GetImageFilter(obj, 0, nullptr, 0);
@@ -772,9 +800,8 @@ Result<TextObjectsResult> PdfiumDocument::add_text_objects(int page_index, const
       return fail("cannot set mark text");
     }
     if (spec.write_box && i == 0 && spec.width > 0.0) {
-      char width[32];
-      std::snprintf(width, sizeof width, "%.3f", spec.width);
-      if (!FPDFPageObjMark_SetStringParam(doc_.get(), obj.get(), mark, "width", width)) return fail("cannot set mark width");
+      const std::string width = format_points(spec.width);
+      if (!FPDFPageObjMark_SetStringParam(doc_.get(), obj.get(), mark, "width", width.c_str())) return fail("cannot set mark width");
     }
     if (spec.write_box && i == 0 && !spec.box_text.empty() &&
         !FPDFPageObjMark_SetBlobParam(doc_.get(), obj.get(), mark, "box_text",
@@ -838,7 +865,7 @@ Result<std::vector<TextObjectInfo>> PdfiumDocument::text_objects(int page_index)
     if (info.box.empty()) info.box = id;  // #47 이전 객체: 줄 하나가 상자 하나
     info.text = mark_blob(mark, "text");
     info.box_text = mark_blob(mark, "box_text");
-    if (const std::string width = mark_string(mark, "width"); !width.empty()) info.width = std::strtod(width.c_str(), nullptr);
+    if (const std::string width = mark_string(mark, "width"); !width.empty()) info.width = parse_points(width);
     if (info.text.empty()) {
       if (!text_page) text_page.reset(FPDFText_LoadPage(page->get()));
       if (text_page) {
@@ -873,11 +900,9 @@ Result<void> PdfiumDocument::move_page_objects(int page_index, const std::vector
   auto page = load_page(page_index);
   if (!page) return std::unexpected(page.error());
   std::vector<FPDF_PAGEOBJECT> found;
-  const int count = FPDFPage_CountObjects(page->get());
   std::vector<std::string> unique_ids(ids);
   std::sort(unique_ids.begin(), unique_ids.end());
   unique_ids.erase(std::unique(unique_ids.begin(), unique_ids.end()), unique_ids.end());
-  (void)count;
   for (const std::string& id : unique_ids) {
     FPDF_PAGEOBJECT hit = find_page_object(page->get(), id).first;
     if (hit == nullptr) return make_error(ErrorCode::kInvalidArgument, "page object not found: " + id);
@@ -1038,7 +1063,17 @@ Result<void> PdfiumDocument::set_object_rect(int page_index, std::string_view id
   }
   FS_MATRIX original{};
   if (!FPDFPageObj_GetMatrix(obj, &original)) return make_error(ErrorCode::kInvalidState, "FPDFPageObj_GetMatrix failed");
-  const FS_MATRIX matrix = image_matrix_for(detail::PageSpace::of(page->get()), rect_pt);
+  float l = 0, b = 0, r = 0, t = 0;
+  if (!FPDFPageObj_GetBounds(obj, &l, &b, &r, &t)) return make_error(ErrorCode::kInvalidState, "FPDFPageObj_GetBounds failed");
+  // 기존 행렬에 "현재 bbox → 새 bbox" 축척을 덧붙인다: 다른 프로그램 이미지의 회전·뒤집기가 남고,
+  // 취소(이전 사각형으로 다시 축척)가 원래 행렬로 돌아온다 (리뷰 W2). 회전 쪽도 사용자 좌표에서 bbox 는 축 정렬이다
+  const auto target = detail::PageSpace::of(page->get()).user_rect_of(rect_pt);  // {left, bottom, right, top}
+  const double sx = (r - l) > 1e-6 ? (target[2] - target[0]) / (r - l) : 0.0;
+  const double sy = (t - b) > 1e-6 ? (target[3] - target[1]) / (t - b) : 0.0;
+  if (!(sx > 0.0) || !(sy > 0.0)) return make_error(ErrorCode::kInvalidState, "image has an empty bounding box");
+  const FS_MATRIX matrix{static_cast<float>(original.a * sx), static_cast<float>(original.b * sy),
+                         static_cast<float>(original.c * sx), static_cast<float>(original.d * sy),
+                         static_cast<float>((original.e - l) * sx + target[0]), static_cast<float>((original.f - b) * sy + target[1])};
   if (!FPDFPageObj_SetMatrix(obj, &matrix)) return make_error(ErrorCode::kInvalidState, "FPDFPageObj_SetMatrix failed");
   if (!FPDFPage_GenerateContent(page->get())) {
     (void)FPDFPageObj_SetMatrix(obj, &original);
