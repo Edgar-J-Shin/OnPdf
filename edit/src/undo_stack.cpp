@@ -10,6 +10,11 @@ UndoStack::UndoStack(std::size_t limit) : limit_(std::max<std::size_t>(limit, 1)
 std::vector<std::shared_ptr<Command>> UndoStack::push(std::shared_ptr<Command> executed) {
   std::vector<std::shared_ptr<Command>> evicted;
   if (!executed) return evicted;
+  // 병합: 다시 실행 기록이 없고, 맨 위가 저장 지점이 아니며, 맨 위가 합치기를 받아들이면 따로 올리지 않는다
+  if (index_ > 0 && index_ == items_.size() && (!clean_index_ || *clean_index_ != index_) &&
+      items_.back()->merge_with(*executed)) {
+    return evicted;
+  }
   // 다시 실행 기록 버리기. 저장 지점이 그 안에 있었으면 다시는 도달할 수 없다
   if (index_ < items_.size()) {
     if (clean_index_ && *clean_index_ > index_) clean_index_.reset();

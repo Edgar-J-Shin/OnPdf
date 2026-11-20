@@ -64,7 +64,15 @@ class PdfiumDocument final : public EditableDocument {
   [[nodiscard]] Result<TextObjectsResult> add_text_objects(int page_index, const TextObjectsSpec& spec) override;
   [[nodiscard]] Result<void> remove_text_objects(int page_index, const std::vector<std::string>& ids) override;
   [[nodiscard]] Result<std::vector<TextObjectInfo>> text_objects(int page_index) const override;
-  [[nodiscard]] Result<void> move_text_objects(int page_index, const std::vector<std::string>& ids, Point delta_pt) override;
+  [[nodiscard]] Result<void> move_page_objects(int page_index, const std::vector<std::string>& ids, Point delta_pt) override;
+  [[nodiscard]] Result<std::string> add_image_object(int page_index, const ImageSpec& spec) override;
+  [[nodiscard]] Result<std::vector<PageObjectInfo>> page_objects(int page_index) const override;
+  [[nodiscard]] Result<std::string> mark_object(int page_index, std::string_view id) override;
+  [[nodiscard]] Result<void> set_object_rect(int page_index, std::string_view id, Rect rect_pt) override;
+  [[nodiscard]] Result<DetachedId> detach_objects(int page_index, const std::vector<std::string>& ids) override;
+  [[nodiscard]] Result<void> reattach_objects(DetachedId id) override;
+  void drop_detached(DetachedId id) noexcept override;
+  [[nodiscard]] int detached_count() const noexcept { return static_cast<int>(detached_.size()); }  // 테스트용
   [[nodiscard]] int snapshot_count() const noexcept { return static_cast<int>(snapshots_.size()); }  // 테스트용
   [[nodiscard]] int font_cache_size() const noexcept { return static_cast<int>(fonts_.size()); }     // 테스트용
 
@@ -117,6 +125,13 @@ class PdfiumDocument final : public EditableDocument {
   SnapshotId next_snapshot_ = 1;
   // 임베딩 폰트 캐시: 서브셋 key → 문서에 로드된 폰트. doc_ 보다 뒤에 선언 → 먼저 닫힌다
   std::unordered_map<std::string, ScopedFont> fonts_;
+  // 떼어 낸 쪽 객체 (삭제·추가 취소, #49). doc_ 보다 뒤에 선언 → 문서보다 먼저 Destroy 된다
+  struct Detached {
+    int page = 0;
+    std::vector<std::pair<int, ScopedFPDFPageObject>> objects;  // (원래 쪽 객체 index, 객체) — index 오름차순
+  };
+  std::unordered_map<DetachedId, Detached> detached_;
+  DetachedId next_detached_ = 1;
 };
 
 }  // namespace onpdf::engine

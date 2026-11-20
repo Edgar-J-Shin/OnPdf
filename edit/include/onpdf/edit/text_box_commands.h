@@ -31,21 +31,6 @@ struct TextBoxContent {
 [[nodiscard]] Result<engine::TextObjectsSpec> build_text_objects_spec(const TextBoxSpec& spec, const std::string& box,
                                                                       const std::vector<std::string>& ids);
 
-// 이동: 쪽 포인트 Δ. 취소 = −Δ
-class MoveTextBoxCommand final : public Command {
- public:
-  MoveTextBoxCommand(int page, std::vector<std::string> ids, Point delta);
-  [[nodiscard]] std::string_view id() const noexcept override { return "move_text"; }
-  Result<engine::ChangeSet> execute(engine::EditableDocument& doc) override;
-  Result<engine::ChangeSet> undo(engine::EditableDocument& doc) override;
-
- private:
-  int page_;
-  std::vector<std::string> ids_;
-  Point delta_;
-  bool executed_ = false;
-};
-
 // 삭제: 실행 전 내용을 모아 두고, 취소 때 같은 줄 id·상자 id 로 다시 만든다 (같은 글자 집합 → 폰트 캐시 재사용)
 class RemoveTextBoxCommand final : public Command {
  public:
@@ -66,9 +51,13 @@ class RemoveTextBoxCommand final : public Command {
 // 수정: 내용·크기·색 중 준 것만 바꾼다 (삭제 + 재생성). 줄 id 는 순서대로 재사용, 모자라면 새 id, 남으면 버림
 class ReplaceTextBoxCommand final : public Command {
  public:
+  // width·origin_x: 상자 폭·왼쪽 끝 변경 (폭 핸들, #49). 폭만 바꾸면 id 가 "resize_text" (라벨 "텍스트 폭 변경")
   ReplaceTextBoxCommand(int page, std::string box, std::shared_ptr<const FontFace> face, std::optional<std::string> utf8,
-                        std::optional<double> size, std::optional<engine::Color> color);
-  [[nodiscard]] std::string_view id() const noexcept override { return "replace_text"; }
+                        std::optional<double> size, std::optional<engine::Color> color,
+                        std::optional<double> width = std::nullopt, std::optional<double> origin_x = std::nullopt);
+  [[nodiscard]] std::string_view id() const noexcept override {
+    return (!utf8_ && !size_ && !color_ && (width_ || origin_x_)) ? "resize_text" : "replace_text";
+  }
   Result<engine::ChangeSet> execute(engine::EditableDocument& doc) override;
   Result<engine::ChangeSet> undo(engine::EditableDocument& doc) override;
   [[nodiscard]] const std::vector<std::string>& after_ids() const noexcept { return after_ids_; }
@@ -80,6 +69,8 @@ class ReplaceTextBoxCommand final : public Command {
   std::optional<std::string> utf8_;
   std::optional<double> size_;
   std::optional<engine::Color> color_;
+  std::optional<double> width_;
+  std::optional<double> origin_x_;
   TextBoxContent before_;
   std::vector<std::string> after_ids_;
   bool executed_ = false;

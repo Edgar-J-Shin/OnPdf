@@ -15,6 +15,7 @@
 #include <fpdfview.h>
 
 #include <algorithm>
+#include <variant>
 #include <cassert>
 #include <charconv>
 #include <cmath>
@@ -345,6 +346,86 @@ std::string mark_blob(FPDF_PAGEOBJECTMARK mark, const char* key) {
 
 // 쪽 객체의 OnPdf 마크 id (없으면 빈 문자열)
 std::string text_object_id_of(FPDF_PAGEOBJECT obj) { return mark_string(onpdf_mark_of(obj), "id"); }
+
+constexpr std::string_view kObjIndexPrefix = "#obj";
+
+// 마크 id 또는 "#obj<쪽 객체 index>" 로 객체를 찾는다 (#49). 못 찾으면 {nullptr, -1}
+std::pair<FPDF_PAGEOBJECT, int> find_page_object(FPDF_PAGE page, std::string_view id) {
+  const int count = FPDFPage_CountObjects(page);
+  if (id.starts_with(kObjIndexPrefix)) {
+    int index = -1;
+    const auto digits = id.substr(kObjIndexPrefix.size());
+    const auto [ptr, ec] = std::from_chars(digits.data(), digits.data() + digits.size(), index);
+    if (ec != std::errc{} || ptr != digits.data() + digits.size() || index < 0 || index >= count) return {nullptr, -1};
+    return {FPDFPage_GetObject(page, index), index};
+  }
+  for (int i = count - 1; i >= 0; --i) {
+    FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, i);
+    if (obj != nullptr && text_object_id_of(obj) == id) return {obj, i};
+  }
+  return {nullptr, -1};
+}
+
+// 쪽 포인트 사각형 → 이미지 행렬 (이미지 = 사용자 좌표 단위 정사각형). 기준점은 사각형의 왼쪽 아래(쪽 포인트)
+FS_MATRIX image_matrix_for(const detail::PageSpace& space, const Rect& r) {
+  const auto m = space.user_matrix_at({r.x, r.bottom()});
+  return {static_cast<float>(m[0] * r.w), static_cast<float>(m[1] * r.w), static_cast<float>(m[2] * r.h),
+          static_cast<float>(m[3] * r.h), static_cast<float>(m[4]), static_cast<float>(m[5])};
+}
+
+// 메모리 바이트를 FPDF_FILEACCESS 로 (JPEG 삽입). LoadJpegFileInline 이 내용을 복사하므로 호출 동안만 살면 된다
+struct MemoryFileAccess {
+  FPDF_FILEACCESS access{};
+  const std::vector<std::uint8_t>* data = nullptr;
+  explicit MemoryFileAccess(const std::vector<std::uint8_t>& bytes) : data(&bytes) {
+    access.m_FileLen = static_cast<unsigned long>(bytes.size());
+    access.m_Param = this;
+    access.m_GetBlock = [](void* param, unsigned long pos, unsigned char* buf, unsigned long size) -> int {
+      const auto* self = static_cast<MemoryFileAccess*>(param);
+      if (pos > self->data->size() || size > self->data->size() - pos) return 0;
+      std::memcpy(buf, self->data->data() + pos, size);
+      return 1;
+    };
+  }
+};
+
+// 마크의 포인트 값 (폭): 로캘과 무관하게 "123.456" 으로 쓰고 읽는다 — printf/strtod 는 LC_NUMERIC 을 따른다 (리뷰 W1)
+std::string format_points(double value) {
+  const long long milli = std::llround(std::max(0.0, value) * 1000.0);
+  char buf[32];
+  std::snprintf(buf, sizeof buf, "%lld.%03lld", milli / 1000, milli % 1000);
+  return buf;
+}
+
+double parse_points(std::string_view text) {
+  const std::size_t dot = text.find('.');
+  long long whole = 0;
+  const std::string_view int_part = text.substr(0, dot);
+  if (auto [ptr, ec] = std::from_chars(int_part.data(), int_part.data() + int_part.size(), whole);
+      ec != std::errc{} || ptr != int_part.data() + int_part.size() || whole < 0) {
+    return 0.0;
+  }
+  double value = static_cast<double>(whole);
+  if (dot != std::string_view::npos) {
+    double scale = 0.1;
+    for (char c : text.substr(dot + 1)) {
+      if (c < '0' || c > '9') return 0.0;
+      value += (c - '0') * scale;
+      scale /= 10.0;
+    }
+  }
+  return value;
+}
+
+std::string image_filter_of(FPDF_PAGEOBJECT obj) {
+  if (FPDFImageObj_GetImageFilterCount(obj) <= 0) return {};
+  const unsigned long len = FPDFImageObj_GetImageFilter(obj, 0, nullptr, 0);
+  if (len <= 1) return {};
+  std::string name(len, '\0');
+  FPDFImageObj_GetImageFilter(obj, 0, name.data(), len);
+  name.resize(len - 1);  // 끝 NUL
+  return name;
+}
 
 std::string new_nm() {
   std::random_device rd;
@@ -718,6 +799,10 @@ Result<TextObjectsResult> PdfiumDocument::add_text_objects(int page_index, const
                                       static_cast<unsigned long>(line.text.size()))) {
       return fail("cannot set mark text");
     }
+    if (spec.write_box && i == 0 && spec.width > 0.0) {
+      const std::string width = format_points(spec.width);
+      if (!FPDFPageObjMark_SetStringParam(doc_.get(), obj.get(), mark, "width", width.c_str())) return fail("cannot set mark width");
+    }
     if (spec.write_box && i == 0 && !spec.box_text.empty() &&
         !FPDFPageObjMark_SetBlobParam(doc_.get(), obj.get(), mark, "box_text",
                                       reinterpret_cast<const unsigned char*>(spec.box_text.data()),
@@ -780,6 +865,7 @@ Result<std::vector<TextObjectInfo>> PdfiumDocument::text_objects(int page_index)
     if (info.box.empty()) info.box = id;  // #47 이전 객체: 줄 하나가 상자 하나
     info.text = mark_blob(mark, "text");
     info.box_text = mark_blob(mark, "box_text");
+    if (const std::string width = mark_string(mark, "width"); !width.empty()) info.width = parse_points(width);
     if (info.text.empty()) {
       if (!text_page) text_page.reset(FPDFText_LoadPage(page->get()));
       if (text_page) {
@@ -792,6 +878,7 @@ Result<std::vector<TextObjectInfo>> PdfiumDocument::text_objects(int page_index)
       }
     }
     info.id = std::move(id);
+    info.index = i;
     float size = 0;
     if (FPDFTextObj_GetFontSize(obj, &size)) info.font_size = size;
     unsigned r = 0, g = 0, b = 0, a = 255;
@@ -807,23 +894,18 @@ Result<std::vector<TextObjectInfo>> PdfiumDocument::text_objects(int page_index)
   return out;
 }
 
-Result<void> PdfiumDocument::move_text_objects(int page_index, const std::vector<std::string>& ids, Point delta_pt) {
+Result<void> PdfiumDocument::move_page_objects(int page_index, const std::vector<std::string>& ids, Point delta_pt) {
   PdfiumLibrary::assert_current_thread();
   if (ids.empty()) return make_error(ErrorCode::kInvalidArgument, "no ids");
   auto page = load_page(page_index);
   if (!page) return std::unexpected(page.error());
   std::vector<FPDF_PAGEOBJECT> found;
-  const int count = FPDFPage_CountObjects(page->get());
   std::vector<std::string> unique_ids(ids);
   std::sort(unique_ids.begin(), unique_ids.end());
   unique_ids.erase(std::unique(unique_ids.begin(), unique_ids.end()), unique_ids.end());
   for (const std::string& id : unique_ids) {
-    FPDF_PAGEOBJECT hit = nullptr;
-    for (int i = count - 1; i >= 0 && hit == nullptr; --i) {
-      FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page->get(), i);
-      if (obj != nullptr && text_object_id_of(obj) == id) hit = obj;
-    }
-    if (hit == nullptr) return make_error(ErrorCode::kInvalidArgument, "text object not found: " + id);
+    FPDF_PAGEOBJECT hit = find_page_object(page->get(), id).first;
+    if (hit == nullptr) return make_error(ErrorCode::kInvalidArgument, "page object not found: " + id);
     found.push_back(hit);
   }
   // 쪽 포인트 Δ → 사용자 좌표 Δ: 기저 (a,b) = +x 1pt, (c,d) = 위쪽(−y) 1pt. 쪽 안에서 기저는 일정하다
@@ -849,6 +931,221 @@ Result<void> PdfiumDocument::move_text_objects(int page_index, const std::vector
   if (!FPDFPage_GenerateContent(page->get())) return fail("FPDFPage_GenerateContent failed");
   return {};
 }
+
+// ---------------------------------------------------------------- 이미지·쪽 객체 일반 (#49)
+
+Result<std::string> PdfiumDocument::add_image_object(int page_index, const ImageSpec& spec) {
+  PdfiumLibrary::assert_current_thread();
+  if (!(spec.rect.w > 0.0) || !(spec.rect.h > 0.0)) return make_error(ErrorCode::kInvalidArgument, "image rect must be positive");
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  ScopedFPDFPageObject obj(FPDFPageObj_NewImageObj(doc_.get()));
+  if (!obj) return make_error(ErrorCode::kInvalidState, "FPDFPageObj_NewImageObj failed");
+  FPDF_PAGE raw_page = page->get();
+  if (const auto* pixels = std::get_if<ImagePixels>(&spec.source)) {
+    if (pixels->width <= 0 || pixels->height <= 0) return make_error(ErrorCode::kInvalidArgument, "empty image");
+    if (static_cast<std::int64_t>(pixels->width) * pixels->height > kMaxImagePixels) {
+      return make_error(ErrorCode::kInvalidArgument, "image is too large");
+    }
+    if (pixels->bgra.size() != static_cast<std::size_t>(pixels->width) * static_cast<std::size_t>(pixels->height) * 4) {
+      return make_error(ErrorCode::kInvalidArgument, "pixel buffer size mismatch");
+    }
+    // 외부 버퍼를 감싸기만 한다 — SetBitmap 이 복사하므로 PDFium 이 이 버퍼에 쓰지 않는다 (프로브 A)
+    ScopedFPDFBitmap bitmap(FPDFBitmap_CreateEx(pixels->width, pixels->height, FPDFBitmap_BGRA,
+                                                const_cast<std::uint8_t*>(pixels->bgra.data()), pixels->width * 4));
+    if (!bitmap) return make_error(ErrorCode::kInvalidState, "FPDFBitmap_CreateEx failed");
+    if (!FPDFImageObj_SetBitmap(&raw_page, 1, obj.get(), bitmap.get())) return make_error(ErrorCode::kInvalidState, "FPDFImageObj_SetBitmap failed");
+  } else {
+    const auto& jpeg = std::get<JpegBytes>(spec.source);
+    // SOI(FFD8) 로 시작해야 한다: LoadJpegFileInline 은 헤더가 깨져도 성공을 돌려줄 수 있다
+    if (jpeg.bytes.size() < 4 || jpeg.bytes[0] != 0xFF || jpeg.bytes[1] != 0xD8) {
+      return make_error(ErrorCode::kInvalidFormat, "not a JPEG");
+    }
+    MemoryFileAccess access(jpeg.bytes);
+    if (!FPDFImageObj_LoadJpegFileInline(&raw_page, 1, obj.get(), &access.access)) {
+      return make_error(ErrorCode::kInvalidFormat, "FPDFImageObj_LoadJpegFileInline failed");
+    }
+    unsigned int pw = 0, ph = 0;
+    if (!FPDFImageObj_GetImagePixelSize(obj.get(), &pw, &ph) || pw == 0 || ph == 0) {
+      return make_error(ErrorCode::kInvalidFormat, "unreadable JPEG header");
+    }
+    if (static_cast<std::int64_t>(pw) * ph > kMaxImagePixels) return make_error(ErrorCode::kInvalidArgument, "image is too large");
+  }
+  const detail::PageSpace space = detail::PageSpace::of(raw_page);
+  const FS_MATRIX matrix = image_matrix_for(space, spec.rect);
+  if (!FPDFPageObj_SetMatrix(obj.get(), &matrix)) return make_error(ErrorCode::kInvalidState, "FPDFPageObj_SetMatrix failed");
+  const std::string id = spec.id.empty() ? make_onpdf_id("onpdf-image-") : spec.id;
+  FPDF_PAGEOBJECTMARK mark = FPDFPageObj_AddMark(obj.get(), "OnPdf");
+  if (mark == nullptr || !FPDFPageObjMark_SetStringParam(doc_.get(), obj.get(), mark, "id", id.c_str()) ||
+      !FPDFPageObjMark_SetStringParam(doc_.get(), obj.get(), mark, "kind", "image")) {
+    return make_error(ErrorCode::kInvalidState, "cannot set image mark");
+  }
+  FPDF_PAGEOBJECT inserted = obj.release();
+  FPDFPage_InsertObject(raw_page, inserted);  // 소유권 이전
+  if (!FPDFPage_GenerateContent(raw_page)) {
+    if (FPDFPage_RemoveObject(raw_page, inserted)) FPDFPageObj_Destroy(inserted);
+    (void)FPDFPage_GenerateContent(raw_page);
+    return make_error(ErrorCode::kInvalidState, "FPDFPage_GenerateContent failed");
+  }
+  return id;
+}
+
+Result<std::vector<PageObjectInfo>> PdfiumDocument::page_objects(int page_index) const {
+  PdfiumLibrary::assert_current_thread();
+  auto texts = text_objects(page_index);
+  if (!texts) return std::unexpected(texts.error());
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  const detail::PageSpace space = detail::PageSpace::of(page->get());
+  std::vector<PageObjectInfo> out;
+  for (auto& t : *texts) {
+    PageObjectInfo info;
+    info.kind = ObjectKind::kText;
+    info.id = t.id;
+    info.marked = true;
+    info.index = t.index;
+    info.bbox = t.bbox;
+    info.text = std::move(t);
+    out.push_back(std::move(info));
+  }
+  const int count = FPDFPage_CountObjects(page->get());
+  for (int i = 0; i < count; ++i) {
+    FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page->get(), i);
+    if (obj == nullptr || FPDFPageObj_GetType(obj) != FPDF_PAGEOBJ_IMAGE) continue;
+    PageObjectInfo info;
+    info.kind = ObjectKind::kImage;
+    info.index = i;
+    info.id = text_object_id_of(obj);
+    info.marked = !info.id.empty();
+    if (!info.marked) info.id = std::string(kObjIndexPrefix) + std::to_string(i);
+    unsigned int pw = 0, ph = 0;
+    if (FPDFImageObj_GetImagePixelSize(obj, &pw, &ph)) {
+      info.pixel_width = static_cast<int>(pw);
+      info.pixel_height = static_cast<int>(ph);
+    }
+    info.filter = image_filter_of(obj);
+    float left = 0, bottom = 0, right = 0, top = 0;
+    if (FPDFPageObj_GetBounds(obj, &left, &bottom, &right, &top)) info.bbox = space.to_rect(left, right, bottom, top);
+    out.push_back(std::move(info));
+  }
+  std::sort(out.begin(), out.end(), [](const PageObjectInfo& a, const PageObjectInfo& b) { return a.index < b.index; });
+  return out;
+}
+
+Result<std::string> PdfiumDocument::mark_object(int page_index, std::string_view id) {
+  PdfiumLibrary::assert_current_thread();
+  if (!id.starts_with(kObjIndexPrefix)) return std::string(id);  // 이미 마크 id
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  auto [obj, index] = find_page_object(page->get(), id);
+  if (obj == nullptr || FPDFPageObj_GetType(obj) != FPDF_PAGEOBJ_IMAGE) {
+    return make_error(ErrorCode::kInvalidArgument, "image not found: " + std::string(id));
+  }
+  if (std::string existing = text_object_id_of(obj); !existing.empty()) return existing;
+  const std::string new_id = make_onpdf_id("onpdf-image-");
+  FPDF_PAGEOBJECTMARK mark = FPDFPageObj_AddMark(obj, "OnPdf");
+  if (mark == nullptr || !FPDFPageObjMark_SetStringParam(doc_.get(), obj, mark, "id", new_id.c_str()) ||
+      !FPDFPageObjMark_SetStringParam(doc_.get(), obj, mark, "kind", "image")) {
+    return make_error(ErrorCode::kInvalidState, "cannot mark image");
+  }
+  if (!FPDFPage_GenerateContent(page->get())) return make_error(ErrorCode::kInvalidState, "FPDFPage_GenerateContent failed");
+  return new_id;
+}
+
+Result<void> PdfiumDocument::set_object_rect(int page_index, std::string_view id, Rect rect_pt) {
+  PdfiumLibrary::assert_current_thread();
+  if (!(rect_pt.w > 0.0) || !(rect_pt.h > 0.0)) return make_error(ErrorCode::kInvalidArgument, "rect must be positive");
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  FPDF_PAGEOBJECT obj = find_page_object(page->get(), id).first;
+  if (obj == nullptr || FPDFPageObj_GetType(obj) != FPDF_PAGEOBJ_IMAGE) {
+    return make_error(ErrorCode::kInvalidArgument, "image not found: " + std::string(id));
+  }
+  FS_MATRIX original{};
+  if (!FPDFPageObj_GetMatrix(obj, &original)) return make_error(ErrorCode::kInvalidState, "FPDFPageObj_GetMatrix failed");
+  float l = 0, b = 0, r = 0, t = 0;
+  if (!FPDFPageObj_GetBounds(obj, &l, &b, &r, &t)) return make_error(ErrorCode::kInvalidState, "FPDFPageObj_GetBounds failed");
+  // 기존 행렬에 "현재 bbox → 새 bbox" 축척을 덧붙인다: 다른 프로그램 이미지의 회전·뒤집기가 남고,
+  // 취소(이전 사각형으로 다시 축척)가 원래 행렬로 돌아온다 (리뷰 W2). 회전 쪽도 사용자 좌표에서 bbox 는 축 정렬이다
+  const auto target = detail::PageSpace::of(page->get()).user_rect_of(rect_pt);  // {left, bottom, right, top}
+  const double sx = (r - l) > 1e-6 ? (target[2] - target[0]) / (r - l) : 0.0;
+  const double sy = (t - b) > 1e-6 ? (target[3] - target[1]) / (t - b) : 0.0;
+  if (!(sx > 0.0) || !(sy > 0.0)) return make_error(ErrorCode::kInvalidState, "image has an empty bounding box");
+  const FS_MATRIX matrix{static_cast<float>(original.a * sx), static_cast<float>(original.b * sy),
+                         static_cast<float>(original.c * sx), static_cast<float>(original.d * sy),
+                         static_cast<float>((original.e - l) * sx + target[0]), static_cast<float>((original.f - b) * sy + target[1])};
+  if (!FPDFPageObj_SetMatrix(obj, &matrix)) return make_error(ErrorCode::kInvalidState, "FPDFPageObj_SetMatrix failed");
+  if (!FPDFPage_GenerateContent(page->get())) {
+    (void)FPDFPageObj_SetMatrix(obj, &original);
+    (void)FPDFPage_GenerateContent(page->get());
+    return make_error(ErrorCode::kInvalidState, "FPDFPage_GenerateContent failed");
+  }
+  return {};
+}
+
+Result<DetachedId> PdfiumDocument::detach_objects(int page_index, const std::vector<std::string>& ids) {
+  PdfiumLibrary::assert_current_thread();
+  if (ids.empty()) return make_error(ErrorCode::kInvalidArgument, "no ids");
+  auto page = load_page(page_index);
+  if (!page) return std::unexpected(page.error());
+  std::vector<std::pair<int, FPDF_PAGEOBJECT>> found;
+  for (const std::string& id : ids) {
+    auto [obj, index] = find_page_object(page->get(), id);
+    if (obj == nullptr) return make_error(ErrorCode::kInvalidArgument, "page object not found: " + id);
+    if (std::none_of(found.begin(), found.end(), [&](const auto& f) { return f.second == obj; })) found.emplace_back(index, obj);
+  }
+  // 뒤에서부터 떼어 앞 객체의 index 가 흔들리지 않게 한다
+  std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+  Detached detached;
+  detached.page = page_index;
+  for (auto& [index, obj] : found) {
+    if (!FPDFPage_RemoveObject(page->get(), obj)) {
+      // 보상: 이미 뗀 것을 원래 자리에 되돌린다 (index 오름차순)
+      for (auto it = detached.objects.rbegin(); it != detached.objects.rend(); ++it) {
+        (void)FPDFPage_InsertObjectAtIndex(page->get(), it->second.release(), static_cast<std::size_t>(it->first));
+      }
+      (void)FPDFPage_GenerateContent(page->get());
+      return make_error(ErrorCode::kInvalidState, "FPDFPage_RemoveObject failed");
+    }
+    detached.objects.emplace_back(index, ScopedFPDFPageObject(obj));
+  }
+  std::reverse(detached.objects.begin(), detached.objects.end());  // index 오름차순
+  if (!FPDFPage_GenerateContent(page->get())) {
+    for (auto& [index, obj] : detached.objects) {
+      (void)FPDFPage_InsertObjectAtIndex(page->get(), obj.release(), static_cast<std::size_t>(index));
+    }
+    (void)FPDFPage_GenerateContent(page->get());
+    return make_error(ErrorCode::kInvalidState, "FPDFPage_GenerateContent failed");
+  }
+  const DetachedId token = next_detached_++;
+  detached_.emplace(token, std::move(detached));
+  return token;
+}
+
+Result<void> PdfiumDocument::reattach_objects(DetachedId id) {
+  PdfiumLibrary::assert_current_thread();
+  auto it = detached_.find(id);
+  if (it == detached_.end()) return make_error(ErrorCode::kInvalidArgument, "unknown detached objects");
+  auto page = load_page(it->second.page);
+  if (!page) return std::unexpected(page.error());
+  std::vector<FPDF_PAGEOBJECT> inserted;
+  for (auto& [index, obj] : it->second.objects) {  // index 오름차순: 앞 것부터 넣어야 원래 자리가 맞는다
+    const int count = FPDFPage_CountObjects(page->get());
+    const std::size_t at = static_cast<std::size_t>(std::min(index, count));
+    FPDF_PAGEOBJECT raw = obj.get();
+    if (!FPDFPage_InsertObjectAtIndex(page->get(), raw, at)) {
+      for (FPDF_PAGEOBJECT done : inserted) (void)FPDFPage_RemoveObject(page->get(), done);  // 보관 상태로 되돌림
+      return make_error(ErrorCode::kInvalidState, "FPDFPage_InsertObjectAtIndex failed");
+    }
+    inserted.push_back(raw);
+  }
+  for (auto& [index, obj] : it->second.objects) (void)obj.release();  // 소유권은 쪽으로
+  detached_.erase(it);
+  if (!FPDFPage_GenerateContent(page->get())) return make_error(ErrorCode::kInvalidState, "FPDFPage_GenerateContent failed");
+  return {};
+}
+
+void PdfiumDocument::drop_detached(DetachedId id) noexcept { detached_.erase(id); }
 
 Result<void> PdfiumDocument::set_annotation_contents(int page_index, std::string_view id, std::string_view utf8) {
   PdfiumLibrary::assert_current_thread();

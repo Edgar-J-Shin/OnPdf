@@ -100,6 +100,7 @@ TEST(TextObjects, ListsBoxTextSizeColorAndOrigin) {
   TextObjectsSpec spec = spec_for("한글 원문", {72, 500}, 18.0, {10, 20, 30, 255});
   spec.lines[0].text = "한글 원문";
   spec.box = "onpdf-box-0000000000000001";
+  spec.width = 123.4567;  // 폭 마크 (#49): 로캘과 무관한 "123.457"
   auto added = doc->add_text_objects(0, spec);
   ASSERT_TRUE(added);
   EXPECT_EQ(added->box, "onpdf-box-0000000000000001");
@@ -123,6 +124,8 @@ TEST(TextObjects, ListsBoxTextSizeColorAndOrigin) {
   EXPECT_EQ(a.id, added->ids.front());
   EXPECT_EQ(a.box, "onpdf-box-0000000000000001");
   EXPECT_EQ(a.text, "한글 원문") << "원문은 블롭에서";
+  EXPECT_DOUBLE_EQ(a.width, 123.457);
+  EXPECT_EQ((*list)[1].width, 0.0) << "폭이 없으면 0 (줄바꿈 없음)";
   EXPECT_FLOAT_EQ(static_cast<float>(a.font_size), 18.0f);
   EXPECT_EQ(a.color, (Color{10, 20, 30, 255}));
   EXPECT_NEAR(a.baseline_origin.x, 72.0, 0.01);
@@ -141,6 +144,7 @@ TEST(TextObjects, ListsBoxTextSizeColorAndOrigin) {
   ASSERT_EQ(again->size(), 3u);
   EXPECT_EQ((*again)[0].box, "onpdf-box-0000000000000001");
   EXPECT_EQ((*again)[0].text, "한글 원문");
+  EXPECT_DOUBLE_EQ((*again)[0].width, 123.457);
   EXPECT_NEAR((*again)[0].baseline_origin.y, a.baseline_origin.y, 0.01);
 }
 
@@ -158,7 +162,7 @@ TEST(TextObjects, MoveShiftsInPagePointsOnAnyRotation) {
     auto added = doc->add_text_objects(0, spec);
     ASSERT_TRUE(added) << "rotation " << rotation;
     const auto origin_before = (*doc->text_objects(0))[0].baseline_origin;
-    ASSERT_TRUE(doc->move_text_objects(0, added->ids, {60.0, 40.0})) << "rotation " << rotation;
+    ASSERT_TRUE(doc->move_page_objects(0, added->ids, {60.0, 40.0})) << "rotation " << rotation;
     const auto after = (*doc->text_objects(0))[0];
     EXPECT_NEAR(after.baseline_origin.x, origin_before.x + 60.0, 0.05) << "rotation " << rotation;
     EXPECT_NEAR(after.baseline_origin.y, origin_before.y + 40.0, 0.05) << "rotation " << rotation;
@@ -168,7 +172,7 @@ TEST(TextObjects, MoveShiftsInPagePointsOnAnyRotation) {
       if (ch.code == U'회') { found = true; EXPECT_NEAR(ch.box.x, 160.0, 3.0) << "rotation " << rotation; }
     }
     EXPECT_TRUE(found);
-    EXPECT_FALSE(doc->move_text_objects(0, {"onpdf-text-ffffffffffffffff"}, {1, 1}));
+    EXPECT_FALSE(doc->move_page_objects(0, {"onpdf-text-ffffffffffffffff"}, {1, 1}));
     // 지우면 원본 그대로
     ASSERT_TRUE(doc->remove_text_objects(0, added->ids));
     auto restored = doc->render_page(0, options);

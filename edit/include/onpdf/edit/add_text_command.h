@@ -21,6 +21,7 @@ struct TextBoxSpec {
   double size = 24.0;           // pt
   engine::Color color{0, 0, 0, 255};
   std::string utf8;             // 여러 줄은 '\n'
+  double width = 0.0;           // 상자 폭 (pt). 0 이면 줄바꿈 없음 (#49)
   std::shared_ptr<const FontFace> face;
 };
 

@@ -33,7 +33,7 @@ Result<engine::TextObjectsSpec> build_text_objects_spec(const TextBoxSpec& spec,
                                                         const std::vector<std::string>& ids) {
   if (!spec.face) return make_error(ErrorCode::kInvalidArgument, "no font");
   if (!(spec.size > 0.0)) return make_error(ErrorCode::kInvalidArgument, "font size must be positive");
-  const TextLayout layout = layout_text(*spec.face, spec.utf8, spec.size, spec.origin);
+  const TextLayout layout = layout_text(*spec.face, spec.utf8, spec.size, spec.origin, 1.2, spec.width);
   std::vector<std::uint32_t> gids;
   for (const auto& line : layout.lines) {
     if (!visible(line)) continue;  // 공백만인 줄은 객체를 만들지 않는다
@@ -51,6 +51,7 @@ Result<engine::TextObjectsSpec> build_text_objects_spec(const TextBoxSpec& spec,
   const std::vector<std::string> source_lines = split_lines(spec.utf8);
   engine::TextObjectsSpec out;
   out.box = box;
+  out.width = spec.width;
   // 상자 원문 전체(빈 줄 포함)를 첫 줄 객체에 보관 — 빈 줄은 객체가 없어 줄 원문만으로는 복원할 수 없다 (리뷰 W1)
   for (std::size_t i = 0; i < source_lines.size(); ++i) out.box_text += (i ? "\n" : "") + source_lines[i];
   out.font.key = subset->key;
@@ -64,7 +65,7 @@ Result<engine::TextObjectsSpec> build_text_objects_spec(const TextBoxSpec& spec,
     ls.origin = line.baseline_origin;
     ls.font_size = spec.size;
     ls.color = spec.color;
-    ls.text = i < source_lines.size() ? source_lines[i] : std::string();
+    ls.text = line.text;  // 줄바꿈으로 나뉜 조각 (상자 원문 전체는 box_text)
     for (const auto& g : line.glyphs) {
       const std::uint32_t cid = subset->old_to_new.at(g.gid);
       ls.cids.push_back(cid);
@@ -102,6 +103,7 @@ Result<TextBoxContent> collect_text_box(engine::EditableDocument& doc, int page,
       content.spec.origin = {o.baseline_origin.x, o.baseline_origin.y - metrics.ascent};
       content.spec.utf8 = o.text;
       box_text = o.box_text;
+      content.spec.width = o.width;
       first = false;
     } else {
       content.spec.utf8 += "\n" + o.text;
@@ -110,24 +112,6 @@ Result<TextBoxContent> collect_text_box(engine::EditableDocument& doc, int page,
   if (content.ids.empty()) return make_error(ErrorCode::kInvalidArgument, "text box not found: " + box);
   if (!box_text.empty()) content.spec.utf8 = box_text;  // 빈 줄까지 그대로 (#47 이전 객체는 줄 원문을 이은 것)
   return content;
-}
-
-// ---------------------------------------------------------------- Move
-
-MoveTextBoxCommand::MoveTextBoxCommand(int page, std::vector<std::string> ids, Point delta)
-    : page_(page), ids_(std::move(ids)), delta_(delta) {}
-
-Result<engine::ChangeSet> MoveTextBoxCommand::execute(engine::EditableDocument& doc) {
-  if (ids_.empty()) return make_error(ErrorCode::kInvalidArgument, "no ids");
-  if (auto moved = doc.move_text_objects(page_, ids_, delta_); !moved) return std::unexpected(moved.error());
-  executed_ = true;
-  return page_change(page_);
-}
-
-Result<engine::ChangeSet> MoveTextBoxCommand::undo(engine::EditableDocument& doc) {
-  if (!executed_) return make_error(ErrorCode::kInvalidState, "undo before execute");
-  if (auto moved = doc.move_text_objects(page_, ids_, {-delta_.x, -delta_.y}); !moved) return std::unexpected(moved.error());
-  return page_change(page_);
 }
 
 // ---------------------------------------------------------------- Remove
@@ -162,11 +146,13 @@ Result<engine::ChangeSet> RemoveTextBoxCommand::undo(engine::EditableDocument& d
 
 ReplaceTextBoxCommand::ReplaceTextBoxCommand(int page, std::string box, std::shared_ptr<const FontFace> face,
                                              std::optional<std::string> utf8, std::optional<double> size,
-                                             std::optional<engine::Color> color)
-    : page_(page), box_(std::move(box)), face_(std::move(face)), utf8_(std::move(utf8)), size_(size), color_(color) {}
+                                             std::optional<engine::Color> color, std::optional<double> width,
+                                             std::optional<double> origin_x)
+    : page_(page), box_(std::move(box)), face_(std::move(face)), utf8_(std::move(utf8)), size_(size), color_(color),
+      width_(width), origin_x_(origin_x) {}
 
 Result<engine::ChangeSet> ReplaceTextBoxCommand::execute(engine::EditableDocument& doc) {
-  if (!utf8_ && !size_ && !color_) return make_error(ErrorCode::kInvalidArgument, "nothing to change");
+  if (!utf8_ && !size_ && !color_ && !width_ && !origin_x_) return make_error(ErrorCode::kInvalidArgument, "nothing to change");
   if (!executed_) {
     auto content = collect_text_box(doc, page_, box_, face_);
     if (!content) return std::unexpected(content.error());
@@ -176,6 +162,8 @@ Result<engine::ChangeSet> ReplaceTextBoxCommand::execute(engine::EditableDocumen
   if (utf8_) after.utf8 = *utf8_;
   if (size_) after.size = *size_;
   if (color_) after.color = *color_;
+  if (width_) after.width = *width_;
+  if (origin_x_) after.origin.x = *origin_x_;
   // 새 스펙의 줄 수를 먼저 알아야 id 를 맞출 수 있다: ids 없이 한 번 만들어 줄 수를 얻는다
   auto probe = build_text_objects_spec(after, before_.box, {});
   if (!probe) return std::unexpected(probe.error());
@@ -211,6 +199,8 @@ Result<engine::ChangeSet> ReplaceTextBoxCommand::undo(engine::EditableDocument& 
   if (utf8_) after.utf8 = *utf8_;
   if (size_) after.size = *size_;
   if (color_) after.color = *color_;
+  if (width_) after.width = *width_;
+  if (origin_x_) after.origin.x = *origin_x_;
   auto restore = build_text_objects_spec(after, before_.box, after_ids_);
   if (!restore) return std::unexpected(restore.error());
   if (auto removed = doc.remove_text_objects(page_, after_ids_); !removed) return std::unexpected(removed.error());

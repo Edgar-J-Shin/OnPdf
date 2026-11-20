@@ -1,6 +1,7 @@
 // 텍스트 상자 Command (#47): 이동·삭제·수정 실행 → 취소 → 재실행 (가짜 + PDFium), id·상자·폰트 캐시 재사용, 보상
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/edit/add_text_command.h"
+#include "onpdf/edit/object_commands.h"
 #include "onpdf/edit/text_box_commands.h"
 
 #include "../fake_document.h"
@@ -37,8 +38,8 @@ TEST(TextBoxCommands, MoveExecuteUndoRedoOnFake) {
   ASSERT_TRUE(add.execute(doc));
   const auto ids = add.object_ids();
   const double y0 = doc.text_objects_on(0)[0].line.origin.y;
-  MoveTextBoxCommand move(0, ids, {10, 20});
-  EXPECT_EQ(move.id(), "move_text");
+  MoveObjectsCommand move(0, ids, {10, 20});
+  EXPECT_EQ(move.id(), "move_object");
   EXPECT_FALSE(move.undo(doc));
   ASSERT_TRUE(move.execute(doc));
   EXPECT_DOUBLE_EQ(doc.text_objects_on(0)[0].line.origin.x, 82.0);
@@ -49,7 +50,7 @@ TEST(TextBoxCommands, MoveExecuteUndoRedoOnFake) {
   EXPECT_DOUBLE_EQ(doc.text_objects_on(0)[0].line.origin.y, y0);
   ASSERT_TRUE(move.execute(doc));
   EXPECT_DOUBLE_EQ(doc.text_objects_on(0)[0].line.origin.x, 82.0);
-  MoveTextBoxCommand missing(0, {"nope"}, {1, 1});
+  MoveObjectsCommand missing(0, {"nope"}, {1, 1});
   EXPECT_FALSE(missing.execute(doc));
 }
 
@@ -100,6 +101,39 @@ TEST(TextBoxCommands, BlankLinesSurviveRemoveUndoAndReplace) {
   ASSERT_TRUE(recolor.execute(doc));
   EXPECT_DOUBLE_EQ(doc.text_objects_on(0)[1].line.origin.y, third_y);
   EXPECT_EQ(doc.text_objects_on(0)[0].box_text, "첫째\n\n셋째");
+}
+
+// 폭 변경 (#49): 줄 수가 늘고, 폭·원문(box_text)이 보관돼 다시 수정해도 유지, 왼쪽 끝 이동, 라벨 id
+TEST(TextBoxCommands, WidthChangeWrapsAndKeepsSourceOnFake) {
+  FakeDocument doc({{612, 792}});
+  AddTextCommand add(box(0, "한글 텍스트 추가"));
+  ASSERT_TRUE(add.execute(doc));
+  ASSERT_EQ(doc.text_objects_on(0).size(), 1u);
+  auto face = test_font();
+  const double narrow = face->shape("한글 텍스트", 24.0).width + 1;
+  ReplaceTextBoxCommand wrap(0, add.box_id(), face, std::nullopt, std::nullopt, std::nullopt, narrow);
+  EXPECT_EQ(wrap.id(), "resize_text");
+  ASSERT_TRUE(wrap.execute(doc));
+  ASSERT_EQ(doc.text_objects_on(0).size(), 2u);
+  EXPECT_EQ(doc.text_objects_on(0)[0].line.text, "한글 텍스트");
+  EXPECT_EQ(doc.text_objects_on(0)[1].line.text, "추가");
+  EXPECT_EQ(doc.text_objects_on(0)[0].box_text, "한글 텍스트 추가") << "상자 원문은 줄바꿈 전 그대로";
+  EXPECT_DOUBLE_EQ(doc.text_objects_on(0)[0].width, narrow);
+  // 색만 바꿔도 폭·줄바꿈 유지
+  ReplaceTextBoxCommand recolor(0, add.box_id(), face, std::nullopt, std::nullopt, engine::Color{0, 0, 255, 255});
+  EXPECT_EQ(recolor.id(), "replace_text");
+  ASSERT_TRUE(recolor.execute(doc));
+  EXPECT_EQ(doc.text_objects_on(0).size(), 2u);
+  ASSERT_TRUE(recolor.undo(doc));
+  ASSERT_TRUE(wrap.undo(doc));
+  ASSERT_EQ(doc.text_objects_on(0).size(), 1u);
+  EXPECT_DOUBLE_EQ(doc.text_objects_on(0)[0].width, 0.0);
+  ASSERT_TRUE(wrap.execute(doc));
+  EXPECT_EQ(doc.text_objects_on(0).size(), 2u);
+  // 왼쪽 핸들: 원점 x 이동 + 폭
+  ReplaceTextBoxCommand left(0, add.box_id(), face, std::nullopt, std::nullopt, std::nullopt, narrow + 50, 22.0);
+  ASSERT_TRUE(left.execute(doc));
+  EXPECT_DOUBLE_EQ(doc.text_objects_on(0)[0].line.origin.x, 22.0);
 }
 
 TEST(TextBoxCommands, ReplaceExecuteUndoRedoOnFake) {
@@ -161,7 +195,7 @@ TEST(TextBoxCommands, ExecuteUndoRedoOnPdfium) {
   auto original = doc->render_page(0, render);
   ASSERT_TRUE(original);
   // 이동
-  MoveTextBoxCommand move(0, ids, {50, 30});
+  MoveObjectsCommand move(0, ids, {50, 30});
   ASSERT_TRUE(move.execute(*doc));
   auto list = doc->text_objects(0);
   ASSERT_EQ(list->size(), 2u);

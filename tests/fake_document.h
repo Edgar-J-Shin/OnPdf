@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace onpdf::test {
@@ -60,6 +61,7 @@ class FakeDocument final : public engine::EditableDocument {
     std::string id;
     std::string box;
     std::string box_text;  // 첫 줄에만
+    double width = 0.0;    // 첫 줄에만
     engine::TextLineSpec line;
     std::string font_key;
   };
@@ -86,6 +88,7 @@ class FakeDocument final : public engine::EditableDocument {
       t.box = spec.write_box ? result.box : t.id;
       t.line = spec.lines[i];
       if (spec.write_box && i == 0) t.box_text = spec.box_text;
+      if (spec.write_box && i == 0) t.width = spec.width;
       if (!spec.write_box) t.line.text.clear();
       t.font_key = spec.font.key;
       texts_[page].push_back(std::move(t));
@@ -93,18 +96,157 @@ class FakeDocument final : public engine::EditableDocument {
     }
     return result;
   }
-  [[nodiscard]] Result<void> move_text_objects(int page, const std::vector<std::string>& ids, onpdf::Point delta) override {
+  [[nodiscard]] Result<void> move_page_objects(int page, const std::vector<std::string>& ids, onpdf::Point delta) override {
     auto& list = texts_[page];
+    auto& images = images_[page];
     for (const auto& id : ids) {
-      if (std::none_of(list.begin(), list.end(), [&](const FakeTextObject& t) { return t.id == id; })) {
-        return make_error(ErrorCode::kInvalidArgument, "text object not found: " + id);
-      }
+      const bool text = std::any_of(list.begin(), list.end(), [&](const FakeTextObject& t) { return t.id == id; });
+      const bool image = std::any_of(images.begin(), images.end(), [&](const FakeImage& i) { return i.id == id; });
+      if (!text && !image) return make_error(ErrorCode::kInvalidArgument, "page object not found: " + id);
     }
     for (auto& t : list) {
       if (std::find(ids.begin(), ids.end(), t.id) != ids.end()) { t.line.origin.x += delta.x; t.line.origin.y += delta.y; }
     }
+    for (auto& i : images) {
+      if (std::find(ids.begin(), ids.end(), i.id) != ids.end()) { i.rect.x += delta.x; i.rect.y += delta.y; }
+    }
     return {};
   }
+  // ---- 이미지·쪽 객체 일반 (#49, 가짜: 이미지 목록 + 보관소) ----
+  struct FakeImage {
+    std::string id;
+    bool marked = true;
+    onpdf::Rect rect;
+    int pixel_width = 0, pixel_height = 0;
+    std::string filter;
+  };
+  int fail_add_image = 0;
+  [[nodiscard]] const std::vector<FakeImage>& images_on(int page) const {
+    static const std::vector<FakeImage> kEmpty;
+    const auto it = images_.find(page);
+    return it == images_.end() ? kEmpty : it->second;
+  }
+  [[nodiscard]] int detached_count() const noexcept { return static_cast<int>(detached_.size()); }
+  // 테스트용: 다른 프로그램이 넣은 (마크 없는) 이미지
+  void add_foreign_image(int page, onpdf::Rect rect) {
+    FakeImage image;
+    image.marked = false;
+    image.rect = rect;
+    image.pixel_width = 10;
+    image.pixel_height = 10;
+    image.filter = "FlateDecode";
+    images_[page].push_back(image);
+    renumber_foreign(page);
+  }
+  [[nodiscard]] Result<std::string> add_image_object(int page, const engine::ImageSpec& spec) override {
+    if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
+    if (fail_add_image > 0) { --fail_add_image; return make_error(ErrorCode::kInvalidState, "injected image failure"); }
+    if (!(spec.rect.w > 0) || !(spec.rect.h > 0)) return make_error(ErrorCode::kInvalidArgument, "rect");
+    FakeImage image;
+    image.id = spec.id.empty() ? "fake-image-" + std::to_string(next_text_++) : spec.id;
+    image.rect = spec.rect;
+    if (const auto* p = std::get_if<engine::ImagePixels>(&spec.source)) {
+      image.pixel_width = p->width;
+      image.pixel_height = p->height;
+      image.filter = "FlateDecode";
+    } else {
+      const auto& j = std::get<engine::JpegBytes>(spec.source);
+      image.pixel_width = j.width;
+      image.pixel_height = j.height;
+      image.filter = "DCTDecode";
+    }
+    images_[page].push_back(image);
+    return image.id;
+  }
+  [[nodiscard]] Result<std::vector<engine::PageObjectInfo>> page_objects(int page) const override {
+    if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
+    std::vector<engine::PageObjectInfo> out;
+    auto texts = text_objects(page);
+    int index = 0;
+    for (auto& t : *texts) {
+      engine::PageObjectInfo info;
+      info.kind = engine::ObjectKind::kText;
+      info.id = t.id;
+      info.marked = true;
+      info.index = index++;
+      info.bbox = t.bbox;
+      info.text = t;
+      out.push_back(std::move(info));
+    }
+    for (const auto& i : images_on(page)) {
+      engine::PageObjectInfo info;
+      info.kind = engine::ObjectKind::kImage;
+      info.id = i.id;
+      info.marked = i.marked;
+      info.index = index++;
+      info.bbox = i.rect;
+      info.pixel_width = i.pixel_width;
+      info.pixel_height = i.pixel_height;
+      info.filter = i.filter;
+      out.push_back(std::move(info));
+    }
+    return out;
+  }
+  [[nodiscard]] Result<std::string> mark_object(int page, std::string_view id) override {
+    for (auto& i : images_[page]) {
+      if (i.id != id) continue;
+      if (!i.marked) {
+        i.marked = true;
+        i.id = "fake-image-" + std::to_string(next_text_++);
+        renumber_foreign(page);
+      }
+      return i.id;
+    }
+    return make_error(ErrorCode::kInvalidArgument, "image not found");
+  }
+  [[nodiscard]] Result<void> set_object_rect(int page, std::string_view id, onpdf::Rect rect) override {
+    if (!(rect.w > 0) || !(rect.h > 0)) return make_error(ErrorCode::kInvalidArgument, "rect");
+    for (auto& i : images_[page]) {
+      if (i.id == id) { i.rect = rect; return {}; }
+    }
+    return make_error(ErrorCode::kInvalidArgument, "image not found");
+  }
+  [[nodiscard]] Result<engine::DetachedId> detach_objects(int page, const std::vector<std::string>& ids) override {
+    FakeDetached d;
+    d.page = page;
+    auto& texts = texts_[page];
+    auto& images = images_[page];
+    for (const auto& id : ids) {
+      const bool found = std::any_of(texts.begin(), texts.end(), [&](const FakeTextObject& t) { return t.id == id; }) ||
+                         std::any_of(images.begin(), images.end(), [&](const FakeImage& i) { return i.id == id; });
+      if (!found) return make_error(ErrorCode::kInvalidArgument, "page object not found: " + id);
+    }
+    for (std::size_t k = 0; k < texts.size();) {
+      if (std::find(ids.begin(), ids.end(), texts[k].id) != ids.end()) {
+        d.texts.emplace_back(k + d.texts.size(), texts[k]);
+        texts.erase(texts.begin() + static_cast<std::ptrdiff_t>(k));
+      } else {
+        ++k;
+      }
+    }
+    for (std::size_t k = 0; k < images.size();) {
+      if (std::find(ids.begin(), ids.end(), images[k].id) != ids.end()) {
+        d.images.emplace_back(k + d.images.size(), images[k]);
+        images.erase(images.begin() + static_cast<std::ptrdiff_t>(k));
+      } else {
+        ++k;
+      }
+    }
+    const engine::DetachedId token = next_detached_++;
+    detached_[token] = std::move(d);
+    return token;
+  }
+  [[nodiscard]] Result<void> reattach_objects(engine::DetachedId id) override {
+    auto it = detached_.find(id);
+    if (it == detached_.end()) return make_error(ErrorCode::kInvalidArgument, "unknown detached");
+    auto& texts = texts_[it->second.page];
+    auto& images = images_[it->second.page];
+    for (auto& [index, t] : it->second.texts) texts.insert(texts.begin() + static_cast<std::ptrdiff_t>(std::min(index, texts.size())), t);
+    for (auto& [index, i] : it->second.images) images.insert(images.begin() + static_cast<std::ptrdiff_t>(std::min(index, images.size())), i);
+    detached_.erase(it);
+    return {};
+  }
+  void drop_detached(engine::DetachedId id) noexcept override { detached_.erase(id); }
   [[nodiscard]] Result<void> remove_text_objects(int page, const std::vector<std::string>& ids) override {
     auto& list = texts_[page];
     for (const auto& id : ids) {
@@ -126,6 +268,7 @@ class FakeDocument final : public engine::EditableDocument {
       info.box = t.box;
       info.text = t.line.text;
       info.box_text = t.box_text;
+      info.width = t.width;
       info.font_size = t.line.font_size;
       info.color = t.line.color;
       info.baseline_origin = t.line.origin;
@@ -358,6 +501,22 @@ class FakeDocument final : public engine::EditableDocument {
   std::map<int, std::vector<FakeAnnot>> annots_;
   int next_nm_ = 1;
   std::map<int, std::vector<FakeTextObject>> texts_;
+  std::map<int, std::vector<FakeImage>> images_;
+  struct FakeDetached {
+    int page = 0;
+    std::vector<std::pair<std::size_t, FakeTextObject>> texts;
+    std::vector<std::pair<std::size_t, FakeImage>> images;
+  };
+  std::map<engine::DetachedId, FakeDetached> detached_;
+  engine::DetachedId next_detached_ = 1;
+  // 마크 없는 이미지의 id 는 "#obj<index>" (엔진과 같은 규칙)
+  void renumber_foreign(int page) {
+    auto& images = images_[page];
+    const int base = static_cast<int>(texts_[page].size());
+    for (std::size_t k = 0; k < images.size(); ++k) {
+      if (!images[k].marked) images[k].id = "#obj" + std::to_string(base + static_cast<int>(k));
+    }
+  }
   std::map<std::string, std::size_t> font_keys_;  // key → ttf 크기
   int next_text_ = 1;
 };
