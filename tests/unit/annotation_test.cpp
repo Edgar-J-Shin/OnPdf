@@ -1,5 +1,7 @@
 // PdfiumDocument 주석 API: 좌표 변환·조회·생성·AP 규칙·스냅샷 복원 (#35)
 #include "onpdf/core/engine/pdfium_document.h"
+#include "onpdf/core/engine/save.h"
+#include "onpdf/core/engine/qpdf_tools.h"
 
 #include "../test_support.h"
 
@@ -12,6 +14,7 @@
 namespace onpdf::engine {
 namespace {
 
+using onpdf::test::ScopedTempDir;
 using onpdf::test::testdata;
 
 const AnnotationInfo* find_id(const std::vector<AnnotationInfo>& list, const std::string& id) {
@@ -334,6 +337,77 @@ TEST(Annotations, BorderWidthSetterClearsApAndRejectsBs) {
   ASSERT_FALSE(rejected);
   EXPECT_EQ(rejected.error().code, ErrorCode::kInvalidArgument);
   EXPECT_TRUE(other->snapshot_annotation(0, "#1")->has_bs);
+}
+
+// 렌더 없이 저장해도 OnPdf 주석에는 AP 가 들어간다 — 없으면 다른 뷰어가 /CA 등을 무시하고 제멋대로 그린다 (#53)
+TEST(Annotations, SaveGeneratesAppearanceForUnrenderedAnnotations) {
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc);
+  std::vector<std::string> ids;
+  for (AnnotationKind kind : {AnnotationKind::kHighlight, AnnotationKind::kUnderline, AnnotationKind::kStrikeOut,
+                              AnnotationKind::kText, AnnotationKind::kInk, AnnotationKind::kSquare, AnnotationKind::kCircle}) {
+    AnnotationSpec s;
+    s.kind = kind;
+    s.quads = {{72, 60, 200, 20}};
+    s.rect = {300, 300, 60, 40};
+    s.ink = {{{300, 300}, {330, 330}, {360, 300}}};
+    s.border_width = 2;
+    s.color = {0, 120, 0, 160};
+    auto id = doc->add_annotation(1, s);  // 2쪽 (렌더하지 않는다)
+    ASSERT_TRUE(id) << static_cast<int>(kind);
+    ids.push_back(*id);
+  }
+  for (const auto& a : *doc->annotations(1)) EXPECT_FALSE(a.has_appearance) << a.id << " — 새 주석은 AP 없이 만든다";
+  ScopedTempDir dir;
+  ASSERT_TRUE(save_document_safely(*doc, dir / "ap.pdf", {}));
+  auto reopened = PdfiumDocument::open(dir / "ap.pdf");
+  ASSERT_TRUE(reopened);
+  const auto saved = *reopened->annotations(1);
+  ASSERT_EQ(saved.size(), ids.size());
+  for (const auto& a : saved) EXPECT_TRUE(a.has_appearance) << a.id;
+  // 색을 바꾸면 AP 를 지운다 → 다음 저장이 다시 만든다
+  ASSERT_TRUE(doc->set_annotation_color(1, ids[5], {200, 0, 0, 255}));
+  ASSERT_TRUE(save_document_safely(*doc, dir / "ap2.pdf", {}));
+  auto again = PdfiumDocument::open(dir / "ap2.pdf");
+  ASSERT_TRUE(again);
+  for (const auto& a : *again->annotations(1)) EXPECT_TRUE(a.has_appearance) << a.id;
+  EXPECT_EQ(*doc->ensure_annotation_appearances(), 0) << "이미 AP 가 있으면 렌더하지 않는다";
+}
+
+// 저장 파일의 주석은 간접 객체다 (PDF 규격 표 30). FPDFPage_CreateAnnot 은 직접 사전을 넣지만, 저장 전 AP 생성 렌더가
+// 간접 객체로 바꾼다 (#53). 렌더하지 않은 쪽·암호 문서도
+TEST(Annotations, SavedAnnotationsAreIndirectObjects) {
+  struct Case { const char* file; const char* password; };
+  for (const Case c : {Case{"simple.pdf", ""}, Case{"encrypted-aes256.pdf", "owner"}}) {
+    auto doc = PdfiumDocument::open(testdata(c.file), c.password);
+    ASSERT_TRUE(doc) << c.file;
+    AnnotationSpec s;
+    s.quads = {{72, 60, 200, 20}};
+    ASSERT_TRUE(doc->add_annotation(0, s));
+    AnnotationSpec square;
+    square.kind = AnnotationKind::kSquare;
+    square.rect = {100, 300, 80, 40};
+    ASSERT_TRUE(doc->add_annotation(0, square));
+    ScopedTempDir dir;
+    ASSERT_TRUE(save_document_safely(*doc, dir / "safe.pdf", {})) << c.file;
+    auto direct = QpdfTools::direct_annotation_count(dir / "safe.pdf", c.password);
+    ASSERT_TRUE(direct) << direct.error().message;
+    EXPECT_EQ(*direct, 0) << c.file;
+    auto reopened = PdfiumDocument::open(dir / "safe.pdf", c.password);
+    ASSERT_TRUE(reopened) << c.file;
+    for (const auto& a : *reopened->annotations(0)) EXPECT_TRUE(a.has_appearance) << c.file << " " << a.id;
+  }
+  // 증분 저장(서명 문서)도 같다
+  auto signed_doc = PdfiumDocument::open(testdata("signed-dummy.pdf"));
+  ASSERT_TRUE(signed_doc);
+  AnnotationSpec hl;
+  hl.quads = {{72, 100, 200, 20}};
+  ASSERT_TRUE(signed_doc->add_annotation(0, hl));
+  ScopedTempDir dir;
+  SaveOptions incremental;
+  incremental.incremental = true;
+  ASSERT_TRUE(save_document_safely(*signed_doc, dir / "signed.pdf", incremental));
+  EXPECT_EQ(*QpdfTools::direct_annotation_count(dir / "signed.pdf"), 0);
 }
 
 }  // namespace
