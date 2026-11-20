@@ -205,7 +205,7 @@ class PdfiumDocument final : public EditableDocument {
   std::size_t state_bytes_ = 0;
   std::size_t state_byte_limit_ = static_cast<std::size_t>(256) << 20;
   DocumentStateId next_state_ = 1;
-  std::unordered_set<std::string> dropped_marks_;  // drop_detached 로 버린 객체의 마크 id — 상태 복원 뒤 되살아나면 지운다
+  std::unordered_map<int, std::unordered_set<std::string>> dropped_marks_;  // 쪽 → drop_detached 로 버린 마크 id (복원 뒤 되살아나면 지운다)
   // 폼 필 환경 (#51). 마지막에 선언 → 가장 먼저 소멸 (FPDFDOC_ExitFormFillEnvironment 는 문서를 닫기 전에)
   FormType form_type_ = FormType::kNone;
   std::unique_ptr<detail::FormEnvironment> form_;

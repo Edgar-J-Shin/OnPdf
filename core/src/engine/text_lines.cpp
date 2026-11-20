@@ -375,12 +375,16 @@ std::string line_id_of(const PageAnalysis& analysis, const AnalyzedLine& line) {
 
 bool font_covers(FPDF_FONT font, const std::u32string& chars) {
   if (font == nullptr) return false;
-  const GlyphSig notdef = glyph_signature(font, 0xE000);  // 사용자 정의 영역: 없는 글자의 서명(.notdef)
+  // 없는 글자의 서명(.notdef): 사용자 정의 영역(U+E000)과 cmap 에 거의 없는 U+10FFFD 두 곳을 찍는다 — PUA 에 진짜 글리프가 있는
+  // 글꼴(기호·옛 한글)에서도 하나는 .notdef 가 된다 (리뷰 I4)
+  const GlyphSig probes[2] = {glyph_signature(font, 0xE000), glyph_signature(font, 0x10FFFD)};
   for (char32_t c : chars) {
     if (is_space(c) || c == U'\n' || c == U'\r') continue;
     const GlyphSig s = glyph_signature(font, c);
     if (s.segments <= 0) return false;
-    if (notdef.segments > 0 && s == notdef) return false;
+    for (const GlyphSig& notdef : probes) {
+      if (notdef.segments > 0 && s == notdef) return false;
+    }
   }
   return true;
 }

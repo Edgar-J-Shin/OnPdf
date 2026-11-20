@@ -1256,7 +1256,7 @@ void PdfiumDocument::drop_detached(DetachedId id) noexcept {
   auto it = detached_.find(id);
   if (it == detached_.end()) return;
   for (auto& [index, obj] : it->second.objects) {
-    if (const std::string mark = text_object_id_of(obj.get()); !mark.empty()) dropped_marks_.insert(mark);
+    if (const std::string mark = text_object_id_of(obj.get()); !mark.empty()) dropped_marks_[it->second.page].insert(mark);
   }
   detached_.erase(it);
 }
@@ -1971,12 +1971,13 @@ std::string base_font_name(FPDF_FONT font) {
   return name;
 }
 
-// Type3 는 BaseFont 가 없고 글꼴 데이터도 없다
+// Type3 는 글리프가 콘텐츠 스트림이라 글꼴 데이터가 없다 (비임베딩 Type1·TrueType 은 대체 글꼴 데이터라도 돌려준다).
+// /BaseFont 가 있는 Type3 도 잡는다 (리뷰 I7)
 bool is_type3(FPDF_FONT font) {
   if (font == nullptr) return false;
   std::size_t bytes = 0;
   const bool has_data = FPDFFont_GetFontData(font, nullptr, 0, &bytes) && bytes > 0;
-  return base_font_name(font).empty() && !has_data;
+  return !has_data;
 }
 
 TextLineInfo line_info_of(const detail::PageAnalysis& analysis, const detail::AnalyzedLine& line, const detail::PageSpace& space) {
@@ -2228,8 +2229,6 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
   }
 
   // ---- 5. 수술할 바이트(새 텍스트 포함)와 수술 전 렌더 (되돌린 객체가 보이는 상태 — 수술 뒤 렌더와 같은 조건) ----
-  auto current_bytes = save_to_memory();
-  if (!current_bytes) return fail(std::unexpected(current_bytes.error()));
   RenderOptions render;
   render.scale = 1.0f;
   render.render_annotations = false;
@@ -2251,7 +2250,11 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
       else ops.form_ordinals[it->container].insert(it->ordinal);
     }
   }
-  auto report = QpdfTools::remove_text_show_ops(*current_bytes, password_, page_index, ops);
+  Result<SurgeryReport> report = [&]() -> Result<SurgeryReport> {  // 수술할 바이트(새 텍스트 포함)는 이 범위에서만 (리뷰 I6)
+    auto current_bytes = save_to_memory();
+    if (!current_bytes) return std::unexpected(current_bytes.error());
+    return QpdfTools::remove_text_show_ops(*current_bytes, password_, page_index, ops);
+  }();
   if (!report) return fail(std::unexpected(report.error()));
   bool consistent = report->page_show_ops == page_text_objects;
   std::string mismatch;
@@ -2446,24 +2449,22 @@ Result<void> PdfiumDocument::restore_document_state(DocumentStateId id) {
     return std::unexpected(replaced.error());
   }
   if (auto unparked = unpark_detached(*parked); !unparked) return std::unexpected(unparked.error());
-  // 토큰 이후 버린(drop) 객체가 바이트에 살아 있으면 지운다
-  if (!dropped_marks_.empty()) {
-    const int pages = page_count();
-    for (int p = 0; p < pages; ++p) {
-      auto page = load_page(p);
-      if (!page) continue;
-      bool changed = false;
-      for (int i = FPDFPage_CountObjects(page->get()) - 1; i >= 0; --i) {
-        FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page->get(), i);
-        if (obj == nullptr) continue;
-        const std::string mark = text_object_id_of(obj);
-        if (!mark.empty() && dropped_marks_.count(mark) != 0 && FPDFPage_RemoveObject(page->get(), obj)) {
-          FPDFPageObj_Destroy(obj);
-          changed = true;
-        }
+  // 토큰 이후 버린(drop) 객체가 바이트에 살아 있으면 지운다 — 버린 쪽만 연다 (리뷰 I6)
+  for (auto& [page_index, marks] : dropped_marks_) {
+    if (page_index < 0 || page_index >= page_count()) continue;
+    auto page = load_page(page_index);
+    if (!page) continue;
+    bool changed = false;
+    for (int i = FPDFPage_CountObjects(page->get()) - 1; i >= 0; --i) {
+      FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page->get(), i);
+      if (obj == nullptr) continue;
+      const std::string mark = text_object_id_of(obj);
+      if (!mark.empty() && marks.count(mark) != 0 && FPDFPage_RemoveObject(page->get(), obj)) {
+        FPDFPageObj_Destroy(obj);
+        changed = true;
       }
-      if (changed) (void)FPDFPage_GenerateContent(page->get());
     }
+    if (changed) (void)FPDFPage_GenerateContent(page->get());
   }
   return {};
 }
