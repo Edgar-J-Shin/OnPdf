@@ -9,6 +9,7 @@
 #include "onpdf/core/engine/text_line.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -16,9 +17,12 @@ namespace onpdf::edit {
 
 class ReplaceTextLineCommand final : public Command {
  public:
+  // utf8·size·color 가운데 바꿀 것만 (모두 비면 실패). size 는 쪽 포인트 유효 크기, color 는 RGB.
   // fallback_face: 원본 글꼴이 글자를 못 그릴 때 쓸 번들 글꼴 (nullptr 이면 원본 글꼴만)
-  ReplaceTextLineCommand(int page, std::string line_id, std::string utf8, std::shared_ptr<const FontFace> fallback_face);
-  [[nodiscard]] std::string_view id() const noexcept override { return "replace_line"; }
+  ReplaceTextLineCommand(int page, std::string line_id, std::optional<std::string> utf8, std::optional<double> size,
+                         std::optional<engine::Color> color, std::shared_ptr<const FontFace> fallback_face);
+  // 글이 바뀌면 "replace_line", 서식만이면 "format_line" (#69)
+  [[nodiscard]] std::string_view id() const noexcept override { return utf8_ ? "replace_line" : "format_line"; }
   Result<engine::ChangeSet> execute(engine::EditableDocument& doc) override;
   Result<engine::ChangeSet> undo(engine::EditableDocument& doc) override;
   void discard(engine::EditableDocument& doc) noexcept override;
@@ -30,14 +34,18 @@ class ReplaceTextLineCommand final : public Command {
  private:
   int page_;
   std::string line_id_;
-  std::string utf8_;
+  std::optional<std::string> utf8_;
+  std::optional<double> size_;
+  std::optional<engine::Color> color_;
   std::shared_ptr<const FontFace> face_;
   engine::DocumentStateId before_ = 0;
   bool executed_ = false;
   bool used_fallback_ = false;
   std::string box_;
   std::vector<std::string> ids_;
-  std::string previous_utf8_;  // OnPdf 상자 경로: 취소는 이전 글로 다시 교체
+  std::string previous_utf8_;  // OnPdf 상자 경로: 취소는 이전 글·크기·색으로 다시 교체
+  double previous_size_ = 0.0;
+  engine::Color previous_color_;
   bool onpdf_box_ = false;
 };
 

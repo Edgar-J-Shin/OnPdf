@@ -482,12 +482,15 @@ TEST(Roundtrip, EditedLinesSurviveSave) {
     };
     const std::string target = find(c.target);
     ASSERT_FALSE(target.empty()) << c.file;
-    edit::ReplaceTextLineCommand replace(0, target, c.replacement, *face);
+    edit::ReplaceTextLineCommand replace(0, target, std::string(c.replacement), std::nullopt, std::nullopt, *face);
     ASSERT_TRUE(replace.execute(*doc)) << c.file;
     const std::string removed = find(c.removed);
     ASSERT_FALSE(removed.empty()) << c.file;
     edit::RemoveTextLineCommand remove(0, removed);
     ASSERT_TRUE(remove.execute(*doc)) << c.file;
+    // #69: 고친 상자의 크기·색 변경도 저장을 견딘다
+    edit::ReplaceTextLineCommand format(0, replace.box(), std::nullopt, 20.0, engine::Color{0, 0, 200, 255}, *face);
+    ASSERT_TRUE(format.execute(*doc)) << c.file;
     RenderOptions render;
     render.scale = 1.0f;
     auto before = doc->render_page(0, render);
@@ -511,7 +514,11 @@ TEST(Roundtrip, EditedLinesSurviveSave) {
     for (std::size_t i = 0; i < before_objects.size(); ++i) {
       EXPECT_EQ(after_objects[i].id, before_objects[i].id);
       EXPECT_EQ(after_objects[i].original_font, before_objects[i].original_font);
+      EXPECT_NEAR(after_objects[i].font_size, before_objects[i].font_size, 0.05);
+      EXPECT_EQ(after_objects[i].color.b, before_objects[i].color.b);
     }
+    EXPECT_NEAR(after_objects[0].font_size, 20.0, 0.05) << c.file;
+    EXPECT_EQ(after_objects[0].color.b, 200) << c.file;
     auto check = engine::QpdfTools::check(target_path, c.password);
     ASSERT_TRUE(check) << c.file << ": " << check.error().message;
     EXPECT_TRUE(check->warnings.empty()) << c.file;

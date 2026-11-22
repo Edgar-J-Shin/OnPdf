@@ -35,6 +35,8 @@ struct TextLineInfo {
 struct LineReplacement {
   std::string utf8;
   std::optional<TextObjectsSpec> fallback;
+  std::optional<double> size;  // 쪽 포인트 유효 크기 (TextLineInfo::font_size 와 같은 단위). 원본 글꼴 경로는 기준선을 유지한다 (#69)
+  std::optional<Color> color;  // RGB 만 (알파는 원본). 대체 경로는 fallback 스펙이 이미 반영한 값
 };
 
 using DocumentStateId = std::uint64_t;  // 0 = 없음. 수술 전 문서 바이트를 가리킨다

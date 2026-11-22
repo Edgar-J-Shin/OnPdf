@@ -2166,6 +2166,7 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
         FPDFPageObj_GetFillColor(obj, &r, &g, &b, &a);
         FS_MATRIX m{};
         if (FPDFPageObj_GetMatrix(obj, &m)) matrix = {m.a, m.b, m.c, m.d, m.e, m.f};
+        line_eff_size = size * std::hypot(matrix[2], matrix[3]);  // 유효 크기 (서식 변경의 환산 기준)
       }
     }
     if (old_objects.empty()) return make_error(ErrorCode::kInvalidArgument, "line not found");
@@ -2216,7 +2217,18 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
     const std::u32string chars = detail::utf8_to_utf32(replacement->utf8);
     const bool covers = font != nullptr && FPDFFont_GetIsEmbedded(font) == 1 && !is_type3(font) && detail::font_covers(font, chars);
     if (covers) {
-      ScopedFPDFPageObject obj(FPDFPageObj_CreateTextObj(doc_.get(), font, size));
+      // 크기·색 변경(#69): 행렬(기준선·스케일)은 그대로 두고 객체 크기를 유효 크기 비율로 환산한다
+      float new_size = size;
+      if (replacement->size) {
+        if (!(*replacement->size > 0.0)) return fail(make_error(ErrorCode::kInvalidArgument, "font size must be positive"));
+        if (line_eff_size > 0.0) new_size = static_cast<float>(size * (*replacement->size / line_eff_size));
+      }
+      if (replacement->color) {
+        r = replacement->color->r;
+        g = replacement->color->g;
+        b = replacement->color->b;
+      }
+      ScopedFPDFPageObject obj(FPDFPageObj_CreateTextObj(doc_.get(), font, new_size));
       if (!obj) return fail(make_error(ErrorCode::kInvalidState, "FPDFPageObj_CreateTextObj failed"));
       const std::vector<unsigned short> wide = detail::to_wide(replacement->utf8);
       if (!FPDFText_SetText(obj.get(), reinterpret_cast<FPDF_WIDESTRING>(wide.data()))) {
