@@ -51,6 +51,7 @@ GENERATED = {
     "perm-no-extract.pdf": docs.make_perm_no_extract,
     "text-lines-basic.pdf": docs.make_text_lines_basic,
     "text-lines-basic-enc.pdf": docs.make_text_lines_basic_enc,
+    "text-lines-kern.pdf": docs.make_text_lines_kern,
     "text-lines-form.pdf": docs.make_text_lines_form,
     "text-lines-type3.pdf": docs.make_text_lines_type3,
 }

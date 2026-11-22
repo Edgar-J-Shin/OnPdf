@@ -477,14 +477,16 @@ struct MemoryFileAccess {
 };
 
 // 마크의 포인트 값 (폭): 로캘과 무관하게 "123.456" 으로 쓰고 읽는다 — printf/strtod 는 LC_NUMERIC 을 따른다 (리뷰 W1)
-std::string format_points(double value) {
-  const long long milli = std::llround(std::max(0.0, value) * 1000.0);
+std::string format_points(double value) {  // 부호 허용 (자간 "ls" 는 음수일 수 있다, #77)
+  const long long milli = std::llround(std::abs(value) * 1000.0);
   char buf[32];
-  std::snprintf(buf, sizeof buf, "%lld.%03lld", milli / 1000, milli % 1000);
+  std::snprintf(buf, sizeof buf, "%s%lld.%03lld", value < 0 ? "-" : "", milli / 1000, milli % 1000);
   return buf;
 }
 
 double parse_points(std::string_view text) {
+  const bool negative = !text.empty() && text.front() == '-';
+  if (negative) text.remove_prefix(1);
   const std::size_t dot = text.find('.');
   long long whole = 0;
   const std::string_view int_part = text.substr(0, dot);
@@ -501,7 +503,7 @@ double parse_points(std::string_view text) {
       scale /= 10.0;
     }
   }
-  return value;
+  return negative ? -value : value;
 }
 
 std::string image_filter_of(FPDF_PAGEOBJECT obj) {
@@ -927,6 +929,10 @@ Result<TextObjectsResult> PdfiumDocument::add_text_objects_to(FPDF_PAGE raw_page
       const std::string width = format_points(spec.width);
       if (!FPDFPageObjMark_SetStringParam(doc_.get(), obj.get(), mark, "width", width.c_str())) return fail("cannot set mark width");
     }
+    if (spec.write_box && i == 0 && std::abs(spec.letter_spacing) > 1e-6 &&
+        !FPDFPageObjMark_SetStringParam(doc_.get(), obj.get(), mark, "ls", format_points(spec.letter_spacing).c_str())) {
+      return fail("cannot set mark ls");
+    }
     if (spec.write_box && i == 0 && !spec.box_text.empty() &&
         !FPDFPageObjMark_SetBlobParam(doc_.get(), obj.get(), mark, "box_text",
                                       reinterpret_cast<const unsigned char*>(spec.box_text.data()),
@@ -991,6 +997,7 @@ Result<std::vector<TextObjectInfo>> PdfiumDocument::text_objects(int page_index)
     info.box_text = mark_blob(mark, "box_text");
     if (const std::string width = mark_string(mark, "width"); !width.empty()) info.width = parse_points(width);
     info.original_font = mark_string(mark, "ofont") == "1";
+    if (const std::string ls = mark_string(mark, "ls"); !ls.empty()) info.letter_spacing = parse_points(ls);
     if (FPDF_FONT font = FPDFTextObj_GetFont(obj); font != nullptr) {
       const std::size_t n = FPDFFont_GetBaseFontName(font, nullptr, 0);
       if (n > 0) {
@@ -2038,12 +2045,37 @@ bool is_type3(FPDF_FONT font) {
   return !has_data;
 }
 
-TextLineInfo line_info_of(const detail::PageAnalysis& analysis, const detail::AnalyzedLine& line, const detail::PageSpace& space) {
+// 같은 글꼴·크기로 다시 놓았을 때의 잉크 폭 (쪽 사용자 좌표). 임시 객체는 쪽에 넣지 않는다. 못 재면 0 (#77)
+double natural_ink_width(FPDF_DOCUMENT doc, const detail::AnalyzedObject& first, const std::u32string& text) {
+  if (first.font == nullptr || first.size <= 0 || is_type3(first.font) || !detail::font_covers(first.font, text)) return 0.0;
+  ScopedFPDFPageObject tmp(FPDFPageObj_CreateTextObj(doc, first.font, first.size));
+  if (!tmp) return 0.0;
+  const std::vector<unsigned short> wide = detail::to_wide(detail::utf32_to_utf8(text));
+  if (!FPDFText_SetText(tmp.get(), reinterpret_cast<FPDF_WIDESTRING>(wide.data()))) return 0.0;
+  float l = 0, b = 0, r = 0, t = 0;
+  if (!FPDFPageObj_GetBounds(tmp.get(), &l, &b, &r, &t) || r <= l) return 0.0;
+  const double hx = std::hypot(first.matrix[0], first.matrix[1]);  // 텍스트 행렬의 가로 배율 (객체 공간 → 쪽 사용자 좌표)
+  return static_cast<double>(r - l) * (hx > 0 ? hx : 1.0);
+}
+
+TextLineInfo line_info_of(FPDF_DOCUMENT doc, const detail::PageAnalysis& analysis, const detail::AnalyzedLine& line,
+                          const detail::PageSpace& space) {
   TextLineInfo info;
   info.id = detail::line_id_of(analysis, line);
   info.bbox = space.to_rect(line.left, line.right, line.bottom, line.top);
   info.text = detail::utf32_to_utf8(line.text);
   const auto& first = analysis.objects[static_cast<std::size_t>(line.members.front())];
+  if (line.ink_chars > 0 && line.ink_right > line.ink_left) {
+    const Rect unit = space.to_rect(0, 1, 0, 1);
+    const double scale = std::max(unit.w, unit.h);  // 사용자 단위 → 쪽 포인트 (회전만 있는 변환)
+    info.text_width = (line.ink_right - line.ink_left) * scale;
+    const double natural = natural_ink_width(doc, first, line.text);
+    // 간격 수 = 원문 글자 수 − 1 (안쪽 공백도 Tc 가 붙는 간격이다; 앞뒤 공백은 trim 됐다)
+    const double gaps = static_cast<double>(line.text.size()) - 1.0;
+    if (line.ink_chars >= 2 && gaps >= 1.0 && natural > 0.0) {
+      info.letter_spacing = ((line.ink_right - line.ink_left) - natural) * scale / gaps;
+    }
+  }
   info.font_name = base_font_name(first.font);
   info.font_size = first.eff_size;
   info.color = {static_cast<std::uint8_t>(first.r), static_cast<std::uint8_t>(first.g), static_cast<std::uint8_t>(first.b), 255};
@@ -2093,7 +2125,7 @@ Result<std::vector<TextLineInfo>> PdfiumDocument::text_lines(int page_index) con
   std::vector<TextLineInfo> out;
   for (const auto& line : analysis.lines) {
     if (line.members.empty()) continue;
-    out.push_back(line_info_of(analysis, line, space));
+    out.push_back(line_info_of(doc_.get(), analysis, line, space));
   }
   return out;
 }
@@ -2172,6 +2204,7 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
   std::array<double, 6> matrix{1, 0, 0, 1, 0, 0};
   Rect line_bbox;
   double line_eff_size = 0;
+  double line_spacing = 0;  // 원 줄 자간(pt) — 새 객체에 TJ 커닝으로 옮긴다 (#77)
   if (onpdf_box) {
     const int count = FPDFPage_CountObjects(page->get());
     for (int i = 0; i < count; ++i) {
@@ -2186,6 +2219,7 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
         FS_MATRIX m{};
         if (FPDFPageObj_GetMatrix(obj, &m)) matrix = {m.a, m.b, m.c, m.d, m.e, m.f};
         line_eff_size = size * std::hypot(matrix[2], matrix[3]);  // 유효 크기 (서식 변경의 환산 기준)
+        if (const std::string ls = mark_string(onpdf_mark_of(obj), "ls"); !ls.empty()) line_spacing = parse_points(ls);
       }
     }
     if (old_objects.empty()) return make_error(ErrorCode::kInvalidArgument, "line not found");
@@ -2201,8 +2235,9 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
       }
     }
     if (target == nullptr) return abort(make_error(ErrorCode::kInvalidArgument, "line not found"));
-    const TextLineInfo info = line_info_of(analysis, *target, space);
+    const TextLineInfo info = line_info_of(doc_.get(), analysis, *target, space);
     if (!info.editable) return abort(make_error(ErrorCode::kUnsupported, info.reason));
+    line_spacing = info.letter_spacing;
     const auto& first = analysis.objects[static_cast<std::size_t>(target->members.front())];
     for (int k : target->members) old_objects.push_back(analysis.objects[static_cast<std::size_t>(k)].handle);
     font = first.font;
@@ -2268,6 +2303,10 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
           !FPDFPageObjMark_SetBlobParam(doc_.get(), obj.get(), mark, "box_text", text_bytes, text_len)) {
         return fail(make_error(ErrorCode::kInvalidState, "cannot set marks"));
       }
+      if (std::abs(line_spacing) > 1e-6 &&
+          !FPDFPageObjMark_SetStringParam(doc_.get(), obj.get(), mark, "ls", format_points(line_spacing).c_str())) {
+        return fail(make_error(ErrorCode::kInvalidState, "cannot set mark ls"));
+      }
       FPDF_PAGEOBJECT raw = obj.release();
       FPDFPage_InsertObject(page->get(), raw);
       inserted.push_back(raw);
@@ -2278,6 +2317,7 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
       if (!replacement->fallback) return fail(make_error(ErrorCode::kInvalidArgument, "original font cannot draw the text"));
       TextObjectsSpec spec = *replacement->fallback;
       if (onpdf_box) spec.box = std::string(line_id);
+      spec.letter_spacing = line_spacing;
       auto added = add_text_objects_to(page->get(), spec);
       if (!added) return fail(std::unexpected(added.error()));
       result.used_fallback = true;
@@ -2304,6 +2344,18 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
   render.render_annotations = false;
   auto before_render = render_page(page_index, render);
   if (!before_render) return fail(std::unexpected(before_render.error()));
+  // 줄 밖 검증 마스크 = 원 줄 ∪ 새 객체 영역(수술 전·후). 새 객체는 커닝 주입(#77)으로 수술 전후 모양이 달라질 수 있고,
+  // 그 영역은 편집의 일부다
+  Rect verify_box = line_bbox;
+  const auto widen = [&](const Rect& box) {
+    const double nx0 = std::min(verify_box.x, box.x), ny0 = std::min(verify_box.y, box.y);
+    const double nx1 = std::max(verify_box.right(), box.right()), ny1 = std::max(verify_box.bottom(), box.bottom());
+    verify_box = {nx0, ny0, nx1 - nx0, ny1 - ny0};
+  };
+  for (FPDF_PAGEOBJECT obj : inserted) {
+    float bl = 0, bb = 0, br = 0, bt = 0;
+    if (FPDFPageObj_GetBounds(obj, &bl, &bb, &br, &bt)) widen(space.to_rect(bl, br, bb, bt));
+  }
   ShowOpSurgery ops;
   int page_text_objects = 0;
   std::vector<int> form_text_objects;
@@ -2319,6 +2371,22 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
       if (it->container < 0) ops.page_ordinals.insert(it->ordinal);
       else ops.form_ordinals[it->container].insert(it->ordinal);
     }
+    // 원 줄 자간을 새 객체에 균일 TJ 커닝으로 (#77): k = −spacing(사용자 단위)·1000/유효 크기, |k| ≤ 250
+    if (std::abs(line_spacing) > 1e-6) {
+      const Rect unit = space.to_rect(0, 1, 0, 1);
+      const double scale = std::max(unit.w, unit.h);
+      for (FPDF_PAGEOBJECT obj : inserted) {
+        const auto it = std::find_if(analysis.objects.begin(), analysis.objects.end(), [&](const auto& o) { return o.handle == obj; });
+        if (it == analysis.objects.end() || it->ordinal < 0 || it->container >= 0) continue;
+        float obj_size = 0;
+        FS_MATRIX m{};
+        if (!FPDFTextObj_GetFontSize(obj, &obj_size) || !FPDFPageObj_GetMatrix(obj, &m)) continue;
+        const double eff = obj_size * std::hypot(m.a, m.b);  // TJ 숫자는 텍스트 x 축을 따라 가로 배율로 움직인다
+        if (eff <= 0.0 || it->text.empty()) continue;
+        const double k = std::clamp(-(line_spacing / scale) * 1000.0 / eff, -250.0, 250.0);
+        ops.fits.push_back({-1, it->ordinal, k, static_cast<int>(it->text.size())});
+      }
+    }
   }
   Result<SurgeryReport> report = [&]() -> Result<SurgeryReport> {  // 수술할 바이트(새 텍스트 포함)는 이 범위에서만 (리뷰 I6)
     auto current_bytes = save_to_memory();
@@ -2326,6 +2394,7 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
     return QpdfTools::remove_text_show_ops(*current_bytes, password_, page_index, ops);
   }();
   if (!report) return fail(std::unexpected(report.error()));
+  result.fitted = report->fitted > 0;
   bool consistent = report->page_show_ops == page_text_objects;
   std::string mismatch;
   if (!consistent) mismatch = " (page: qpdf " + std::to_string(report->page_show_ops) + " vs pdfium " + std::to_string(page_text_objects) + ")";
@@ -2364,10 +2433,19 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
   };
   auto after_render = render_page(page_index, render);
   if (!after_render) return rollback(std::unexpected(after_render.error()));
-  // 줄 영역(여유 0.35em) 밖은 픽셀 하나도 달라지면 안 된다
+  if (auto p = load_page(page_index)) {  // 수술 뒤(커닝 주입 뒤) 새 객체 영역
+    const detail::PageSpace after_space = detail::PageSpace::of(p->get());
+    for (const std::string& id : result.ids) {
+      float bl = 0, bb = 0, br = 0, bt = 0;
+      if (auto [obj, index] = find_page_object(p->get(), id); obj != nullptr && FPDFPageObj_GetBounds(obj, &bl, &bb, &br, &bt)) {
+        widen(after_space.to_rect(bl, br, bb, bt));
+      }
+    }
+  }
+  // 마스크(여유 0.35em) 밖은 픽셀 하나도 달라지면 안 된다
   const double pad = std::max(2.0, 0.35 * line_eff_size);
-  const int x0 = static_cast<int>(std::floor(line_bbox.x - pad)), y0 = static_cast<int>(std::floor(line_bbox.y - pad));
-  const int x1 = static_cast<int>(std::ceil(line_bbox.right() + pad)), y1 = static_cast<int>(std::ceil(line_bbox.bottom() + pad));
+  const int x0 = static_cast<int>(std::floor(verify_box.x - pad)), y0 = static_cast<int>(std::floor(verify_box.y - pad));
+  const int x1 = static_cast<int>(std::ceil(verify_box.right() + pad)), y1 = static_cast<int>(std::ceil(verify_box.bottom() + pad));
   const Bitmap& A = *before_render;
   const Bitmap& B = *after_render;
   bool same = A.width == B.width && A.height == B.height;

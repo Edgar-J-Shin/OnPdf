@@ -29,6 +29,7 @@
 #include <cstring>
 #include <exception>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <utility>
@@ -510,9 +511,38 @@ struct RewriteResult {
   bool changed = false;
   bool dangling = false;
 };
+// fit 대상 연산자를 `[<c1> k <c2> … <cn>] TJ` 로 (PDFium 생성기 형태 `[<hex>] TJ` 만). 형태가
+// 다르면 nullopt
+std::optional<std::string> fitted_operands(const ContentOp& op, const ShowOpFit& fit) {
+  if (op.name != "TJ" || op.operands.size() != 1 || !op.operands[0].isArray()) return std::nullopt;
+  const auto items = op.operands[0].getArrayAsVector();
+  if (items.size() != 1 || !items[0].isString()) return std::nullopt;
+  const std::string s = items[0].getStringValue();
+  if (fit.code_count <= 0 || s.empty() || s.size() % static_cast<std::size_t>(fit.code_count) != 0)
+    return std::nullopt;
+  const std::size_t unit = s.size() / static_cast<std::size_t>(fit.code_count);
+  if (unit != 1 && unit != 2) return std::nullopt;
+  char number[32];
+  std::snprintf(number, sizeof number, "%.2f", fit.kerning);
+  std::string out = "[";
+  for (std::size_t i = 0; i < s.size(); i += unit) {
+    if (i > 0) out += std::string(" ") + number + " ";
+    out += "<";
+    for (std::size_t j = 0; j < unit; ++j) {
+      char hex[3];
+      std::snprintf(hex, sizeof hex, "%02X", static_cast<unsigned char>(s[i + j]));
+      out += hex;
+    }
+    out += ">";
+  }
+  out += "] TJ";
+  return out;
+}
+
 RewriteResult rewrite_content(QPDF& owner, const std::string& data, const std::set<int>& ordinals,
                               int ordinal_base, int& needs_displacement,
-                              std::vector<std::string>* do_names, bool& carry) {
+                              std::vector<std::string>* do_names, bool& carry,
+                              const std::vector<ShowOpFit>& fits = {}, int* fitted = nullptr) {
   CollectOps c;
   auto stream = QPDFObjectHandle::newStream(
       &owner, data);  // 파서용 임시 객체 (트레일러에서 닿지 않아 쓰이진 않는다)
@@ -548,7 +578,20 @@ RewriteResult rewrite_content(QPDF& owner, const std::string& data, const std::s
   }
   std::size_t pos = 0;
   for (std::size_t i = 0; i < c.ops.size(); ++i) {
-    if (ordinal_of[i] < 0 || !ordinals.count(ordinal_of[i])) continue;
+    if (ordinal_of[i] < 0) continue;
+    if (!ordinals.count(ordinal_of[i])) {
+      const auto fit = std::find_if(fits.begin(), fits.end(),
+                                    [&](const ShowOpFit& f) { return f.ordinal == ordinal_of[i]; });
+      if (fit == fits.end()) continue;
+      const auto replaced = fitted_operands(c.ops[i], *fit);
+      if (!replaced) continue;  // 예상 형태가 아니면 커닝만 건너뛴다 (수정은 성공)
+      r.changed = true;
+      r.out.append(data, pos, c.ops[i].start - pos);
+      r.out += *replaced;
+      pos = c.ops[i].end;
+      if (fitted != nullptr) ++*fitted;
+      continue;
+    }
     r.changed = true;
     const ContentOp& op = c.ops[i];
     r.out.append(data, pos, op.start - pos);
@@ -611,10 +654,14 @@ Result<SurgeryReport> QpdfTools::remove_text_show_ops(const std::vector<std::uin
     std::vector<std::string> do_names;
     int base = 0;
     bool carry = false;
+    std::vector<ShowOpFit> page_fits;
+    for (const auto& f : ops.fits) {
+      if (f.container < 0) page_fits.push_back(f);
+    }
     for (QPDFObjectHandle& stream : streams) {
       const std::string data = stream_bytes(stream);
       RewriteResult r = rewrite_content(q, data, ops.page_ordinals, base, report.needs_displacement,
-                                        &do_names, carry);
+                                        &do_names, carry, page_fits, &report.fitted);
       if (r.dangling)
         return make_error(ErrorCode::kUnsupported, "content stream split inside an operator");
       if (r.changed)

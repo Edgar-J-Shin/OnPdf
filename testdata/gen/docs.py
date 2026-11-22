@@ -836,6 +836,30 @@ def make_text_lines_basic(*, encrypt: g.Encryption | None = None, file_id_name: 
     return w.write(root=root, info=info, file_id=g.file_id_for(file_id_name), encrypt=encrypt)
 
 
+def make_text_lines_kern() -> bytes:
+    """줄 폭 맞춤(#77): TJ 로 넓힌 줄, Tc 자간 줄, 끝 공백 줄, 음수 방향(좁힘) 커닝 줄, 보통 줄, 큰 자간 줄(한계),
+    배열 문자열 하나인 TJ 줄(qpdf 치환 단위 테스트)."""
+    w = PdfWriter()
+    pages = w.reserve()
+    helv = g.simple_font(w)
+    c = w.stream(b"", content(
+        # Tc 는 그래픽 상태라 BT/ET 를 넘어 남는다 → q/Q 로 줄마다 격리
+        "q BT /F1 12 Tf 72 700 Td [(Kerned) -500 (wide) -500 (gaps) -500 (here)] TJ ET Q",
+        "q BT /F1 12 Tf 2 Tc 72 670 Td (Char spaced line here) Tj ET Q",
+        "q BT /F1 12 Tf 72 640 Td (Trailing spaces line          ) Tj ET Q",
+        "q BT /F1 12 Tf 72 610 Td [(Ti) 80 (ght) 80 (ly) 80 ( kerned) 80 ( line)] TJ ET Q",
+        "q BT /F1 12 Tf 72 580 Td (Plain line without spacing) Tj ET Q",
+        "q BT /F1 12 Tf 20 Tc 72 550 Td (Huge spacing) Tj ET Q",
+        "q BT /F1 12 Tf 72 520 Td [(Single array string)] TJ ET Q",
+    ), compress=False)
+    p = g.page(w, pages, g.LETTER, c, b"<< /Font << /F1 %d 0 R >> >>" % helv)
+    g.pages_tree(w, pages, [p])
+    root = g.catalog(w, pages)
+    info = w.reserve()
+    g.info_dict(w, "Text lines with kerning", num=info)
+    return w.write(root=root, info=info, file_id=g.file_id_for("text-lines-kern.pdf"))
+
+
 def make_text_lines_basic_enc() -> bytes:
     return make_text_lines_basic(encrypt=g.Encryption("user", "owner"), file_id_name="text-lines-basic-enc.pdf")
 
