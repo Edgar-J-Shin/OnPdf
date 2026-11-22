@@ -184,12 +184,13 @@ TEST(TextLines, ReplaceNonEmbeddedLineUsesFallbackFont) {
   EXPECT_FALSE((*objects)[0].original_font);
   EXPECT_NEAR((*objects)[0].bbox.y, hello->bbox.y, 6.0) << "같은 자리";
   EXPECT_EQ(diff_outside(before, render(*doc), hello->bbox, 6.0), 0);
-  // 새 상자는 OnPdf 텍스트 상자로 다시 고칠 수 있다 (수술 없음)
+  // 새 상자는 OnPdf 텍스트 상자로 다시 고칠 수 있다 (#79: 재수정도 수술 — 토큰이 있다)
   LineReplacement again{"Hello again", fallback_for(*hello, "Hello again"), std::nullopt,
                         std::nullopt};
   auto rewritten = doc->replace_text_line(0, replaced->box, again);
   ASSERT_TRUE(rewritten) << rewritten.error().message;
-  EXPECT_EQ(rewritten->before, 0u);
+  EXPECT_NE(rewritten->before, 0u);
+  doc->drop_document_state(rewritten->before);
   EXPECT_EQ(rewritten->box, replaced->box);
   EXPECT_NE(page_text(*doc).find("Hello again"), std::string::npos);
 }
@@ -302,11 +303,12 @@ TEST(TextLines, EmbeddedCidLineReusesOriginalFontAndType3FallsBack) {
   EXPECT_NE(text.find("줄 텍스트 한글"), std::string::npos);
   EXPECT_EQ(text.find("한글 텍스트 줄"), std::string::npos);
   EXPECT_EQ(diff_outside(before, render(*doc), korean->bbox, 7.0), 0);
-  // 같은 상자를 다시 원본 글꼴로 고친다 (수술 없음)
+  // 같은 상자를 다시 원본 글꼴로 고친다 (#79: 재수정도 수술)
   LineReplacement again{"한글 줄", std::nullopt, std::nullopt, std::nullopt};
   auto rewritten = doc->replace_text_line(0, replaced->box, again);
   ASSERT_TRUE(rewritten) << rewritten.error().message;
-  EXPECT_EQ(rewritten->before, 0u);
+  EXPECT_NE(rewritten->before, 0u);
+  doc->drop_document_state(rewritten->before);
   EXPECT_FALSE(rewritten->used_fallback);
   EXPECT_NE(page_text(*doc).find("한글 줄"), std::string::npos);
   // Type3 줄은 대체 글꼴
@@ -674,6 +676,7 @@ TEST(TextLines, ReplaceKeepsWidthWithKerning) {
     const double expected = expected_width(info.text, info.font_size, info.letter_spacing);
     EXPECT_NEAR(w, expected, std::max(2.5, expected * 0.03))
         << needle << " width " << w << " expected " << expected;
+    EXPECT_NE(page_text(*doc).find(info.text), std::string::npos) << "자간이 있어도 추출은 공백을 끼우지 않는다: " << page_text(*doc);
     auto objects = doc->text_objects(0);
     ASSERT_TRUE(objects);
     bool found = false;
@@ -725,7 +728,7 @@ TEST(TextLines, ReplaceKeepsWidthWithKerning) {
   EXPECT_LT(hw, huge.text_width * 0.6);
 }
 
-TEST(TextLines, KerningSurvivesSaveReopenAndMove) {
+TEST(TextLines, SpacingSurvivesSaveAndReopen) {
   auto doc = PdfiumDocument::open(testdata("text-lines-kern.pdf"));
   ASSERT_TRUE(doc);
   auto lines = doc->text_lines(0);
@@ -742,43 +745,78 @@ TEST(TextLines, KerningSurvivesSaveReopenAndMove) {
   auto reopened = PdfiumDocument::open(saved);
   ASSERT_TRUE(reopened);
   EXPECT_NEAR(box_width(*reopened, replaced->box), w0, 0.5) << "저장·다시 열기 뒤 폭 유지";
-  // 이동(GenerateContent 재생성) 뒤에도 커닝 유지
+  // 알려진 제한: 이동(GenerateContent 재생성)은 Tc 를 다시 쓰지 않아 자연 폭으로 돌아간다. 마크 ls 는 남는다 (후속: 이동 뒤 재적용)
   auto ids = std::vector<std::string>(replaced->ids.begin(), replaced->ids.end());
   ASSERT_TRUE(reopened->move_page_objects(0, ids, {5.0, 7.0}));
-  EXPECT_NEAR(box_width(*reopened, replaced->box), w0, 0.5) << "이동 뒤 폭 유지";
+  const double natural = expected_width(wide.text, wide.font_size, 0.0);
+  EXPECT_NEAR(box_width(*reopened, replaced->box), natural, std::max(2.5, natural * 0.03)) << "이동 뒤 자연 폭 (알려진 제한)";
   const auto saved2 = dir / "kern2.pdf";
   ASSERT_TRUE(reopened->save_to(saved2, false));
   auto again = PdfiumDocument::open(saved2);
   ASSERT_TRUE(again);
-  EXPECT_NEAR(box_width(*again, replaced->box), w0, 0.5) << "재생성 뒤 저장해도 폭 유지";
+  auto objects = again->text_objects(0);
+  ASSERT_TRUE(objects);
+  ASSERT_EQ(objects->size(), 1u);
+  EXPECT_NEAR((*objects)[0].letter_spacing, wide.letter_spacing, 0.01) << "마크 ls 는 남는다";
   auto check = QpdfTools::check(saved2);
   ASSERT_TRUE(check);
   EXPECT_TRUE(check->warnings.empty());
 }
 
-// qpdf 치환 단위: 배열 문자열 하나인 TJ 만 바뀌고, Tj·여러 문자열 TJ·코드 수 불일치는 건너뛴다
-TEST(TextLines, SurgeryFitRewritesSingleStringTjArrayOnly) {
+// qpdf 자간 주입: Tj·TJ 모두 `<cs> Tc … 0 Tc` 로 감싸고, 추출 글은 그대로다 (TJ 커닝이었다면 "C h a r" 로 깨진다)
+TEST(TextLines, SurgeryFitInjectsCharSpacingAndKeepsExtraction) {
   const auto bytes = onpdf::test::read_bytes(testdata("text-lines-kern.pdf"));
-  // 순번: 0 Kerned(TJ 여러 문자열) 1 Char spaced(Tj) 2 Trailing 3 Tightly 4 Plain 5 Huge 6 Single
-  // array string(TJ 문자열 하나)
+  // 순번: 0 Kerned(TJ) 1 Char spaced(Tj, 2 Tc) 2 Trailing 3 Tightly 4 Plain(Tj) 5 Huge 6 Single array string(TJ)
   ShowOpSurgery ops;
-  ops.fits = {{-1, 6, -40.0, 19}, {-1, 0, -40.0, 4}, {-1, 1, -40.0, 21}};
+  ops.fits = {{-1, 4, 1.5}, {-1, 6, 1.5}};
   auto report = QpdfTools::remove_text_show_ops(bytes, {}, 0, ops);
   ASSERT_TRUE(report) << report.error().message;
-  EXPECT_EQ(report->fitted, 1);
-  // (qpdf 가 스트림을 다시 압축하므로 바이트는 PDFium 으로 다시 열어 본다)
+  EXPECT_EQ(report->fitted, 2);
   auto doc = PdfiumDocument::open_from_memory(report->bytes);
   ASSERT_TRUE(doc);
   auto lines = doc->text_lines(0);
   ASSERT_TRUE(lines);
-  const TextLineInfo* single = find_line(*lines, "Single array string");
-  ASSERT_NE(single, nullptr);
-  EXPECT_GT(single->letter_spacing, 0.4) << "−40/1000 × 12pt = 0.48pt 씩 벌어졌다";
-  ShowOpSurgery bad;
-  bad.fits = {{-1, 6, -40.0, 7}};  // 19 바이트를 7 로 못 나눈다
-  auto report2 = QpdfTools::remove_text_show_ops(bytes, {}, 0, bad);
-  ASSERT_TRUE(report2);
-  EXPECT_EQ(report2->fitted, 0);
+  for (const char* needle : {"Plain line without spacing", "Single array string"}) {
+    const TextLineInfo* line = find_line(*lines, needle);
+    ASSERT_NE(line, nullptr) << needle << ": " << page_text(*doc);
+    EXPECT_NEAR(line->letter_spacing, 1.5, 0.15) << needle;
+  }
+  EXPECT_NEAR(find_line(*lines, "Kerned wide gaps here")->letter_spacing, 0.4, 0.2) << "건드리지 않은 줄";
+  EXPECT_NE(page_text(*doc).find("Plain line without spacing"), std::string::npos) << "추출은 그대로";
+}
+
+// #79: 고친 상자를 다시 고쳐도(수술 경로) 마크 ls 의 자간이 새 글에 적용되고, 취소는 토큰으로 첫 상태까지
+TEST(TextLines, BoxReeditKeepsLetterSpacing) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-kern.pdf"));
+  ASSERT_TRUE(doc);
+  const Bitmap before = render(*doc);
+  auto lines = doc->text_lines(0);
+  const TextLineInfo spaced = *find_line(*lines, "Char spaced line here");
+  LineReplacement first{spaced.text, fallback_for(spaced, spaced.text), std::nullopt, std::nullopt};
+  auto replaced = doc->replace_text_line(0, spaced.id, first);
+  ASSERT_TRUE(replaced) << replaced.error().message;
+  ASSERT_TRUE(replaced->fitted);
+  const std::string longer = "Char spaced again and longer";
+  LineReplacement second{longer, fallback_for(spaced, longer), std::nullopt, std::nullopt};
+  auto again = doc->replace_text_line(0, replaced->box, second);
+  ASSERT_TRUE(again) << again.error().message;
+  EXPECT_NE(again->before, 0u);
+  EXPECT_TRUE(again->fitted) << "재수정도 자간을 넣는다";
+  EXPECT_EQ(again->box, replaced->box);
+  const double w = box_width(*doc, again->box);
+  const double expected = expected_width(longer, spaced.font_size, spaced.letter_spacing);
+  EXPECT_NEAR(w, expected, std::max(2.5, expected * 0.03));
+  auto objects = doc->text_objects(0);
+  ASSERT_TRUE(objects);
+  ASSERT_EQ(objects->size(), 1u) << "옛 상자 객체는 지워졌다";
+  EXPECT_NEAR((*objects)[0].letter_spacing, spaced.letter_spacing, 0.01);
+  EXPECT_EQ(page_text(*doc).find("Char spaced line here"), std::string::npos);
+  ASSERT_TRUE(doc->restore_document_state(again->before));
+  doc->drop_document_state(again->before);
+  EXPECT_NE(page_text(*doc).find("Char spaced line here"), std::string::npos) << page_text(*doc);
+  ASSERT_TRUE(doc->restore_document_state(replaced->before));
+  doc->drop_document_state(replaced->before);
+  EXPECT_EQ(render(*doc).pixels, before.pixels);
 }
 }  // namespace
 }  // namespace onpdf::engine

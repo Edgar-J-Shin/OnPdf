@@ -5,6 +5,7 @@
 #include "onpdf/edit/annotation_commands.h"
 #include "onpdf/edit/object_commands.h"
 #include "onpdf/edit/text_line_commands.h"
+#include "onpdf/edit/undo_stack.h"
 
 #include "../fake_document.h"
 #include "../test_support.h"
@@ -129,12 +130,14 @@ TEST(TextLineCommands, PdfiumReplaceUndoRedoRestoresRender) {
   auto redone = doc->render_page(0, render);
   ASSERT_TRUE(redone);
   EXPECT_EQ(redone->pixels, edited->pixels);
-  // OnPdf 상자 재수정(수술 없음)과 그 취소
+  // OnPdf 상자 재수정(#79: 이것도 수술 — 토큰 하나 더)과 그 취소
   ReplaceTextLineCommand again(0, cmd.box(), std::string("한글 줄"), std::nullopt, std::nullopt, test_font());
   ASSERT_TRUE(again.execute(*doc));
   EXPECT_NE(page_text(*doc).find("한글 줄"), std::string::npos);
+  EXPECT_EQ(doc->document_state_count(), 2);
   ASSERT_TRUE(again.undo(*doc));
   EXPECT_NE(page_text(*doc).find("줄 텍스트 한글"), std::string::npos);
+  again.discard(*doc);
   EXPECT_EQ(doc->document_state_count(), 1);
   cmd.discard(*doc);
   EXPECT_EQ(doc->document_state_count(), 0);
@@ -232,6 +235,48 @@ TEST(TextLineCommands, FormatOnlyChangesSizeAndColorAndUndoes) {
   ASSERT_TRUE(bigger.undo(*pdf));
   EXPECT_TRUE(pdf->text_objects(0)->empty());
   bigger.discard(*pdf);
+}
+
+// #79: 같은 상자의 서식 연타는 한 단계로 합쳐지고, 합쳐진 명령은 스택이 돌려줘 토큰이 해제된다
+TEST(TextLineCommands, FormatRepeatsMergeIntoOneUndo) {
+  auto pdf = engine::PdfiumDocument::open(testdata("text-lines-type3.pdf"));
+  ASSERT_TRUE(pdf);
+  const std::string id = line_id_containing(*pdf, 0, "한글 텍스트 줄");
+  ASSERT_FALSE(id.empty());
+  UndoStack stack(10);
+  auto first = std::make_shared<ReplaceTextLineCommand>(0, id, std::nullopt, 24.0, std::nullopt, test_font());
+  ASSERT_TRUE(first->execute(*pdf));
+  EXPECT_TRUE(stack.push(first).empty());
+  auto second = std::make_shared<ReplaceTextLineCommand>(0, first->box(), std::nullopt, 30.0, std::nullopt, test_font());
+  ASSERT_TRUE(second->execute(*pdf));
+  auto evicted = stack.push(second);
+  ASSERT_EQ(evicted.size(), 1u) << "합쳐진 명령을 돌려준다";
+  EXPECT_EQ(evicted[0], second);
+  evicted[0]->discard(*pdf);
+  EXPECT_EQ(stack.size(), 1u);
+  auto objects = pdf->text_objects(0);
+  ASSERT_TRUE(objects);
+  ASSERT_EQ(objects->size(), 1u);
+  EXPECT_NEAR((*objects)[0].font_size, 30.0, 0.05);
+  auto color = std::make_shared<ReplaceTextLineCommand>(0, first->box(), std::nullopt, std::nullopt, engine::Color{200, 0, 0, 255}, test_font());
+  ASSERT_TRUE(color->execute(*pdf));
+  ASSERT_EQ(stack.push(color).size(), 1u);
+  color->discard(*pdf);
+  EXPECT_EQ(stack.size(), 1u);
+  // 한 번의 취소로 원래 줄
+  ASSERT_TRUE(first->undo(*pdf));
+  EXPECT_TRUE(pdf->text_objects(0)->empty());
+  EXPECT_EQ(pdf->document_state_count(), 1) << "첫 토큰만 남는다";
+  // 다시 실행: 합친 값(30pt·빨강)이 한 번에
+  ASSERT_TRUE(first->execute(*pdf));
+  objects = pdf->text_objects(0);
+  ASSERT_EQ(objects->size(), 1u);
+  EXPECT_NEAR((*objects)[0].font_size, 30.0, 0.05);
+  EXPECT_EQ((*objects)[0].color.r, 200);
+  // 글을 바꾸는 명령·다른 상자·저장 지점 뒤에는 합치지 않는다
+  auto text = std::make_shared<ReplaceTextLineCommand>(0, first->box(), std::string("한글 줄"), std::nullopt, std::nullopt, test_font());
+  EXPECT_FALSE(first->merge_with(*text));
+  first->discard(*pdf);
 }
 }  // namespace
 }  // namespace onpdf::edit

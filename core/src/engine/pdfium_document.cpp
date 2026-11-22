@@ -2188,7 +2188,9 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
   // ---- 1. 수술 전 바이트(떼어 둔 객체를 맨 뒤에 되돌려 포함) → 상태 토큰. 새 텍스트를 넣기 전 상태다.
   //         되돌린 객체가 분석에 보이도록 쪽 핸들은 그 뒤에 연다 (리뷰 W1) ----
   const bool onpdf_box = line_id.starts_with(kBoxPrefix);
-  const bool needs_surgery = !onpdf_box;
+  // OnPdf 상자 재수정도 수술로 한다(#79): 옛 객체를 순번으로 지우고 새 객체에 마크 ls 의 자간(TJ 커닝)을 다시 넣는다.
+  // 취소는 상태 토큰 (이전에는 수술 없이 RemoveObject + GenerateContent 라 커닝이 사라졌다)
+  const bool needs_surgery = true;
   std::vector<ParkedDetached> parked;
   std::vector<std::uint8_t> token_bytes;
   const auto abort = [&](Result<LineEditResult> error) -> Result<LineEditResult> {
@@ -2233,7 +2235,22 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
         if (const std::string ls = mark_string(onpdf_mark_of(obj), "ls"); !ls.empty()) line_spacing = parse_points(ls);
       }
     }
-    if (old_objects.empty()) return make_error(ErrorCode::kInvalidArgument, "line not found");
+    if (old_objects.empty()) return abort(make_error(ErrorCode::kInvalidArgument, "line not found"));
+    // 줄 밖 검증 마스크의 바탕: 옛 상자 객체들의 영역 (#79: 상자 재수정도 수술)
+    bool first_box = true;
+    for (FPDF_PAGEOBJECT obj : old_objects) {
+      float bl = 0, bb = 0, br = 0, bt = 0;
+      if (!FPDFPageObj_GetBounds(obj, &bl, &bb, &br, &bt)) continue;
+      const Rect box = space.to_rect(bl, br, bb, bt);
+      if (first_box) {
+        line_bbox = box;
+        first_box = false;
+      } else {
+        const double x0 = std::min(line_bbox.x, box.x), y0 = std::min(line_bbox.y, box.y);
+        const double x1 = std::max(line_bbox.right(), box.right()), y1 = std::max(line_bbox.bottom(), box.bottom());
+        line_bbox = {x0, y0, x1 - x0, y1 - y0};
+      }
+    }
   } else {
     ScopedTextPage text_page(FPDFText_LoadPage(page->get()));
     if (!text_page) return abort(make_error(ErrorCode::kInvalidState, "FPDFText_LoadPage failed"));
@@ -2265,7 +2282,6 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
   // ---- 3. 새 텍스트 (덧붙인 스트림에만 쓴다 — 원본 스트림을 더럽히지 않는다) ----
   LineEditResult result;
   std::vector<FPDF_PAGEOBJECT> inserted;
-  std::vector<int> new_code_counts;  // inserted 와 같은 순서: 새 객체의 코드 수 (#77 커닝 주입)
   const auto remove_inserted = [&] {
     for (FPDF_PAGEOBJECT obj : inserted) {
       if (FPDFPage_RemoveObject(page->get(), obj)) FPDFPageObj_Destroy(obj);
@@ -2322,7 +2338,6 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
       FPDF_PAGEOBJECT raw = obj.release();
       FPDFPage_InsertObject(page->get(), raw);
       inserted.push_back(raw);
-      new_code_counts.push_back(static_cast<int>(chars.size()));  // SetText 는 글자마다 코드 하나 (font_covers 통과)
       if (!FPDFPage_GenerateContent(page->get())) return fail(make_error(ErrorCode::kInvalidState, "FPDFPage_GenerateContent failed"));
       result.box = box;
       result.ids = {id};
@@ -2336,22 +2351,10 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
       result.used_fallback = true;
       result.box = added->box;
       result.ids = added->ids;
-      for (std::size_t n = 0; n < result.ids.size(); ++n) {
-        if (auto [obj, index] = find_page_object(page->get(), result.ids[n]); obj != nullptr) {
-          inserted.push_back(obj);
-          new_code_counts.push_back(n < spec.lines.size() ? static_cast<int>(spec.lines[n].cids.size()) : 0);
-        }
+      for (const std::string& id : result.ids) {
+        if (auto [obj, index] = find_page_object(page->get(), id); obj != nullptr) inserted.push_back(obj);
       }
     }
-  }
-
-  // ---- 4. OnPdf 상자: 수술 없이 옛 객체만 지운다 ----
-  if (onpdf_box) {
-    for (FPDF_PAGEOBJECT obj : old_objects) {
-      if (FPDFPage_RemoveObject(page->get(), obj)) FPDFPageObj_Destroy(obj);
-    }
-    if (!FPDFPage_GenerateContent(page->get())) return make_error(ErrorCode::kInvalidState, "FPDFPage_GenerateContent failed");
-    return result;
   }
 
   // ---- 5. 수술할 바이트(새 텍스트 포함)와 수술 전 렌더 (되돌린 객체가 보이는 상태 — 수술 뒤 렌더와 같은 조건) ----
@@ -2387,24 +2390,21 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
       if (it->container < 0) ops.page_ordinals.insert(it->ordinal);
       else ops.form_ordinals[it->container].insert(it->ordinal);
     }
-    // 원 줄 자간을 새 객체에 균일 TJ 커닝으로 (#77): k = −spacing(사용자 단위)·1000/유효 크기, |k| ≤ 250
+    // 원 줄 자간을 새 객체에 Tc 로 (#77): Tc(텍스트 공간) = spacing(사용자 단위) / 가로 배율, |Tc| ≤ 0.25em
     if (std::abs(line_spacing) > 1e-6) {
       const Rect unit = space.to_rect(0, 1, 0, 1);
       const double scale = std::max(unit.w, unit.h);
-      for (std::size_t n = 0; n < inserted.size(); ++n) {
-        FPDF_PAGEOBJECT obj = inserted[n];
+      for (FPDF_PAGEOBJECT obj : inserted) {
         const auto it = std::find_if(analysis.objects.begin(), analysis.objects.end(), [&](const auto& o) { return o.handle == obj; });
         if (it == analysis.objects.end() || it->ordinal < 0 || it->container >= 0) continue;
         float obj_size = 0;
         FS_MATRIX m{};
         if (!FPDFTextObj_GetFontSize(obj, &obj_size) || !FPDFPageObj_GetMatrix(obj, &m)) continue;
-        const double eff = obj_size * std::hypot(m.a, m.b);  // TJ 숫자는 텍스트 x 축을 따라 가로 배율로 움직인다
-        if (eff <= 0.0) continue;
-        // 코드 수는 넣은 쪽이 안다 (추출 글자 수는 합자·결합 문자에서 다르다 — 리뷰 W2). 대체 글꼴은 CID 2바이트
-        const int code_count = new_code_counts.size() > n ? new_code_counts[n] : 0;
-        if (code_count < 3 || static_cast<int>(it->text.size()) != code_count) continue;  // 2글자는 추출이 공백을 끼운다 (리뷰 I4)
-        const double k = std::clamp(-(line_spacing / scale) * 1000.0 / eff, -250.0, 250.0);
-        ops.fits.push_back({-1, it->ordinal, k, code_count, result.used_fallback ? 2 : 0});
+        const double hx = std::hypot(m.a, m.b);  // Tc 는 텍스트 x 축을 따라 가로 배율로 움직인다
+        if (hx <= 0.0 || obj_size <= 0.0f || it->text.size() < 2) continue;
+        const double limit = 0.25 * obj_size;
+        const double tc = std::clamp((line_spacing / scale) / hx, -limit, limit);
+        ops.fits.push_back({-1, it->ordinal, tc});
       }
     }
   }

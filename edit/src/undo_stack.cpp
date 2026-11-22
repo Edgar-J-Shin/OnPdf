@@ -13,6 +13,7 @@ std::vector<std::shared_ptr<Command>> UndoStack::push(std::shared_ptr<Command> e
   // 병합: 다시 실행 기록이 없고, 맨 위가 저장 지점이 아니며, 맨 위가 합치기를 받아들이면 따로 올리지 않는다
   if (index_ > 0 && index_ == items_.size() && (!clean_index_ || *clean_index_ != index_) &&
       items_.back()->merge_with(*executed)) {
+    evicted.push_back(std::move(executed));  // 합쳐진 명령은 스택에 오르지 않는다 → 호출자가 discard (상태 토큰 해제, #79)
     return evicted;
   }
   // 다시 실행 기록 버리기. 저장 지점이 그 안에 있었으면 다시는 도달할 수 없다
