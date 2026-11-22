@@ -600,5 +600,185 @@ TEST(TextLines, SpaceOnlyObjectsKeepOrdinalsAligned) {
   ASSERT_TRUE(removed) << removed.error().message;
   EXPECT_EQ(page_text(*doc).find("Hello world line"), std::string::npos);
 }
+
+// ---- 줄 폭 맞춤 (#77) ----
+
+std::size_t utf8_length(const std::string& s) {
+  std::size_t n = 0;
+  for (const char ch : s) {
+    if ((static_cast<unsigned char>(ch) & 0xC0) != 0x80) ++n;
+  }
+  return n;
+}
+
+// 새 상자의 잉크 폭 (쪽 포인트)
+double box_width(const PdfiumDocument& doc, const std::string& box) {
+  auto objects = doc.text_objects(0);
+  EXPECT_TRUE(objects);
+  double left = 1e18, right = -1e18;
+  for (const auto& o : *objects) {
+    if (o.box != box) continue;
+    left = std::min(left, o.bbox.x);
+    right = std::max(right, o.bbox.right());
+  }
+  return right > left ? right - left : 0.0;
+}
+
+TEST(TextLines, InkWidthAndLetterSpacing) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-kern.pdf"));
+  ASSERT_TRUE(doc);
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines);
+  const TextLineInfo* wide = find_line(*lines, "Kerned wide gaps here");
+  const TextLineInfo* spaced = find_line(*lines, "Char spaced line here");
+  const TextLineInfo* trailing = find_line(*lines, "Trailing spaces line");
+  const TextLineInfo* tight = find_line(*lines, "Tightly kerned line");
+  const TextLineInfo* plain = find_line(*lines, "Plain line without spacing");
+  const TextLineInfo* huge = find_line(*lines, "Huge spacing");
+  for (const auto* l : {wide, spaced, trailing, tight, plain, huge}) ASSERT_NE(l, nullptr);
+  EXPECT_GT(plain->text_width, 100.0);
+  EXPECT_NEAR(plain->letter_spacing, 0.0, 0.1);
+  EXPECT_NEAR(spaced->letter_spacing, 2.0, 0.15) << "2 Tc";
+  EXPECT_GT(wide->letter_spacing, 0.3)
+      << "TJ -500 으로 넓힌 줄 (추출이 넣은 공백 3개의 자연 폭만큼 빠진다)";
+  EXPECT_LT(tight->letter_spacing, -0.1) << "TJ 80 으로 좁힌 줄";
+  EXPECT_LT(trailing->text_width, trailing->bbox.w - 10.0) << "끝 공백은 잉크 폭에 없다";
+  EXPECT_NEAR(trailing->letter_spacing, 0.0, 0.1);
+  EXPECT_NEAR(huge->letter_spacing, 20.0, 0.5);
+}
+
+// 대체 글꼴(번들 Noto) 경로: 새 폭 ≈ 새 글꼴 자연 폭 + 원 줄 자간 × 간격 수 (글꼴이 달라 원 폭과
+// 같지는 않다 — 자간 보존)
+double expected_width(const std::string& utf8, double size, double spacing) {
+  const auto shaped = bundled_face()->shape(utf8, size);
+  const double gaps = static_cast<double>(utf8_length(utf8)) - 1.0;
+  return shaped.width + spacing * gaps;
+}
+
+TEST(TextLines, ReplaceKeepsWidthWithKerning) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-kern.pdf"));
+  ASSERT_TRUE(doc);
+  const Bitmap before = render(*doc);
+  for (const char* needle :
+       {"Kerned wide gaps here", "Char spaced line here", "Tightly kerned line"}) {
+    auto lines = doc->text_lines(0);
+    ASSERT_TRUE(lines);
+    const TextLineInfo* line = find_line(*lines, needle);
+    ASSERT_NE(line, nullptr) << needle;
+    const TextLineInfo info = *line;
+    LineReplacement same{info.text, fallback_for(info, info.text), std::nullopt, std::nullopt};
+    auto replaced = doc->replace_text_line(0, info.id, same);
+    ASSERT_TRUE(replaced) << needle << ": " << replaced.error().message;
+    EXPECT_TRUE(replaced->fitted) << needle;
+    const double w = box_width(*doc, replaced->box);
+    const double expected = expected_width(info.text, info.font_size, info.letter_spacing);
+    EXPECT_NEAR(w, expected, std::max(2.5, expected * 0.03))
+        << needle << " width " << w << " expected " << expected;
+    auto objects = doc->text_objects(0);
+    ASSERT_TRUE(objects);
+    bool found = false;
+    for (const auto& o : *objects) {
+      if (o.box == replaced->box) {
+        EXPECT_NEAR(o.letter_spacing, info.letter_spacing, 0.01) << "마크 ls (부호 포함)";
+        found = true;
+      }
+    }
+    EXPECT_TRUE(found);
+    ASSERT_TRUE(doc->restore_document_state(replaced->before));
+    doc->drop_document_state(replaced->before);
+  }
+  EXPECT_EQ(render(*doc).pixels, before.pixels);
+  // 자간 없는 줄은 커닝을 넣지 않는다
+  auto lines = doc->text_lines(0);
+  const TextLineInfo plain = *find_line(*lines, "Plain line without spacing");
+  EXPECT_NEAR(plain.letter_spacing, 0.0, 0.1);
+  LineReplacement same_plain{plain.text, fallback_for(plain, plain.text), std::nullopt,
+                             std::nullopt};
+  auto replaced_plain = doc->replace_text_line(0, plain.id, same_plain);
+  ASSERT_TRUE(replaced_plain) << replaced_plain.error().message;
+  EXPECT_FALSE(replaced_plain->fitted);
+  ASSERT_TRUE(doc->restore_document_state(replaced_plain->before));
+  doc->drop_document_state(replaced_plain->before);
+  // 더 긴 글: 글자당 간격이 유지된다 (2 Tc 줄)
+  lines = doc->text_lines(0);
+  const TextLineInfo spaced = *find_line(*lines, "Char spaced line here");
+  const std::string longer = "Char spaced line here and more";
+  LineReplacement rep{longer, fallback_for(spaced, longer), std::nullopt, std::nullopt};
+  auto replaced = doc->replace_text_line(0, spaced.id, rep);
+  ASSERT_TRUE(replaced) << replaced.error().message;
+  EXPECT_TRUE(replaced->fitted);
+  const double w = box_width(*doc, replaced->box);
+  const double expected = expected_width(longer, spaced.font_size, spaced.letter_spacing);
+  EXPECT_NEAR(w, expected, std::max(2.5, expected * 0.03));
+  ASSERT_TRUE(doc->restore_document_state(replaced->before));
+  doc->drop_document_state(replaced->before);
+  // 한계: 20 Tc 줄은 |k| ≤ 250 (3pt @12pt) 로 잘린다
+  lines = doc->text_lines(0);
+  const TextLineInfo huge = *find_line(*lines, "Huge spacing");
+  LineReplacement same_huge{huge.text, fallback_for(huge, huge.text), std::nullopt, std::nullopt};
+  auto replaced_huge = doc->replace_text_line(0, huge.id, same_huge);
+  ASSERT_TRUE(replaced_huge) << replaced_huge.error().message;
+  EXPECT_TRUE(replaced_huge->fitted);
+  const double hw = box_width(*doc, replaced_huge->box);
+  const double capped = expected_width(huge.text, huge.font_size, 3.0);
+  EXPECT_NEAR(hw, capped, std::max(2.5, capped * 0.03)) << "3pt 한계";
+  EXPECT_LT(hw, huge.text_width * 0.6);
+}
+
+TEST(TextLines, KerningSurvivesSaveReopenAndMove) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-kern.pdf"));
+  ASSERT_TRUE(doc);
+  auto lines = doc->text_lines(0);
+  const TextLineInfo wide = *find_line(*lines, "Kerned wide gaps here");
+  LineReplacement same{wide.text, fallback_for(wide, wide.text), std::nullopt, std::nullopt};
+  auto replaced = doc->replace_text_line(0, wide.id, same);
+  ASSERT_TRUE(replaced) << replaced.error().message;
+  const double w0 = box_width(*doc, replaced->box);
+  const double expected0 = expected_width(wide.text, wide.font_size, wide.letter_spacing);
+  EXPECT_NEAR(w0, expected0, std::max(2.5, expected0 * 0.03));
+  ScopedTempDir dir;
+  const auto saved = dir / "kern.pdf";
+  ASSERT_TRUE(doc->save_to(saved, false));
+  auto reopened = PdfiumDocument::open(saved);
+  ASSERT_TRUE(reopened);
+  EXPECT_NEAR(box_width(*reopened, replaced->box), w0, 0.5) << "저장·다시 열기 뒤 폭 유지";
+  // 이동(GenerateContent 재생성) 뒤에도 커닝 유지
+  auto ids = std::vector<std::string>(replaced->ids.begin(), replaced->ids.end());
+  ASSERT_TRUE(reopened->move_page_objects(0, ids, {5.0, 7.0}));
+  EXPECT_NEAR(box_width(*reopened, replaced->box), w0, 0.5) << "이동 뒤 폭 유지";
+  const auto saved2 = dir / "kern2.pdf";
+  ASSERT_TRUE(reopened->save_to(saved2, false));
+  auto again = PdfiumDocument::open(saved2);
+  ASSERT_TRUE(again);
+  EXPECT_NEAR(box_width(*again, replaced->box), w0, 0.5) << "재생성 뒤 저장해도 폭 유지";
+  auto check = QpdfTools::check(saved2);
+  ASSERT_TRUE(check);
+  EXPECT_TRUE(check->warnings.empty());
+}
+
+// qpdf 치환 단위: 배열 문자열 하나인 TJ 만 바뀌고, Tj·여러 문자열 TJ·코드 수 불일치는 건너뛴다
+TEST(TextLines, SurgeryFitRewritesSingleStringTjArrayOnly) {
+  const auto bytes = onpdf::test::read_bytes(testdata("text-lines-kern.pdf"));
+  // 순번: 0 Kerned(TJ 여러 문자열) 1 Char spaced(Tj) 2 Trailing 3 Tightly 4 Plain 5 Huge 6 Single
+  // array string(TJ 문자열 하나)
+  ShowOpSurgery ops;
+  ops.fits = {{-1, 6, -40.0, 19}, {-1, 0, -40.0, 4}, {-1, 1, -40.0, 21}};
+  auto report = QpdfTools::remove_text_show_ops(bytes, {}, 0, ops);
+  ASSERT_TRUE(report) << report.error().message;
+  EXPECT_EQ(report->fitted, 1);
+  // (qpdf 가 스트림을 다시 압축하므로 바이트는 PDFium 으로 다시 열어 본다)
+  auto doc = PdfiumDocument::open_from_memory(report->bytes);
+  ASSERT_TRUE(doc);
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines);
+  const TextLineInfo* single = find_line(*lines, "Single array string");
+  ASSERT_NE(single, nullptr);
+  EXPECT_GT(single->letter_spacing, 0.4) << "−40/1000 × 12pt = 0.48pt 씩 벌어졌다";
+  ShowOpSurgery bad;
+  bad.fits = {{-1, 6, -40.0, 7}};  // 19 바이트를 7 로 못 나눈다
+  auto report2 = QpdfTools::remove_text_show_ops(bytes, {}, 0, bad);
+  ASSERT_TRUE(report2);
+  EXPECT_EQ(report2->fitted, 0);
+}
 }  // namespace
 }  // namespace onpdf::engine

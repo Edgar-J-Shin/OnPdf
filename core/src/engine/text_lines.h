@@ -1,7 +1,8 @@
 #pragma once
 
-// 기존 텍스트 줄 분석 (#65, engine 내부): 쪽의 텍스트 객체(직속 + Form XObject 1단계)를 기준선·방향·간격으로 줄로 묶고
-// FPDFText 추출 줄로 검증한다. PDFium 핸들을 다루므로 engine 안에서만 쓴다. 스파이크 #55 의 분석기를 제품화한 것
+// 기존 텍스트 줄 분석 (#65, engine 내부): 쪽의 텍스트 객체(직속 + Form XObject 1단계)를
+// 기준선·방향·간격으로 줄로 묶고 FPDFText 추출 줄로 검증한다. PDFium 핸들을 다루므로 engine
+// 안에서만 쓴다. 스파이크 #55 의 분석기를 제품화한 것
 
 #include "onpdf/core/engine/text_line.h"
 
@@ -21,8 +22,8 @@ struct AnalyzedObject {
   FPDF_PAGEOBJECT parent_form = nullptr;  // 쪽 직속이면 nullptr
   int container = -1;                     // -1 = 쪽 직속, n = 쪽의 n 번째 Form Do (이미지 제외)
   int index = -1;                         // 컨테이너 안 객체 index
-  int ordinal = -1;                       // 컨테이너 안 "비어 있지 않은 텍스트 객체" 순번 (qpdf 표시 연산자 순번과 같다)
-  int depth = 0;                          // Form 중첩 깊이 (0 = 쪽 직속)
+  int ordinal = -1;  // 컨테이너 안 "비어 있지 않은 텍스트 객체" 순번 (qpdf 표시 연산자 순번과 같다)
+  int depth = 0;     // Form 중첩 깊이 (0 = 쪽 직속)
   std::array<double, 6> container_matrix{1, 0, 0, 1, 0, 0};  // 컨테이너 → 쪽 사용자 좌표
   std::array<double, 6> matrix{1, 0, 0, 1, 0, 0};            // 텍스트 행렬 (쪽 사용자 좌표)
   double left = 0, bottom = 0, right = 0, top = 0;           // 경계 (쪽 사용자 좌표)
@@ -48,15 +49,18 @@ struct AnalyzedLine {
   bool mixed_fonts = false;
   bool multi_line_object = false;  // 어떤 멤버 객체가 두 추출 줄에 걸친다
   bool merged_lines = false;       // 서로 다른 추출 줄을 하나로 묶었다
-  bool invisible = false;          // 첫 객체의 렌더 모드가 3/7 (보이지 않는 OCR 글) — 고치면 보이게 된다
+  bool invisible = false;  // 첫 객체의 렌더 모드가 3/7 (보이지 않는 OCR 글) — 고치면 보이게 된다
+  double ink_left = 1e18,
+         ink_right = -1e18;  // 비공백 글자 상자의 가로 범위 (쪽 사용자 좌표) — 앞뒤 공백 제외 (#77)
+  int ink_chars = 0;         // 비공백 글자 수
 };
 
 struct PageAnalysis {
   std::vector<AnalyzedObject> objects;
   std::vector<AnalyzedLine> lines;
-  int page_text_objects = 0;              // 쪽 직속 비어 있지 않은 텍스트 객체 수
-  std::vector<int> form_text_objects;     // Form Do 순번별 (1단계)
-  bool has_deep_forms = false;            // 2단계 이상 Form 안에 텍스트가 있다
+  int page_text_objects = 0;           // 쪽 직속 비어 있지 않은 텍스트 객체 수
+  std::vector<int> form_text_objects;  // Form Do 순번별 (1단계)
+  bool has_deep_forms = false;         // 2단계 이상 Form 안에 텍스트가 있다
 };
 
 // 쪽 전체 분석. text_page 는 호출자가 연 FPDFText 페이지

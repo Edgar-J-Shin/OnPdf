@@ -51,6 +51,7 @@
 | `text-lines-basic-enc.pdf` | password | user `user` / owner `owner` | 1 | gen | Apache-2.0 | text-lines-basic 의 RC4 암호본 — 암호 유지 수술 |
 | `text-lines-form.pdf` | ok |  | 4 | gen | Apache-2.0 | Form XObject 1단계 줄(수정 가능)·2단계 줄(불가), 쪽 직속 줄, 이미지; 2쪽은 BT 안에서 나뉜 /Contents 배열(밀림); 3·4쪽은 공유 Form(불가) |
 | `text-lines-type3.pdf` | ok |  | 1 | gen | Apache-2.0 | Type3 줄(대체 글꼴)·임베딩 CID 한글 줄(원본 글꼴 재사용)·보이지 않는 3 Tr 줄(불가) |
+| `text-lines-kern.pdf` | ok |  | 1 | gen | Apache-2.0 | 줄 폭 맞춤(#77): TJ 넓힘·Tc 자간·끝 공백·좁힘 커닝·보통·큰 자간(한계)·배열 문자열 하나 TJ 줄 |
 <!-- manifest:end -->
 
 ## 출처·라이선스

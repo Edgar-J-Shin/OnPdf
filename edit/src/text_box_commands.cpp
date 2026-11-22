@@ -52,6 +52,7 @@ Result<engine::TextObjectsSpec> build_text_objects_spec(const TextBoxSpec& spec,
   engine::TextObjectsSpec out;
   out.box = box;
   out.width = spec.width;
+  out.letter_spacing = spec.letter_spacing;
   // 상자 원문 전체(빈 줄 포함)를 첫 줄 객체에 보관 — 빈 줄은 객체가 없어 줄 원문만으로는 복원할 수 없다 (리뷰 W1)
   for (std::size_t i = 0; i < source_lines.size(); ++i) out.box_text += (i ? "\n" : "") + source_lines[i];
   out.font.key = subset->key;
@@ -104,6 +105,7 @@ Result<TextBoxContent> collect_text_box(engine::EditableDocument& doc, int page,
       content.spec.utf8 = o.text;
       box_text = o.box_text;
       content.spec.width = o.width;
+      content.spec.letter_spacing = o.letter_spacing;
       first = false;
     } else {
       content.spec.utf8 += "\n" + o.text;

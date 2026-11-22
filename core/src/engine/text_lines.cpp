@@ -1,6 +1,7 @@
 #include "text_lines.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -193,6 +194,9 @@ struct Extraction {
   std::map<FPDF_PAGEOBJECT, std::set<int>> obj_lines;
   std::vector<char32_t> chars;
   std::vector<FPDF_PAGEOBJECT> char_obj;
+  std::vector<std::array<double, 4>>
+      boxes;  // 글자 상자 l,b,r,t (쪽 사용자 좌표); 공백·생성 글자는 0
+  std::vector<bool> has_box;
 };
 
 Extraction extract(FPDF_TEXTPAGE tp) {
@@ -205,6 +209,11 @@ Extraction extract(FPDF_TEXTPAGE tp) {
     FPDF_PAGEOBJECT o = FPDFText_GetTextObject(tp, i);
     ex.chars.push_back(c);
     ex.char_obj.push_back(o);
+    double l = 0, r = 0, b = 0, t = 0;
+    const bool box = o != nullptr && !is_space(c) && c != U'\r' && c != U'\n' &&
+                     FPDFText_GetCharBox(tp, i, &l, &r, &b, &t) && r > l;
+    ex.boxes.push_back({box ? l : 0.0, box ? b : 0.0, box ? r : 0.0, box ? t : 0.0});
+    ex.has_box.push_back(box);
     if (c == U'\r' || c == U'\n') {
       if (line_has) ++line;
       line_has = false;
@@ -356,6 +365,13 @@ PageAnalysis analyze_page(FPDF_PAGE page, FPDF_TEXTPAGE text_page) {
         }
       }
       cur.merged_lines = extract_ids.size() > 1;
+      for (std::size_t i = 0; i < ex.chars.size();
+           ++i) {  // 잉크 폭: 멤버 객체의 비공백 글자 상자 (#77)
+        if (!ex.has_box[i] || !members.count(ex.char_obj[i])) continue;
+        cur.ink_left = std::min(cur.ink_left, ex.boxes[i][0]);
+        cur.ink_right = std::max(cur.ink_right, ex.boxes[i][2]);
+        ++cur.ink_chars;
+      }
       cur.invisible =
           obj(cur.members.front()).render_mode == 3 || obj(cur.members.front()).render_mode == 7;
       cur.text = line_text(ex, members);
