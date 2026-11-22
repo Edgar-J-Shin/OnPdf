@@ -150,4 +150,11 @@ if(ONPDF_BUILD_SPIKES)
   target_compile_definitions(onpdf_spike_font_subst PRIVATE ONPDF_TESTDATA_DIR="${ONPDF_TESTDATA_DIR}" ONPDF_TEST_GLOBAL_PDFIUM=1)
   onpdf_set_warnings(onpdf_spike_font_subst)
   onpdf_set_runtime_rpath(onpdf_spike_font_subst)
+
+  # Spike (#75): 코퍼스 줄 수정 측정 — 제품 파이프라인(core+edit)만
+  add_executable(onpdf_spike_line_edit_measure spike/line_edit_measure_spike.cpp)
+  target_link_libraries(onpdf_spike_line_edit_measure PRIVATE onpdf::core onpdf::edit)
+  target_compile_definitions(onpdf_spike_line_edit_measure PRIVATE ONPDF_TESTDATA_DIR="${ONPDF_TESTDATA_DIR}")
+  onpdf_set_warnings(onpdf_spike_line_edit_measure)
+  onpdf_set_runtime_rpath(onpdf_spike_line_edit_measure)
 endif()
