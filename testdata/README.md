@@ -58,6 +58,8 @@
 - `gen+qpdf` = `simple.pdf` 를 qpdf 로 AES-256 암호화 (출력에 임의 IV 가 들어가 결정적이지 않으므로 `--check` 대상에서 제외)
 - `pdfium` = PDFium `testing/resources` (chromium/8152), BSD-3-Clause — `licenses/PDFium-LICENSE.txt`
 - `fonts/NotoSansKR-subset.ttf` = Noto Sans KR 의 wght 400 서브셋(family 이름 변경), SIL OFL 1.1 — `licenses/OFL.txt`
+- `fonts/NotoSansCJKkr-subset.otf` = Noto Sans CJK KR(OTF, CID-keyed CFF)의 같은 글자 서브셋 — CFF 저장 후처리·charset 테스트(#73), SIL OFL 1.1
+- `fonts/NotoSansKR-subset.ttc` = 위 TTF 서브셋 2벌(면 1 family `NotoSansKR-subset-Face1`) — TTC 면 선택 테스트(#73)
 
 ## 갱신 절차
 ```bash

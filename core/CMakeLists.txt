@@ -9,9 +9,11 @@ add_library(onpdf_core STATIC
   src/engine/form_env.cpp
   src/engine/save.cpp
   src/engine/qpdf_tools.cpp
+  src/engine/cff_charset.cpp
   src/page_ranges.cpp
   src/image/png_io.cpp
   src/platform/fs_sync.cpp
+  src/platform/font_dirs.cpp
   src/view/page_layout.cpp
   src/view/tile_cache.cpp
   src/view/tile_source.cpp

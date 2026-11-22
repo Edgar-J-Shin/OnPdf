@@ -21,6 +21,7 @@ add_library(onpdf_app_lib STATIC
   image_import.h image_import.cpp
   form_field_editor.h form_field_editor.cpp
   structure_job.h structure_job.cpp
+  font_catalog_loader.h font_catalog_loader.cpp
   main_window.h main_window.cpp
 )
 target_include_directories(onpdf_app_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

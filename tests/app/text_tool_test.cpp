@@ -2,6 +2,7 @@
 #include "annotation_dialog.h"
 #include "document_view.h"
 #include "main_window.h"
+#include "onpdf/edit/font_catalog.h"
 #include "onpdf/core/engine/document_handle.h"
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/core/engine/pdfium_worker.h"
@@ -63,6 +64,7 @@ class TextToolTest : public ::testing::Test {
     window_.show();
     // 번들 폰트 대신 저장소 서브셋 폰트 (CI 에는 번들이 없다)
     EXPECT_TRUE(window_.set_text_font(QString::fromStdString(onpdf::path_to_utf8(testdata("fonts") / "NotoSansKR-subset.ttf"))));
+    window_.set_font_catalog(std::make_shared<const edit::FontCatalog>(edit::FontCatalog::from_entries({})));  // 시스템 글꼴 배제 (결정적)
   }
   static engine::PdfiumWorker::Options options() {
     engine::PdfiumWorker::Options o;

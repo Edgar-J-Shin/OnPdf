@@ -122,7 +122,7 @@ PDF에는 문단이 없고 글자 조각이 좌표에 놓여 있을 뿐입니다
 
 - 원본 폰트가 서브셋이라 새 글자가 없는 경우가 많습니다. 폰트 이름으로 시스템 폰트를 찾고, 없으면 굵기·세리프 여부가 비슷한 폰트로 대체합니다.
 - 한글은 CID 폰트로 임베딩해야 합니다(비-CID TrueType 은 `.notdef` 로 렌더 — #43 검증). PDFium 은 ToUnicode 를 글리프→유니코드 역매핑으로 자동 생성해 공백/NBSP 처럼 글리프를 공유하는 글자에서 틀리므로, `FPDFText_LoadCidType2Font` 에 **우리가 만든 ToUnicode·CIDToGIDMap** 을 주고 텍스트는 CID 배열(`FPDFText_SetCharcodes`)로 넣습니다. 폰트 객체는 문서당 하나를 재사용합니다(두 번 로드하면 두 번 임베딩).
-- PDFium 은 서브셋하지 않습니다(Noto Sans KR 전체 임베딩 시 문서 +3MB, 문장 서브셋은 +10KB — #43). 저장할 글자 집합으로 HarfBuzz `hb-subset` 서브셋을 만들어 넣습니다. 미참조 폰트 객체(취소한 텍스트의 서브셋)는 PDFium 이 저장 때 거르지 않으므로 비증분 저장 뒤 qpdf 재작성으로 떨어뜨립니다(#59: 4.7KB→1.5KB, 렌더·추출 동일, 서명 문서의 증분 저장은 제외). OTF(CFF)·TTC 서브셋은 그려지지만 `/FontFile2` 안의 CFF 라 규격 위반 — M4 폰트 대체에서 FontFile3 후처리 또는 glyf 글꼴 제한으로 결정하고 TTC 는 면 선택이 필요합니다(#59).
+- PDFium 은 서브셋하지 않습니다(Noto Sans KR 전체 임베딩 시 문서 +3MB, 문장 서브셋은 +10KB — #43). 저장할 글자 집합으로 HarfBuzz `hb-subset` 서브셋을 만들어 넣습니다. 미참조 폰트 객체(취소한 텍스트의 서브셋)는 PDFium 이 저장 때 거르지 않으므로 비증분 저장 뒤 qpdf 재작성으로 떨어뜨립니다(#59: 4.7KB→1.5KB, 렌더·추출 동일, 서명 문서의 증분 저장은 제외). OTF(CFF)·TTC 서브셋은 `/FontFile2` 안의 CFF 라 규격 위반이므로 비증분 저장의 같은 qpdf 재작성에서 `FontFile3/OpenType` + `CIDFontType0` 으로 바꾸고 CFF charset 을 항등으로 덮어씁니다(hb-subset 이 원래 CID 를 남겨 charset 을 보는 뷰어가 글자를 못 찾음 — #71). TTC 는 `FontFace::load(path, face_index)` 로 면을 고릅니다. 대체 글꼴은 시스템 글꼴 폴더를 HarfBuzz 로 훑은 카탈로그에서 원본 이름과 같은 것 → 한글 기본 Sans → 번들 Noto 순으로 고릅니다(#73).
 
 **렌더링 성능**
 

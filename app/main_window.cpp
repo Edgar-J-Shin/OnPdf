@@ -3,6 +3,7 @@
 #include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/engine/save.h"
 #include "onpdf/core/page_ranges.h"
+#include "onpdf/core/platform/font_dirs.h"
 #include "onpdf/core/platform/path.h"
 #include "onpdf/edit/add_text_command.h"
 #include "onpdf/edit/annotation_commands.h"
@@ -123,6 +124,11 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
 
   edit_ = new EditController(dispatcher_, this);
   structure_job_ = new StructureJob(dispatcher_, this);
+  catalog_loader_ = new FontCatalogLoader(dispatcher_, this);
+  connect(catalog_loader_, &FontCatalogLoader::ready, this, [this] {
+    if (font_catalog_ == nullptr)
+      set_font_catalog(catalog_loader_->catalog());  // 테스트가 먼저 주입했으면 그대로
+  });
   connect(structure_job_, &StructureJob::finished, this, &MainWindow::on_structure_finished);
   build_menus();
   build_annotation_ui();
@@ -834,7 +840,10 @@ void MainWindow::build_annotation_ui() {
     action->setStatusTip(tips[i]);
     action->setChecked(i == 0);
     connect(action, &QAction::triggered, this, [this, i](bool checked) {
-      if (checked) view_->set_tool(static_cast<AnnotationTool>(i));
+      if (!checked) return;
+      view_->set_tool(static_cast<AnnotationTool>(i));
+      if (static_cast<AnnotationTool>(i) == AnnotationTool::kText)
+        ensure_font_catalog();  // 줄 수정 전에 미리 (#73)
     });
     tool_actions_[i] = action;
     annotation_toolbar_->addAction(action);
@@ -1017,7 +1026,9 @@ void MainWindow::set_annotation_color(engine::Color color) {
     if (line->info.color.r == color.r && line->info.color.g == color.g &&
         line->info.color.b == color.b)
       return;
-    run_line_replace(line->page, line->info.id, std::nullopt, std::nullopt, color);
+    run_line_replace(
+        line->page, line->info.id, std::nullopt, std::nullopt, color,
+        fallback_font_for(line->info.font_name, QString::fromStdString(line->info.text)));
     return;
   }
   if (auto selected = view_->selected_text_box(); selected) {  // 선택한 텍스트 상자의 색만
@@ -1025,8 +1036,10 @@ void MainWindow::set_annotation_color(engine::Color color) {
         selected->color.b == color.b)
       return;
     if (selected->original_font)
-      run_line_replace(selected->page, selected->box, std::nullopt, std::nullopt,
-                       color);  // 원본 글꼴 유지
+      run_line_replace(
+          selected->page, selected->box, std::nullopt, std::nullopt, color,
+          fallback_font_for(selected->font_name,
+                            QString::fromStdString(selected->text)));  // 원본 글꼴 유지
     else
       replace_selected_text(std::nullopt, std::nullopt, color);
     return;
@@ -1096,6 +1109,61 @@ void MainWindow::load_bundled_text_font() {
   }
 }
 
+void MainWindow::set_font_catalog(std::shared_ptr<const edit::FontCatalog> catalog) {
+  font_catalog_ = std::move(catalog);
+  fallback_cache_.clear();
+}
+
+void MainWindow::ensure_font_catalog() {
+  if (font_catalog_ != nullptr || font_scan_started_) return;
+  font_scan_started_ = true;
+  catalog_loader_->start(platform::system_font_dirs());
+}
+
+std::shared_ptr<const edit::FontFace> MainWindow::load_catalog_font(const edit::FontEntry& entry) {
+  const std::string key = onpdf::path_to_utf8(entry.path) + "#" + std::to_string(entry.face_index);
+  for (auto it = fallback_cache_.begin(); it != fallback_cache_.end(); ++it) {
+    if (it->first != key) continue;
+    auto face = it->second;
+    fallback_cache_.erase(it);
+    fallback_cache_.emplace_back(key, face);  // 최근 사용을 뒤로
+    return face;
+  }
+  auto face = edit::FontFace::load(entry.path, entry.face_index);
+  if (!face) return nullptr;
+  fallback_cache_.emplace_back(key, *face);
+  if (fallback_cache_.size() > 8) fallback_cache_.erase(fallback_cache_.begin());
+  return *face;
+}
+
+std::shared_ptr<const edit::FontFace> MainWindow::fallback_font_for(
+    const std::string& base_font_name, const QString& text) {
+  if (font_catalog_ == nullptr) {
+    ensure_font_catalog();  // 끝나기 전에는 번들
+    return text_font_;
+  }
+  const bool allow_cff = session_.handle().info().signature_count == 0;
+  const std::string utf8 = text.toUtf8().toStdString();
+  std::vector<const edit::FontEntry*> candidates = font_catalog_->match(base_font_name, allow_cff);
+  bool hangul = false;
+  for (const QChar ch : text) {
+    const ushort u = ch.unicode();
+    if ((u >= 0xAC00 && u <= 0xD7A3) || (u >= 0x1100 && u <= 0x11FF) ||
+        (u >= 0x3130 && u <= 0x318F))
+      hangul = true;
+  }
+  if (hangul) {
+    if (const edit::FontEntry* sans = font_catalog_->default_hangul_sans(allow_cff);
+        sans != nullptr)
+      candidates.push_back(sans);
+  }
+  for (const edit::FontEntry* entry : candidates) {
+    auto face = load_catalog_font(*entry);
+    if (face != nullptr && face->missing(utf8).empty()) return face;
+  }
+  return text_font_;
+}
+
 bool MainWindow::set_text_font(const QString& path) {
   auto face = edit::FontFace::load(onpdf::path_from_utf8(path.toUtf8().toStdString()));
   if (!face) {
@@ -1119,7 +1187,9 @@ void MainWindow::set_text_size(double size) {
       return;
     }
     if (std::abs(line->info.font_size - size) < 0.01) return;
-    run_line_replace(line->page, line->info.id, std::nullopt, size, std::nullopt);
+    run_line_replace(
+        line->page, line->info.id, std::nullopt, size, std::nullopt,
+        fallback_font_for(line->info.font_name, QString::fromStdString(line->info.text)));
     return;
   }
   // 텍스트 상자가 선택돼 있으면 그 상자의 크기만 바꾼다 (주석 색 버튼과 같은 규칙). 없으면 새
@@ -1127,8 +1197,10 @@ void MainWindow::set_text_size(double size) {
   if (auto selected = view_->selected_text_box(); selected && !view_->selected_annotation()) {
     if (std::abs(selected->font_size - size) < 0.01) return;
     if (selected->original_font)
-      run_line_replace(selected->page, selected->box, std::nullopt, size,
-                       std::nullopt);  // 원본 글꼴 유지
+      run_line_replace(
+          selected->page, selected->box, std::nullopt, size, std::nullopt,
+          fallback_font_for(selected->font_name,
+                            QString::fromStdString(selected->text)));  // 원본 글꼴 유지
     else
       replace_selected_text(std::nullopt, size, std::nullopt);
     return;
@@ -1486,6 +1558,7 @@ QString MainWindow::line_reason_text(const engine::TextLineInfo& info) const {
 void MainWindow::on_text_line_selected(bool has, int, const engine::TextLineInfo& info) {
   update_edit_actions();
   update_property_buttons();
+  if (has) ensure_font_catalog();
   if (!has) {
     if (selection_status_shown_) show_transient(QString());
     return;
@@ -1511,13 +1584,15 @@ void MainWindow::on_text_line_selected(bool has, int, const engine::TextLineInfo
 }
 
 bool MainWindow::run_line_replace(int page, const std::string& line_id, std::optional<QString> text,
-                                  std::optional<double> size, std::optional<engine::Color> color) {
+                                  std::optional<double> size, std::optional<engine::Color> color,
+                                  std::shared_ptr<const edit::FontFace> fallback_face) {
   if (!text_edits_allowed_ || text_font_ == nullptr) return false;
   if (!warn_signature_once()) return false;
   std::optional<std::string> utf8;
   if (text) utf8 = text->toUtf8().toStdString();
-  auto command =
-      std::make_shared<edit::ReplaceTextLineCommand>(page, line_id, utf8, size, color, text_font_);
+  if (fallback_face == nullptr) fallback_face = text_font_;
+  auto command = std::make_shared<edit::ReplaceTextLineCommand>(page, line_id, utf8, size, color,
+                                                                std::move(fallback_face));
   pending_line_edit_ = command;
   if (!edit_->run(command)) {
     pending_line_edit_.reset();
@@ -1545,10 +1620,11 @@ void MainWindow::on_text_line_edit_requested(int page, const engine::TextLineInf
                              .trimmed();  // 한 줄: 줄바꿈은 공백으로
     // (AnnotationDialog 는 여러 줄 입력이지만 줄 수정은 한 줄이다)
     if (text.isEmpty() || text.toStdString() == info.text) return;
+    auto face = fallback_font_for(info.font_name, text);  // 원본 글꼴이 못 그릴 때 쓸 후보 (#73)
     const std::u32string missing =
-        text_font_->missing(text.toUtf8().toStdString());  // 대체 글꼴에도 없는 글자는 거절
+        face->missing(text.toUtf8().toStdString());  // 대체 글꼴에도 없는 글자는 거절
     if (missing.empty()) {
-      run_line_replace(page, info.id, text, std::nullopt, std::nullopt);
+      run_line_replace(page, info.id, text, std::nullopt, std::nullopt, std::move(face));
       return;
     }
     QMessageBox warn(QMessageBox::Warning, tr("줄 수정"),
@@ -1589,7 +1665,8 @@ void MainWindow::announce_line_edit() {
   }
   // 안내는 새 상자의 선택 문구 뒤에 보여야 남는다 (재선택이 상태 표시줄을 덮는다)
   pending_line_notice_ = replace->used_fallback()
-                             ? tr("원본 글꼴에 없는 글자가 있어 Noto Sans KR 로 넣었습니다")
+                             ? tr("원본 글꼴에 없는 글자가 있어 %1 로 넣었습니다")
+                                   .arg(QString::fromStdString(replace->fallback_family()))
                              : QString();
   if (replace->box().empty() && !pending_line_notice_.isEmpty())
     show_transient(std::exchange(pending_line_notice_, QString()));
@@ -1630,14 +1707,15 @@ void MainWindow::on_text_edit_requested(int, const DocumentView::SelectedTextBox
     if (dialog.exec() != QDialog::Accepted) return;
     const QString text = dialog.text().normalized(QString::NormalizationForm_C);
     if (text.trimmed().isEmpty() || text.toStdString() == box.text)
-      return;  // 빈 내용·같은 내용은 무시 (삭제는 Delete)
-    const std::u32string missing = text_font_->missing(text.toUtf8().toStdString());
+      return;                                            // 빈 내용·같은 내용은 무시 (삭제는 Delete)
+    auto face = fallback_font_for(box.font_name, text);  // 같은 계열의 대체 글꼴 (#73)
+    const std::u32string missing = face->missing(text.toUtf8().toStdString());
     if (missing.empty()) {
       if (box.original_font)
-        run_line_replace(box.page, box.box, text, std::nullopt,
-                         std::nullopt);  // 원본 글꼴로 고친 줄은 다시 원본 글꼴로 (#65)
+        run_line_replace(box.page, box.box, text, std::nullopt, std::nullopt,
+                         face);  // 원본 글꼴로 고친 줄은 다시 원본 글꼴로 (#65)
       else
-        replace_selected_text(text, std::nullopt, std::nullopt);
+        replace_selected_text(text, std::nullopt, std::nullopt, face);
       return;
     }
     QMessageBox warn(QMessageBox::Warning, tr("텍스트"),
@@ -1650,15 +1728,19 @@ void MainWindow::on_text_edit_requested(int, const DocumentView::SelectedTextBox
 }
 
 bool MainWindow::replace_selected_text(std::optional<QString> utf8, std::optional<double> size,
-                                       std::optional<engine::Color> color) {
+                                       std::optional<engine::Color> color,
+                                       std::shared_ptr<const edit::FontFace> face) {
   auto selected = view_->selected_text_box();
   if (!selected || !text_edits_allowed_ || text_font_ == nullptr) return false;
   if (!warn_signature_once()) return false;
   std::optional<std::string> text;
   if (utf8) text = utf8->toUtf8().toStdString();
   if (color) color->a = 255;
-  return edit_->run(std::make_shared<edit::ReplaceTextBoxCommand>(selected->page, selected->box,
-                                                                  text_font_, text, size, color));
+  if (face == nullptr)
+    face = fallback_font_for(selected->font_name,
+                             QString::fromStdString(selected->text));  // 같은 글꼴 유지 (#73)
+  return edit_->run(std::make_shared<edit::ReplaceTextBoxCommand>(
+      selected->page, selected->box, std::move(face), text, size, color));
 }
 
 void MainWindow::on_ink_requested(int page, const std::vector<onpdf::Point>& points,

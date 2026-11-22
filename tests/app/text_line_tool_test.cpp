@@ -2,7 +2,9 @@
 // 안내·새 상자 선택, Delete → 삭제, 실행 취소, 불가 줄 안내, 권한·서명 게이트
 #include "onpdf/core/engine/document_handle.h"
 #include "onpdf/core/engine/pdfium_worker.h"
+#include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/platform/path.h"
+#include "onpdf/edit/font_catalog.h"
 
 #include "../test_support.h"
 #include "annotation_dialog.h"
@@ -57,6 +59,8 @@ class TextLineToolTest : public ::testing::Test {
     window_.show();
     EXPECT_TRUE(window_.set_text_font(
         QString::fromStdString(onpdf::path_to_utf8(testdata("fonts") / "NotoSansKR-subset.ttf"))));
+    window_.set_font_catalog(std::make_shared<const edit::FontCatalog>(
+        edit::FontCatalog::from_entries({})));  // 시스템 글꼴 배제 (결정적)
   }
   static engine::PdfiumWorker::Options options() {
     engine::PdfiumWorker::Options o;
@@ -159,8 +163,8 @@ TEST_F(TextLineToolTest, HoverSelectEditDeleteUndo) {
   ASSERT_TRUE(spin_until([&] { return view()->selected_object().has_value(); }))
       << "새 텍스트 상자가 선택된다";
   EXPECT_FALSE(view()->selected_line().has_value());
-  EXPECT_TRUE(window_.statusBar()->currentMessage().contains(QStringLiteral("Noto Sans KR")))
-      << "대체 글꼴 안내";
+  EXPECT_TRUE(window_.statusBar()->currentMessage().contains(QStringLiteral("NotoSansKR-subset")))
+      << "대체 글꼴 안내 (실제 글꼴 이름)";
   // 실행 취소 → 원래 줄
   ASSERT_TRUE(window_.edit_controller()->undo());
   ASSERT_TRUE(wait_text_contains(0, QStringLiteral("Hello world line")));
@@ -244,6 +248,84 @@ TEST_F(TextLineToolTest, SizeComboAndPaletteApplyToSelectedLine) {
       [&] { return idle() && view()->text_objects(0) && view()->text_objects(0)->empty(); }));
   ASSERT_TRUE(wait_lines(0));
   EXPECT_NE(line_containing(0, QStringLiteral("한글 텍스트 줄")), nullptr);
+}
+
+// #73: 카탈로그에 원본 글꼴과 같은 이름이 있으면 그 글꼴(CFF 포함)로, 없으면 번들로
+TEST_F(TextLineToolTest, FallbackFontComesFromCatalog) {
+  edit::FontEntry helvetica;
+  helvetica.path = testdata("fonts") / "NotoSansCJKkr-subset.otf";
+  helvetica.family =
+      "Helvetica";  // 카탈로그 이름(매칭 기준)은 BaseFont 와 같게, 실제 파일은 CFF 서브셋
+  helvetica.style = "Regular";
+  helvetica.cff = true;
+  helvetica.hangul = true;
+  helvetica.glyph_count = 484;
+  window_.set_font_catalog(
+      std::make_shared<const edit::FontCatalog>(edit::FontCatalog::from_entries({helvetica})));
+  open_copy("text-lines-basic.pdf");
+  ASSERT_TRUE(wait_lines(0));
+  ASSERT_TRUE(spin_until([&] { return view()->text_index(0) != nullptr; }));
+  const engine::TextLineInfo* hello = line_containing(0, QStringLiteral("Hello world line"));
+  ASSERT_NE(hello, nullptr);
+  EXPECT_EQ(hello->font_name, "Helvetica");
+  const engine::TextLineInfo hello_info = *hello;
+  window_.tool_action(AnnotationTool::kText)->trigger();
+  click(center_of(0, hello_info));
+  ASSERT_TRUE(view()->selected_line().has_value());
+  when_dialog("text_input", [](QWidget* w) {
+    auto* edit = w->findChild<QPlainTextEdit*>(QStringLiteral("note_text"));
+    ASSERT_NE(edit, nullptr);
+    edit->setPlainText(QStringLiteral("Hello 한글 CID"));
+    static_cast<AnnotationDialog*>(w)->accept();
+  });
+  QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+  QApplication::sendEvent(view(), &enter);
+  ASSERT_TRUE(wait_text_contains(0, QStringLiteral("Hello 한글 CID")));
+  ASSERT_TRUE(spin_until([&] { return view()->selected_text_box().has_value(); }));
+  EXPECT_EQ(view()->selected_text_box()->font_name, "NotoSansCJKkr-subset")
+      << "카탈로그 글꼴(CFF)로 넣었다";
+  EXPECT_TRUE(
+      window_.statusBar()->currentMessage().contains(QStringLiteral("NotoSansCJKkr-subset")));
+  // 같은 상자의 크기 변경도 같은 글꼴을 유지한다 (번들로 바뀌지 않는다)
+  window_.set_text_size(30);
+  ASSERT_TRUE(spin_until([&] {
+    return idle() && view()->text_objects(0) && !view()->text_objects(0)->empty() &&
+           std::abs((*view()->text_objects(0))[0].font_size - 30.0) < 0.05;
+  }));
+  EXPECT_EQ((*view()->text_objects(0))[0].font_name, "NotoSansCJKkr-subset");
+  // 저장하면 CFF 글꼴이 규격(FontFile3)으로 바뀐다
+  const auto saved_path = dir_ / "saved.pdf";
+  ASSERT_TRUE(window_.save_to(QString::fromStdString(onpdf::path_to_utf8(saved_path))));
+  ASSERT_TRUE(spin_until([&] { return idle() && std::filesystem::exists(saved_path); }));
+  auto census = engine::QpdfTools::font_census(saved_path);
+  ASSERT_TRUE(census) << census.error().message;
+  EXPECT_EQ(census->fontfile2_otto, 0);
+  EXPECT_EQ(census->fontfile3_opentype, 1);
+  // 카탈로그를 비우면 번들로
+  ASSERT_TRUE(window_.edit_controller()->undo());
+  ASSERT_TRUE(wait_idle());
+  ASSERT_TRUE(window_.edit_controller()->undo());
+  ASSERT_TRUE(wait_text_contains(0, QStringLiteral("Hello world line")));
+  ASSERT_TRUE(wait_lines(0));
+  window_.set_font_catalog(
+      std::make_shared<const edit::FontCatalog>(edit::FontCatalog::from_entries({})));
+  window_.tool_action(AnnotationTool::kText)->trigger();
+  const engine::TextLineInfo* again = line_containing(0, QStringLiteral("Hello world line"));
+  ASSERT_NE(again, nullptr);
+  const engine::TextLineInfo again_info = *again;
+  click(center_of(0, again_info));
+  ASSERT_TRUE(view()->selected_line().has_value());
+  when_dialog("text_input", [](QWidget* w) {
+    auto* edit = w->findChild<QPlainTextEdit*>(QStringLiteral("note_text"));
+    ASSERT_NE(edit, nullptr);
+    edit->setPlainText(QStringLiteral("Hello 한글 again"));
+    static_cast<AnnotationDialog*>(w)->accept();
+  });
+  QApplication::sendEvent(view(), &enter);
+  ASSERT_TRUE(wait_text_contains(0, QStringLiteral("Hello 한글 again")));
+  ASSERT_TRUE(spin_until([&] { return view()->selected_text_box().has_value(); }));
+  EXPECT_EQ(view()->selected_text_box()->font_name, "NotoSansKR-subset") << "카탈로그가 비면 번들";
+  EXPECT_TRUE(window_.has_font_catalog()) << "주입한 카탈로그가 스캔 결과로 덮이지 않는다";
 }
 
 TEST_F(TextLineToolTest, UneditableLineAndSignedDocumentAreExplained) {

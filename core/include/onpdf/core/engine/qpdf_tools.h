@@ -25,6 +25,24 @@ struct StructureInput {
 
 struct JobReport {
   std::vector<std::string> warnings;  // qpdf 경고 (손상 복구 등). 비어 있지 않아도 성공이다
+  int converted_fonts = 0;            // rewrite 가 CFF 규격으로 바꾼 글꼴 수 (#73)
+};
+
+// rewrite 옵션 (#73): OnPdf 가 FPDFText_LoadCidType2Font 로 넣은 OTF(CFF) 서브셋은 /FontFile2 안의 CFF 라 규격 위반이다.
+// FontFile2 바이트의 FNV-1a 64 hex(= 엔진의 서브셋 key)가 convert_cff_keys 에 있으면 FontFile3/OpenType + CIDFontType0
+// + charset 항등으로 바꾼다. 비어 있으면 재작성만 한다
+struct RewriteOptions {
+  std::vector<std::string> convert_cff_keys;
+};
+
+// 글꼴 통계 (테스트·검증용)
+struct FontCensus {
+  int cid_type2 = 0;
+  int cid_type0 = 0;
+  int fontfile2_otto = 0;        // /FontFile2 에 CFF(OTTO) — 규격 위반
+  int fontfile3_opentype = 0;
+  int cid_to_gid_maps = 0;
+  bool charsets_identity = true;  // FontFile3/OpenType 의 CID-keyed CFF charset 이 모두 항등
 };
 
 using ProgressFn = std::function<void(int percent)>;  // 작업 스레드에서 호출된다
@@ -58,7 +76,8 @@ class QpdfTools {
   // input 을 output 으로 다시 쓴다: 트레일러에서 닿는 객체만 남고(취소한 텍스트의 폰트 같은 미참조 객체 폐기) 암호화·객체
   // 스트림은 입력대로. 손상 복구 경고는 성공(report.warnings). 암호가 틀리면 kPasswordRequired. output 은 input 과 달라야 한다 (#61)
   [[nodiscard]] static Result<JobReport> rewrite(const std::filesystem::path& input, const std::filesystem::path& output,
-                                                 std::string_view password = {});
+                                                 std::string_view password = {}, const RewriteOptions& options = {});
+  [[nodiscard]] static Result<FontCensus> font_census(const std::filesystem::path& file, std::string_view password = {});
   // 메모리 입출력. 암호화는 유지(password 로 연다). 실패는 kJobFailed, 쪽 범위 밖은 kInvalidArgument (#65)
   [[nodiscard]] static Result<SurgeryReport> remove_text_show_ops(const std::vector<std::uint8_t>& in, std::string_view password,
                                                                   int page_index, const ShowOpSurgery& ops);

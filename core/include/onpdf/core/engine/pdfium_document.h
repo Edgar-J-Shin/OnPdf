@@ -101,6 +101,9 @@ class PdfiumDocument final : public EditableDocument {
   // 폰트 캐시(fonts_)의 글꼴 가운데 어느 쪽의 텍스트 객체도 쓰지 않는 것이 있는가 (취소한 텍스트의 서브셋 — #61).
   // 캐시가 비어 있으면 쪽을 열지 않고 false. 쪽을 못 열면 보수적으로 false (쓰이는지 모르면 지우지 않는다)
   [[nodiscard]] bool has_unreferenced_fonts() const;
+  // 폰트 캐시 가운데 OTF(CFF) 서브셋의 key (#73). 저장 후처리가 FontFile2 바이트 해시로 찾아 규격(FontFile3)으로 바꾼다.
+  // 미참조여도 포함한다 (재작성이 어차피 떨어뜨린다)
+  [[nodiscard]] std::vector<std::string> cff_font_keys() const;
 
   // ---- 기존 텍스트 줄 수정 (#65) ----
   [[nodiscard]] Result<std::vector<TextLineInfo>> text_lines(int page_index) const override;
@@ -191,7 +194,14 @@ class PdfiumDocument final : public EditableDocument {
   std::unordered_map<SnapshotId, Snapshot> snapshots_;
   SnapshotId next_snapshot_ = 1;
   // 임베딩 폰트 캐시: 서브셋 key → 문서에 로드된 폰트. doc_ 보다 뒤에 선언 → 먼저 닫힌다
-  std::unordered_map<std::string, ScopedFont> fonts_;
+  struct LoadedFont {
+    ScopedFont font;
+    bool cff = false;  // 서브셋 바이트가 OTTO (#73 저장 후처리 대상)
+  };
+  std::unordered_map<std::string, LoadedFont> fonts_;
+  // 이 문서에 넣은 CFF 서브셋의 key 전부 (#73). 줄 수정이 replace_bytes 로 다시 열면 fonts_ 는 비지만 글꼴은 바이트에 남아
+  // 있으므로 따로 기억한다. 취소로 사라진 key 는 재작성이 그냥 지나친다(변환 0)
+  std::unordered_set<std::string> cff_keys_;
   // 떼어 낸 쪽 객체 (삭제·추가 취소, #49). doc_ 보다 뒤에 선언 → 문서보다 먼저 Destroy 된다
   struct Detached {
     int page = 0;
