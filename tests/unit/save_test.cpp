@@ -740,5 +740,41 @@ TEST(SaveDocument, GlyfSaveIsNotRewrittenWithoutUnreferencedFonts) {
   EXPECT_FALSE(rewrite_called);
   EXPECT_FALSE(saved->fonts_converted);
 }
+
+// 비CID CFF(이름 기반 charset): 사전만 FontFile3/CIDFontType0 으로 바꾸고 charset 은 손대지 않는다 (규격: CID = GID, 리뷰 W4)
+TEST(SaveDocument, NonCidCffFontIsConvertedWithoutCharsetRewrite) {
+  ScopedTempDir dir;
+  auto face = edit::FontFace::load(testdata("fonts") / "SourceSans3-subset.otf");
+  ASSERT_TRUE(face) << face.error().message;
+  EXPECT_TRUE((*face)->is_cff());
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc);
+  edit::TextBoxSpec spec;
+  spec.page = 0;
+  spec.origin = {72, 100};
+  spec.utf8 = "Latin CFF text 123";
+  spec.face = *face;
+  edit::AddTextCommand cmd(spec);
+  ASSERT_TRUE(cmd.execute(*doc));
+  ASSERT_EQ(doc->cff_font_keys().size(), 1u);
+  const Bitmap before = render_first(*doc);
+  const auto target = dir / "noncid.pdf";
+  auto saved = save_document_safely(*doc, target, {});
+  ASSERT_TRUE(saved) << saved.error().message;
+  EXPECT_TRUE(saved->fonts_converted);
+  auto census = QpdfTools::font_census(target);
+  ASSERT_TRUE(census) << census.error().message;
+  EXPECT_EQ(census->cid_type0, 1);
+  EXPECT_EQ(census->fontfile3_opentype, 1);
+  EXPECT_EQ(census->fontfile2_otto, 0);
+  EXPECT_TRUE(census->charsets_identity) << "비CID 는 charset 검사 대상이 아니다";
+  auto reopened = PdfiumDocument::open(target);
+  ASSERT_TRUE(reopened);
+  EXPECT_EQ(render_first(*reopened).pixels, before.pixels);
+  EXPECT_NE(reopened->load_text(0)->all_text().find("Latin CFF text 123"), std::string::npos);
+  auto check = QpdfTools::check(target);
+  ASSERT_TRUE(check);
+  EXPECT_TRUE(check->warnings.empty());
+}
 }  // namespace
 }  // namespace onpdf::engine

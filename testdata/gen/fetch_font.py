@@ -8,6 +8,7 @@
   testdata/fonts/NotoSansKR-subset.ttf   — wght 400 인스턴스, 필요한 글자만 (OFL 1.1, family 이름 변경)
   testdata/fonts/NotoSansCJKkr-subset.otf — Noto Sans CJK KR(OTF, CID-keyed CFF) 같은 글자 서브셋 (#73: CFF 후처리·charset 비항등)
   testdata/fonts/NotoSansKR-subset.ttc   — 위 TTF 서브셋 2벌(면 1 은 family "NotoSansKR-subset-Face1") 모음 (#73: TTC 면 선택)
+  testdata/fonts/SourceSans3-subset.otf  — Source Sans 3(OTF, 비CID CFF) 라틴 서브셋 (#73 W4: charset 을 손대지 않는 변환 경로)
   testdata/fonts/NotoSansKR-subset.json  — {"upem":1000, "ascent":.., "descent":.., "bbox":[..],
                                             "glyphs": {"가": {"gid": 12, "width": 920}, ...}}
   testdata/licenses/OFL.txt
@@ -28,6 +29,9 @@ OFL_URL = "https://github.com/google/fonts/raw/main/ofl/notosanskr/OFL.txt"
 FAMILY = "NotoSansKR-subset"
 CFF_URL = "https://github.com/notofonts/noto-cjk/raw/main/Sans/OTF/Korean/NotoSansCJKkr-Regular.otf"
 CFF_FAMILY = "NotoSansCJKkr-subset"
+# 비CID CFF (이름 기반 charset): 저장 후처리가 charset 을 손대지 않고 사전만 바꾸는 경로 (#73 리뷰 W4). Adobe Source Sans 3, OFL
+NONCID_URL = "https://github.com/adobe-fonts/source-sans/raw/release/OTF/SourceSans3-Regular.otf"
+NONCID_FAMILY = "SourceSans3-subset"
 TTC_FACE1 = "NotoSansKR-subset-Face1"
 
 # docs.py 가 쓰는 모든 글자. 여기에 없는 글자는 임베딩 문서에 쓸 수 없다.
@@ -91,6 +95,12 @@ def main() -> None:
     out_otf = ROOT / "fonts" / f"{CFF_FAMILY}.otf"
     cff.save(out_otf)
     print(f"wrote {out_otf} ({out_otf.stat().st_size} bytes, {len(cff.getGlyphOrder())} glyphs)")
+    print("downloading", NONCID_URL)
+    latin = TTFont(io.BytesIO(urllib.request.urlopen(NONCID_URL, timeout=300).read()), recalcTimestamp=False)
+    subset_and_rename(latin, [c for c in chars if ord(c) < 0x3000], NONCID_FAMILY)
+    out_noncid = ROOT / "fonts" / f"{NONCID_FAMILY}.otf"
+    latin.save(out_noncid)
+    print(f"wrote {out_noncid} ({out_noncid.stat().st_size} bytes, {len(latin.getGlyphOrder())} glyphs, non-CID CFF)")
     from fontTools.ttLib import TTCollection
     face1 = TTFont(out_ttf, recalcTimestamp=False)
     for rec in face1["name"].names:

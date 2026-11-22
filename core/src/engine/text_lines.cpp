@@ -1,5 +1,7 @@
 #include "text_lines.h"
 
+#include "onpdf/core/fnv.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -248,17 +250,6 @@ std::u32string line_text(const Extraction& ex, const std::set<FPDF_PAGEOBJECT>& 
   return trim(out);
 }
 
-std::uint64_t fnv1a(const std::u32string& s) {
-  std::uint64_t h = 14695981039346656037ULL;
-  for (char32_t c : s) {
-    for (int k = 0; k < 4; ++k) {
-      h ^= static_cast<std::uint64_t>((c >> (8 * k)) & 0xFF);
-      h *= 1099511628211ULL;
-    }
-  }
-  return h;
-}
-
 struct GlyphSig {
   int segments = -1;
   std::vector<float> points;
@@ -410,7 +401,7 @@ std::string line_id_of(const PageAnalysis& analysis, const AnalyzedLine& line) {
   std::string id = first.container < 0 ? "p" : "f" + std::to_string(first.container);
   id += "/" + std::to_string(first.index) + "/";
   char hex[17];
-  std::snprintf(hex, sizeof hex, "%016llx", static_cast<unsigned long long>(fnv1a(line.text)));
+  std::snprintf(hex, sizeof hex, "%016llx", static_cast<unsigned long long>(onpdf::fnv1a64(line.text)));
   return id + hex;
 }
 

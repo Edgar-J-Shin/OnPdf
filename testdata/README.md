@@ -61,6 +61,7 @@
 - `fonts/NotoSansKR-subset.ttf` = Noto Sans KR 의 wght 400 서브셋(family 이름 변경), SIL OFL 1.1 — `licenses/OFL.txt`
 - `fonts/NotoSansCJKkr-subset.otf` = Noto Sans CJK KR(OTF, CID-keyed CFF)의 같은 글자 서브셋 — CFF 저장 후처리·charset 테스트(#73), SIL OFL 1.1
 - `fonts/NotoSansKR-subset.ttc` = 위 TTF 서브셋 2벌(면 1 family `NotoSansKR-subset-Face1`) — TTC 면 선택 테스트(#73)
+- `fonts/SourceSans3-subset.otf` = Adobe Source Sans 3(OTF, 비CID CFF)의 라틴 서브셋 — charset 을 손대지 않는 변환 경로 테스트(#73 리뷰 W4), SIL OFL 1.1
 
 ## 갱신 절차
 ```bash
