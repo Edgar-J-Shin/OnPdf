@@ -592,8 +592,9 @@ TEST(TextLines, SpaceOnlyObjectsKeepOrdinalsAligned) {
   ASSERT_TRUE(replaced) << replaced.error().message;
   EXPECT_NE(page_text(*doc).find("After spaces edited"), std::string::npos);
   EXPECT_EQ(page_text(*doc).find("After spaces line"), std::string::npos);
-  EXPECT_EQ(diff_outside(before, render(*doc), after->bbox, 6.0), 0)
-      << "공백 객체·다른 줄은 그대로";
+  Rect mask = after->bbox;
+  mask.w += 40;  // 새 글이 더 길다
+  EXPECT_EQ(diff_outside(before, render(*doc), mask, 6.0), 0) << "공백 객체·다른 줄은 그대로";
   // 지우기도 같은 순번 규칙
   auto removed = doc->remove_text_line(0, find_line(*doc->text_lines(0), "Hello world line")->id);
   ASSERT_TRUE(removed) << removed.error().message;
