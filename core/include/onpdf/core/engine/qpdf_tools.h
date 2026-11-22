@@ -55,10 +55,11 @@ using ProgressFn = std::function<void(int percent)>;  // 작업 스레드에서 
 // [<c1> k <c2> k … <cn>] TJ. kerning 은 TJ 숫자(1/1000 em, 양수 = 좁힘). code_count 로 코드
 // 단위(1·2바이트)를 정한다
 struct ShowOpFit {
-  int container = -1;  // -1 = 쪽, n = 쪽의 n 번째 Form
+  int container = -1;  // -1 = 쪽만 적용한다 (Form 안의 새 객체는 만들지 않으므로 container ≥ 0 은 무시된다)
   int ordinal = 0;
   double kerning = 0.0;
-  int code_count = 0;
+  int code_count = 0;  // 새 객체의 코드 수 (엔진이 안다: 원본 글꼴 = 글자 수, 대체 글꼴 = CID 수)
+  int code_bytes = 0;  // 코드 단위 바이트 (2 = CID Identity, 1 = 단순 글꼴, 0 = 문자열 길이/코드 수로 추정)
 };
 struct ShowOpSurgery {
   std::set<int> page_ordinals;

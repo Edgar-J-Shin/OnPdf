@@ -518,15 +518,17 @@ std::optional<std::string> fitted_operands(const ContentOp& op, const ShowOpFit&
   const auto items = op.operands[0].getArrayAsVector();
   if (items.size() != 1 || !items[0].isString()) return std::nullopt;
   const std::string s = items[0].getStringValue();
-  if (fit.code_count <= 0 || s.empty() || s.size() % static_cast<std::size_t>(fit.code_count) != 0)
+  if (fit.code_count <= 1 || s.empty() || s.size() % static_cast<std::size_t>(fit.code_count) != 0)
     return std::nullopt;
   const std::size_t unit = s.size() / static_cast<std::size_t>(fit.code_count);
   if (unit != 1 && unit != 2) return std::nullopt;
-  char number[32];
-  std::snprintf(number, sizeof number, "%.2f", fit.kerning);
+  // 단위가 틀리면 2바이트 CID 가 둘로 찢긴다 (리뷰 W2)
+  if (fit.code_bytes > 0 && unit != static_cast<std::size_t>(fit.code_bytes)) return std::nullopt;
+  // 숫자는 로캘과 무관하게 (snprintf 는 LC_NUMERIC 을 따라 "-166,67" 이 될 수 있다 — 리뷰 W1)
+  const std::string number = QPDFObjectHandle::newReal(fit.kerning, 2).unparse();
   std::string out = "[";
   for (std::size_t i = 0; i < s.size(); i += unit) {
-    if (i > 0) out += std::string(" ") + number + " ";
+    if (i > 0) out += " " + number + " ";
     out += "<";
     for (std::size_t j = 0; j < unit; ++j) {
       char hex[3];

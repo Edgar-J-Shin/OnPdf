@@ -2046,8 +2046,19 @@ bool is_type3(FPDF_FONT font) {
 }
 
 // 같은 글꼴·크기로 다시 놓았을 때의 잉크 폭 (쪽 사용자 좌표). 임시 객체는 쪽에 넣지 않는다. 못 재면 0 (#77)
+// 공백 글리프가 정상인가: 그려지지 않고 폭이 (0, 0.5em]. 서브셋 글꼴에 공백이 없으면 CharCodeFromUnicode 가 엉뚱한 코드
+// (/DW 1000 또는 0 폭)를 줘 자연 폭이 어긋난다 — 그러면 자간을 재지 않는다 (리뷰 W3)
+bool space_glyph_sane(FPDF_FONT font, float size) {
+  float width = 0;
+  if (!FPDFFont_GetGlyphWidth(font, static_cast<uint32_t>(U' '), size, &width)) return false;
+  if (!(width > 0.0f) || width > size * 0.5f) return false;
+  FPDF_GLYPHPATH path = FPDFFont_GetGlyphPath(font, static_cast<uint32_t>(U' '), size);
+  return path == nullptr || FPDFGlyphPath_CountGlyphSegments(path) == 0;
+}
+
 double natural_ink_width(FPDF_DOCUMENT doc, const detail::AnalyzedObject& first, const std::u32string& text) {
   if (first.font == nullptr || first.size <= 0 || is_type3(first.font) || !detail::font_covers(first.font, text)) return 0.0;
+  if (text.find(U' ') != std::u32string::npos && !space_glyph_sane(first.font, first.size)) return 0.0;
   ScopedFPDFPageObject tmp(FPDFPageObj_CreateTextObj(doc, first.font, first.size));
   if (!tmp) return 0.0;
   const std::vector<unsigned short> wide = detail::to_wide(detail::utf32_to_utf8(text));
@@ -2069,7 +2080,7 @@ TextLineInfo line_info_of(FPDF_DOCUMENT doc, const detail::PageAnalysis& analysi
     const Rect unit = space.to_rect(0, 1, 0, 1);
     const double scale = std::max(unit.w, unit.h);  // 사용자 단위 → 쪽 포인트 (회전만 있는 변환)
     info.text_width = (line.ink_right - line.ink_left) * scale;
-    const double natural = natural_ink_width(doc, first, line.text);
+    const double natural = line.mixed_fonts ? 0.0 : natural_ink_width(doc, first, line.text);  // 글꼴이 섞인 줄은 재지 않는다 (리뷰 W4)
     // 간격 수 = 원문 글자 수 − 1 (안쪽 공백도 Tc 가 붙는 간격이다; 앞뒤 공백은 trim 됐다)
     const double gaps = static_cast<double>(line.text.size()) - 1.0;
     if (line.ink_chars >= 2 && gaps >= 1.0 && natural > 0.0) {
@@ -2254,6 +2265,7 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
   // ---- 3. 새 텍스트 (덧붙인 스트림에만 쓴다 — 원본 스트림을 더럽히지 않는다) ----
   LineEditResult result;
   std::vector<FPDF_PAGEOBJECT> inserted;
+  std::vector<int> new_code_counts;  // inserted 와 같은 순서: 새 객체의 코드 수 (#77 커닝 주입)
   const auto remove_inserted = [&] {
     for (FPDF_PAGEOBJECT obj : inserted) {
       if (FPDFPage_RemoveObject(page->get(), obj)) FPDFPageObj_Destroy(obj);
@@ -2310,6 +2322,7 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
       FPDF_PAGEOBJECT raw = obj.release();
       FPDFPage_InsertObject(page->get(), raw);
       inserted.push_back(raw);
+      new_code_counts.push_back(static_cast<int>(chars.size()));  // SetText 는 글자마다 코드 하나 (font_covers 통과)
       if (!FPDFPage_GenerateContent(page->get())) return fail(make_error(ErrorCode::kInvalidState, "FPDFPage_GenerateContent failed"));
       result.box = box;
       result.ids = {id};
@@ -2323,8 +2336,11 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
       result.used_fallback = true;
       result.box = added->box;
       result.ids = added->ids;
-      for (const std::string& id : result.ids) {
-        if (auto [obj, index] = find_page_object(page->get(), id); obj != nullptr) inserted.push_back(obj);
+      for (std::size_t n = 0; n < result.ids.size(); ++n) {
+        if (auto [obj, index] = find_page_object(page->get(), result.ids[n]); obj != nullptr) {
+          inserted.push_back(obj);
+          new_code_counts.push_back(n < spec.lines.size() ? static_cast<int>(spec.lines[n].cids.size()) : 0);
+        }
       }
     }
   }
@@ -2375,16 +2391,20 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
     if (std::abs(line_spacing) > 1e-6) {
       const Rect unit = space.to_rect(0, 1, 0, 1);
       const double scale = std::max(unit.w, unit.h);
-      for (FPDF_PAGEOBJECT obj : inserted) {
+      for (std::size_t n = 0; n < inserted.size(); ++n) {
+        FPDF_PAGEOBJECT obj = inserted[n];
         const auto it = std::find_if(analysis.objects.begin(), analysis.objects.end(), [&](const auto& o) { return o.handle == obj; });
         if (it == analysis.objects.end() || it->ordinal < 0 || it->container >= 0) continue;
         float obj_size = 0;
         FS_MATRIX m{};
         if (!FPDFTextObj_GetFontSize(obj, &obj_size) || !FPDFPageObj_GetMatrix(obj, &m)) continue;
         const double eff = obj_size * std::hypot(m.a, m.b);  // TJ 숫자는 텍스트 x 축을 따라 가로 배율로 움직인다
-        if (eff <= 0.0 || it->text.empty()) continue;
+        if (eff <= 0.0) continue;
+        // 코드 수는 넣은 쪽이 안다 (추출 글자 수는 합자·결합 문자에서 다르다 — 리뷰 W2). 대체 글꼴은 CID 2바이트
+        const int code_count = new_code_counts.size() > n ? new_code_counts[n] : 0;
+        if (code_count < 3 || static_cast<int>(it->text.size()) != code_count) continue;  // 2글자는 추출이 공백을 끼운다 (리뷰 I4)
         const double k = std::clamp(-(line_spacing / scale) * 1000.0 / eff, -250.0, 250.0);
-        ops.fits.push_back({-1, it->ordinal, k, static_cast<int>(it->text.size())});
+        ops.fits.push_back({-1, it->ordinal, k, code_count, result.used_fallback ? 2 : 0});
       }
     }
   }

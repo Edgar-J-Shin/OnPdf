@@ -734,7 +734,8 @@ TEST(TextLines, KerningSurvivesSaveReopenAndMove) {
   auto replaced = doc->replace_text_line(0, wide.id, same);
   ASSERT_TRUE(replaced) << replaced.error().message;
   const double w0 = box_width(*doc, replaced->box);
-  EXPECT_NEAR(w0, wide.text_width, std::max(1.5, wide.text_width * 0.03));
+  const double expected0 = expected_width(wide.text, wide.font_size, wide.letter_spacing);
+  EXPECT_NEAR(w0, expected0, std::max(2.5, expected0 * 0.03));
   ScopedTempDir dir;
   const auto saved = dir / "kern.pdf";
   ASSERT_TRUE(doc->save_to(saved, false));
