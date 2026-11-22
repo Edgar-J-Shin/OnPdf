@@ -605,8 +605,8 @@ TEST(TextLines, SpaceOnlyObjectsKeepOrdinalsAligned) {
 
 std::size_t utf8_length(const std::string& s) {
   std::size_t n = 0;
-  for (const unsigned char c : s) {
-    if ((c & 0xC0) != 0x80) ++n;
+  for (const char ch : s) {
+    if ((static_cast<unsigned char>(ch) & 0xC0) != 0x80) ++n;
   }
   return n;
 }
