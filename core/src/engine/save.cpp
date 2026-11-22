@@ -10,10 +10,10 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <random>
-#include <fstream>
 #include <set>
 #include <string>
 #include <system_error>
@@ -22,11 +22,12 @@
 namespace onpdf::engine {
 namespace {
 
-// 같은 폴더(같은 볼륨)여야 교체가 원자적이다. 이름에는 64비트 난수를 넣어 프로세스(앱 두 개)끼리도 겹치지 않게 한다.
-// 원래 파일 이름은 넣지 않는다 (긴 이름에서 파일 이름 길이 한도를 넘지 않게)
+// 같은 폴더(같은 볼륨)여야 교체가 원자적이다. 이름에는 64비트 난수를 넣어 프로세스(앱 두 개)끼리도
+// 겹치지 않게 한다. 원래 파일 이름은 넣지 않는다 (긴 이름에서 파일 이름 길이 한도를 넘지 않게)
 std::filesystem::path temp_path_in(const std::filesystem::path& dir) {
   std::random_device random;
-  const std::uint64_t nonce = (static_cast<std::uint64_t>(random()) << 32) ^ static_cast<std::uint64_t>(random());
+  const std::uint64_t nonce =
+      (static_cast<std::uint64_t>(random()) << 32) ^ static_cast<std::uint64_t>(random());
   char hex[17];
   std::snprintf(hex, sizeof hex, "%016llx", static_cast<unsigned long long>(nonce));
   return dir / path_from_utf8(std::string(".onpdf-save-") + hex + ".tmp");
@@ -37,11 +38,14 @@ Result<std::filesystem::path> resolve_save_target(const std::filesystem::path& t
   std::error_code ec;
   if (!std::filesystem::is_symlink(std::filesystem::symlink_status(target, ec))) return target;
   std::filesystem::path real = std::filesystem::canonical(target, ec);
-  if (ec) return make_error(ErrorCode::kIoError, "cannot resolve link " + path_to_utf8(target) + ": " + ec.message());
+  if (ec)
+    return make_error(ErrorCode::kIoError,
+                      "cannot resolve link " + path_to_utf8(target) + ": " + ec.message());
   return real;
 }
 
-// 실제로 쓸 수 있는지 (읽기 전용 속성·권한·잠금·다른 프로그램의 쓰기 금지 공유). 내용은 바꾸지 않는다
+// 실제로 쓸 수 있는지 (읽기 전용 속성·권한·잠금·다른 프로그램의 쓰기 금지 공유). 내용은 바꾸지
+// 않는다
 bool can_write_existing(const std::filesystem::path& file) {
   std::ofstream probe(file, std::ios::binary | std::ios::app);
   return static_cast<bool>(probe);
@@ -66,19 +70,26 @@ class TempFile {
   std::filesystem::path path_;
 };
 
-Error verify_error(const std::string& what) { return Error{ErrorCode::kSaveVerifyFailed, what}; }
+Error verify_error(const std::string& what) {
+  return Error{ErrorCode::kSaveVerifyFailed, what};
+}
 
-// 저장 결과 검증: 같은 암호로 열림, 쪽 수·크기 같음, 모든 쪽 로드, (증분이면) 원본 바이트가 앞부분과 같음
-Result<void> verify_saved(const PdfiumDocument& source, const std::filesystem::path& saved, bool incremental) {
+// 저장 결과 검증: 같은 암호로 열림, 쪽 수·크기 같음, 모든 쪽 로드, (증분이면) 원본 바이트가
+// 앞부분과 같음
+Result<void> verify_saved(const PdfiumDocument& source, const std::filesystem::path& saved,
+                          bool incremental) {
   auto reopened = PdfiumDocument::open(saved, source.password());
-  if (!reopened) return std::unexpected(verify_error("cannot reopen saved file: " + reopened.error().message));
+  if (!reopened)
+    return std::unexpected(verify_error("cannot reopen saved file: " + reopened.error().message));
   const int count = source.page_count();
   if (reopened->page_count() != count) return std::unexpected(verify_error("page count changed"));
   for (int i = 0; i < count; ++i) {
     auto expected = source.page_size(i);
     auto actual = reopened->page_size(i);
-    if (!expected || !actual) return std::unexpected(verify_error("cannot read page size " + std::to_string(i)));
-    if (std::abs(expected->width - actual->width) > 0.01 || std::abs(expected->height - actual->height) > 0.01) {
+    if (!expected || !actual)
+      return std::unexpected(verify_error("cannot read page size " + std::to_string(i)));
+    if (std::abs(expected->width - actual->width) > 0.01 ||
+        std::abs(expected->height - actual->height) > 0.01) {
       return std::unexpected(verify_error("page size changed on page " + std::to_string(i + 1)));
     }
     // 쪽을 실제로 열 수 있어야 한다 (회전 조회가 FPDF_LoadPage 를 거친다)
@@ -88,18 +99,25 @@ Result<void> verify_saved(const PdfiumDocument& source, const std::filesystem::p
     // OnPdf 가 마크한 쪽 객체(텍스트·이미지 id)가 저장 뒤에도 같은 집합이어야 한다 (#45·#49)
     auto before_objects = source.page_objects(i);
     auto after_objects = reopened->page_objects(i);
-    if (!before_objects || !after_objects) return std::unexpected(verify_error("cannot list page objects on page " + std::to_string(i + 1)));
+    if (!before_objects || !after_objects)
+      return std::unexpected(
+          verify_error("cannot list page objects on page " + std::to_string(i + 1)));
     std::set<std::string> before_ids, after_ids;
-    for (const auto& o : *before_objects) if (o.marked) before_ids.insert(o.id);
-    for (const auto& o : *after_objects) if (o.marked) after_ids.insert(o.id);
-    if (before_ids != after_ids) return std::unexpected(verify_error("page objects changed on page " + std::to_string(i + 1)));
+    for (const auto& o : *before_objects)
+      if (o.marked) before_ids.insert(o.id);
+    for (const auto& o : *after_objects)
+      if (o.marked) after_ids.insert(o.id);
+    if (before_ids != after_ids)
+      return std::unexpected(verify_error("page objects changed on page " + std::to_string(i + 1)));
   }
   // 폼 필드 값이 저장 뒤에도 같아야 한다 (#51)
   {
     auto before_values = source.form_values();
     auto after_values = reopened->form_values();
-    if (!before_values || !after_values) return std::unexpected(verify_error("cannot read form field values"));
-    if (*before_values != *after_values) return std::unexpected(verify_error("form field values changed"));
+    if (!before_values || !after_values)
+      return std::unexpected(verify_error("cannot read form field values"));
+    if (*before_values != *after_values)
+      return std::unexpected(verify_error("form field values changed"));
   }
   if (incremental) {
     const auto& original = source.original_bytes();
@@ -117,8 +135,8 @@ Result<void> verify_saved(const PdfiumDocument& source, const std::filesystem::p
 
 }  // namespace
 
-Result<std::vector<SaveResult>> write_files_safely(const std::vector<std::filesystem::path>& targets,
-                                                   const SafeWriteHooks& hooks) {
+Result<std::vector<SaveResult>> write_files_safely(
+    const std::vector<std::filesystem::path>& targets, const SafeWriteHooks& hooks) {
   if (targets.empty()) return make_error(ErrorCode::kInvalidArgument, "no target paths");
   if (!hooks.write) return make_error(ErrorCode::kInvalidArgument, "no writer");
   struct Prepared {
@@ -132,13 +150,19 @@ Result<std::vector<SaveResult>> write_files_safely(const std::vector<std::filesy
   std::vector<std::unique_ptr<TempFile>> temps;
   std::vector<std::filesystem::path> temp_paths;
   for (const auto& target : targets) {
-    if (target.empty() || !target.has_filename()) return make_error(ErrorCode::kInvalidArgument, "empty target path");
+    if (target.empty() || !target.has_filename())
+      return make_error(ErrorCode::kInvalidArgument, "empty target path");
     {
-      // 같은 파일을 두 번 쓰지 않는다. 아직 없는 파일도 비교해야 하므로 정규화한 절대 경로로 (리뷰 I3)
+      // 같은 파일을 두 번 쓰지 않는다. 아직 없는 파일도 비교해야 하므로 정규화한 절대 경로로 (리뷰
+      // I3)
       std::error_code norm_ec;
-      const auto normalized = std::filesystem::weakly_canonical(std::filesystem::absolute(target, norm_ec), norm_ec).lexically_normal();
+      const auto normalized =
+          std::filesystem::weakly_canonical(std::filesystem::absolute(target, norm_ec), norm_ec)
+              .lexically_normal();
       for (const auto& other : prepared) {
-        if (other.normalized == normalized) return make_error(ErrorCode::kInvalidArgument, "duplicate target path: " + path_to_utf8(target));
+        if (other.normalized == normalized)
+          return make_error(ErrorCode::kInvalidArgument,
+                            "duplicate target path: " + path_to_utf8(target));
       }
       prepared_normalized.push_back(normalized);
     }
@@ -152,19 +176,23 @@ Result<std::vector<SaveResult>> write_files_safely(const std::vector<std::filesy
     if (!std::filesystem::is_directory(p.dir, ec)) {
       return make_error(ErrorCode::kIoError, "folder does not exist: " + path_to_utf8(p.dir));
     }
-    // 기존 파일이면: 일반 파일이어야 하고, 쓸 수 있어야 하며(읽기 전용을 몰래 덮어쓰지 않는다), 권한을 그대로 옮긴다
+    // 기존 파일이면: 일반 파일이어야 하고, 쓸 수 있어야 하며(읽기 전용을 몰래 덮어쓰지 않는다),
+    // 권한을 그대로 옮긴다
     const auto status = std::filesystem::status(p.real, ec);
     if (!ec && std::filesystem::exists(status)) {
       if (!std::filesystem::is_regular_file(status)) {
-        return make_error(ErrorCode::kInvalidArgument, "not a regular file: " + path_to_utf8(p.real));
+        return make_error(ErrorCode::kInvalidArgument,
+                          "not a regular file: " + path_to_utf8(p.real));
       }
-      if (!can_write_existing(p.real)) return make_error(ErrorCode::kNotWritable, "cannot write " + path_to_utf8(p.real));
+      if (!can_write_existing(p.real))
+        return make_error(ErrorCode::kNotWritable, "cannot write " + path_to_utf8(p.real));
       p.keep_permissions = status.permissions();
     }
     auto temp = std::make_unique<TempFile>(temp_path_in(p.dir));
     // 파일은 쓸 수 있어도 폴더에 새 파일을 만들 수 없는 경우(일부 공유·클라우드 폴더)를 따로 알린다
     if (std::ofstream probe(temp->path(), std::ios::binary | std::ios::trunc); !probe) {
-      return make_error(ErrorCode::kFolderNotWritable, "cannot create files in folder " + path_to_utf8(p.dir));
+      return make_error(ErrorCode::kFolderNotWritable,
+                        "cannot create files in folder " + path_to_utf8(p.dir));
     }
     temp_paths.push_back(temp->path());
     temps.push_back(std::move(temp));
@@ -175,31 +203,41 @@ Result<std::vector<SaveResult>> write_files_safely(const std::vector<std::filesy
   std::vector<SaveResult> results;
   for (std::size_t i = 0; i < targets.size(); ++i) {
     if (hooks.verify) {
-      if (auto verified = hooks.verify(i, targets[i], temp_paths[i]); !verified) return std::unexpected(verified.error());
+      if (auto verified = hooks.verify(i, targets[i], temp_paths[i]); !verified)
+        return std::unexpected(verified.error());
     }
     std::error_code ec;
     if (prepared[i].keep_permissions) {
-      // 새 파일은 기본 권한(umask)으로 만들어진다: 0600 문서가 0644 로 넓어지지 않게 원본 권한을 옮긴다.
-      // 동기화(fsync) 전에 옮겨야 권한 변경도 함께 디스크에 남는다 (POSIX 동기화는 읽기 모드로 열어 권한과 무관)
-      std::filesystem::permissions(temp_paths[i], *prepared[i].keep_permissions, std::filesystem::perm_options::replace, ec);
+      // 새 파일은 기본 권한(umask)으로 만들어진다: 0600 문서가 0644 로 넓어지지 않게 원본 권한을
+      // 옮긴다. 동기화(fsync) 전에 옮겨야 권한 변경도 함께 디스크에 남는다 (POSIX 동기화는 읽기
+      // 모드로 열어 권한과 무관)
+      std::filesystem::permissions(temp_paths[i], *prepared[i].keep_permissions,
+                                   std::filesystem::perm_options::replace, ec);
       if (ec) return make_error(ErrorCode::kIoError, "cannot copy permissions: " + ec.message());
     }
     std::error_code size_ec;
     const std::uintmax_t size = std::filesystem::file_size(temp_paths[i], size_ec);
-    // 교체 전에 내용을 디스크까지 내린다: 그렇지 않으면 교체 직후 전원이 꺼질 때 원본과 새 내용을 모두 잃을 수 있다
-    if (auto flushed = platform::flush_file_to_disk(temp_paths[i]); !flushed) return std::unexpected(flushed.error());
+    // 교체 전에 내용을 디스크까지 내린다: 그렇지 않으면 교체 직후 전원이 꺼질 때 원본과 새 내용을
+    // 모두 잃을 수 있다
+    if (auto flushed = platform::flush_file_to_disk(temp_paths[i]); !flushed)
+      return std::unexpected(flushed.error());
     results.push_back(SaveResult{targets[i], false, size_ec ? 0 : size});
   }
-  // 전부 검증됐다: 순서대로 교체. (여러 파일일 때 중간 실패는 이미 바뀐 파일을 되돌리지 않는다 — 같은 폴더 rename 이라 드물다)
+  // 전부 검증됐다: 순서대로 교체. (여러 파일일 때 중간 실패는 이미 바뀐 파일을 되돌리지 않는다 —
+  // 같은 폴더 rename 이라 드물다)
   for (std::size_t i = 0; i < targets.size(); ++i) {
-    if (auto replaced = platform::replace_file(temp_paths[i], prepared[i].real); !replaced) return std::unexpected(replaced.error());
+    if (auto replaced = platform::replace_file(temp_paths[i], prepared[i].real); !replaced)
+      return std::unexpected(replaced.error());
     temps[i]->release();
   }
-  for (const auto& p : prepared) (void)platform::flush_directory(p.dir);  // 이미 교체는 끝났으므로 실패해도 저장 실패로 보지 않는다
+  for (const auto& p : prepared)
+    (void)platform::flush_directory(
+        p.dir);  // 이미 교체는 끝났으므로 실패해도 저장 실패로 보지 않는다
   return results;
 }
 
-Result<SaveResult> save_document_safely(const PdfiumDocument& doc, const std::filesystem::path& target,
+Result<SaveResult> save_document_safely(const PdfiumDocument& doc,
+                                        const std::filesystem::path& target,
                                         const SaveOptions& options) {
   PdfiumLibrary::assert_current_thread();
   SafeWriteHooks hooks;
@@ -208,24 +246,33 @@ Result<SaveResult> save_document_safely(const PdfiumDocument& doc, const std::fi
   hooks.write = [&](const std::vector<std::filesystem::path>& temps) -> Result<void> {
     const std::filesystem::path& temp = temps.front();
     if (auto written = doc.save_to(temp, options.incremental); !written) return written;
-    // 취소한 텍스트의 서브셋 폰트는 PDFium 이 저장 때 거르지 않는다(객체 번호 전부 기록, 지우는 API 없음). 미참조 폰트가
-    // 있을 때만 qpdf 로 다시 써 떨어뜨린다 — 모든 저장을 재작성하지는 않는다(필요 없는 구조 변경 회피). 증분 저장은 원본
-    // 바이트를 보존해야 하므로 제외. 재작성 실패는 저장 실패가 아니라 PDFium 산출물로 계속한다(정리는 최선 노력) (#61)
-    // CFF 서브셋 글꼴(OTTO)은 같은 재작성에서 FontFile3/OpenType + CIDFontType0 + charset 항등으로 바꾼다 (#73)
+    // 취소한 텍스트의 서브셋 폰트는 PDFium 이 저장 때 거르지 않는다(객체 번호 전부 기록, 지우는 API
+    // 없음). 미참조 폰트가 있을 때만 qpdf 로 다시 써 떨어뜨린다 — 모든 저장을 재작성하지는
+    // 않는다(필요 없는 구조 변경 회피). 증분 저장은 원본 바이트를 보존해야 하므로 제외. 재작성
+    // 실패는 저장 실패가 아니라 PDFium 산출물로 계속한다(정리는 최선 노력) (#61) CFF 서브셋
+    // 글꼴(OTTO)은 같은 재작성에서 FontFile3/OpenType + CIDFontType0 + charset 항등으로 바꾼다
+    // (#73)
     RewriteOptions rewrite_options;
-    if (!options.incremental && options.convert_cff_fonts) rewrite_options.convert_cff_keys = doc.cff_font_keys();
-    const bool clean = !options.incremental && options.clean_unreferenced_fonts && doc.has_unreferenced_fonts();
+    if (!options.incremental && options.convert_cff_fonts)
+      rewrite_options.convert_cff_keys = doc.cff_font_keys();
+    const bool clean =
+        !options.incremental && options.clean_unreferenced_fonts && doc.has_unreferenced_fonts();
     if (clean || !rewrite_options.convert_cff_keys.empty()) {
-      TempFile rewritten(temp_path_in(temp.parent_path().empty() ? std::filesystem::path(".") : temp.parent_path()));
+      TempFile rewritten(temp_path_in(temp.parent_path().empty() ? std::filesystem::path(".")
+                                                                 : temp.parent_path()));
       int converted = 0;
-      Result<void> ok = options.rewrite_for_testing
-                            ? options.rewrite_for_testing(temp, rewritten.path(), doc.password(), rewrite_options)
-                            : QpdfTools::rewrite(temp, rewritten.path(), doc.password(), rewrite_options).transform([&](const JobReport& r) {
-                                converted = r.converted_fonts;
-                              });
+      Result<void> ok =
+          options.rewrite_for_testing
+              ? options.rewrite_for_testing(temp, rewritten.path(), doc.password(), rewrite_options)
+              : QpdfTools::rewrite(temp, rewritten.path(), doc.password(), rewrite_options)
+                    .transform([&](const JobReport& r) { converted = r.converted_fonts; });
       std::error_code ec;
-      if (ok && std::filesystem::is_regular_file(rewritten.path(), ec)) {
-        std::filesystem::rename(rewritten.path(), temp, ec);  // 같은 폴더: 임시 파일을 재작성본으로 교체
+      // 한 일이 없으면(취소로 사라진 CFF 키만 있을 때) PDFium 산출물을 둔다 — 불필요한 구조 변경
+      // 회피 (리뷰 W3). 테스트 훅은 변환 수를 모르므로 한 것으로 본다
+      const bool useful = clean || converted > 0 || static_cast<bool>(options.rewrite_for_testing);
+      if (ok && useful && std::filesystem::is_regular_file(rewritten.path(), ec)) {
+        std::filesystem::rename(rewritten.path(), temp,
+                                ec);  // 같은 폴더: 임시 파일을 재작성본으로 교체
         if (!ec) {
           rewritten.release();
           fonts_cleaned = clean;

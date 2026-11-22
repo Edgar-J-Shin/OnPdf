@@ -1,8 +1,9 @@
 #pragma once
 
-// 글꼴 서비스 (HarfBuzz, PDFium 없음): TTF 로드, 글자 배치(GID·전진폭), 글리프 없음 탐지, 서브셋(GID 재배치),
-// ToUnicode CMap 생성. 엔진에는 바이트·CID 만 넘긴다 (#43: PDFium 의 서브셋·자동 ToUnicode 를 쓰지 않는다).
-// FontFace 는 불변이라 스레드 간 공유(shared_ptr<const>)해도 된다. 배치·서브셋의 가변 객체는 호출 안에서만 산다.
+// 글꼴 서비스 (HarfBuzz, PDFium 없음): TTF 로드, 글자 배치(GID·전진폭), 글리프 없음 탐지,
+// 서브셋(GID 재배치), ToUnicode CMap 생성. 엔진에는 바이트·CID 만 넘긴다 (#43: PDFium 의
+// 서브셋·자동 ToUnicode 를 쓰지 않는다). FontFace 는 불변이라 스레드 간 공유(shared_ptr<const>)해도
+// 된다. 배치·서브셋의 가변 객체는 호출 안에서만 산다.
 
 #include "onpdf/core/error.h"
 
@@ -18,9 +19,10 @@
 namespace onpdf::edit {
 
 struct ShapedGlyph {
-  std::uint32_t gid = 0;     // 원본 폰트의 글리프 ID
-  std::u32string text;       // 그 글리프를 만든 입력 글자들 (클러스터 전체: NFD 한글·결합 문자·합자도 ToUnicode 에 그대로)
-  double x_advance = 0.0;    // pt
+  std::uint32_t gid = 0;  // 원본 폰트의 글리프 ID
+  std::u32string text;  // 그 글리프를 만든 입력 글자들 (클러스터 전체: NFD 한글·결합 문자·합자도
+                        // ToUnicode 에 그대로)
+  double x_advance = 0.0;  // pt
 };
 
 struct ShapedText {
@@ -45,10 +47,12 @@ class FontFace {
   FontFace(const FontFace&) = delete;
   FontFace& operator=(const FontFace&) = delete;
 
-  // TTF/OTF(CFF)/TTC 파일. face_index 는 TTC 의 면 (단일 글꼴은 0). 실패: kFileNotFound·kInvalidFormat(면 번호 범위 밖 포함)
-  [[nodiscard]] static Result<std::shared_ptr<const FontFace>> load(const std::filesystem::path& path, unsigned face_index = 0);
-  [[nodiscard]] static Result<std::shared_ptr<const FontFace>> load_from_memory(std::vector<std::uint8_t> bytes,
-                                                                                unsigned face_index = 0);
+  // TTF/OTF(CFF)/TTC 파일. face_index 는 TTC 의 면 (단일 글꼴은 0). 실패:
+  // kFileNotFound·kInvalidFormat(면 번호 범위 밖 포함)
+  [[nodiscard]] static Result<std::shared_ptr<const FontFace>> load(
+      const std::filesystem::path& path, unsigned face_index = 0);
+  [[nodiscard]] static Result<std::shared_ptr<const FontFace>> load_from_memory(
+      std::vector<std::uint8_t> bytes, unsigned face_index = 0);
 
   // 한 줄(개행 없음)을 size_pt 로 배치. 변형 폰트는 wght=400 으로 고정.
   // 탭·NBSP 처럼 글리프가 없는 레이아웃 공백은 공백 글리프로 바꾼다 (탭 = 공백 4칸)
@@ -60,18 +64,24 @@ class FontFace {
   [[nodiscard]] unsigned upem() const noexcept;
   [[nodiscard]] bool has_weight_axis() const noexcept;
   [[nodiscard]] std::string family_name() const;
-  [[nodiscard]] std::string style_name() const;              // name ID 2 ("Regular", "Bold"…)
-  [[nodiscard]] bool is_cff() const noexcept;                // CFF/CFF2 외곽선 — 서브셋이 OTTO 로 나온다 (#73 저장 후처리 대상)
+  [[nodiscard]] std::string style_name() const;  // name ID 2 ("Regular", "Bold"…)
+  [[nodiscard]] bool is_cff()
+      const noexcept;  // CFF/CFF2 외곽선 — 서브셋이 OTTO 로 나온다 (#73 저장 후처리 대상)
   [[nodiscard]] unsigned face_index() const noexcept;
 
  private:
   struct Impl;
   explicit FontFace(std::unique_ptr<Impl> impl);
+  // blob(파일 mmap 또는 메모리)이 든 Impl 에서 face 를 연다
+  [[nodiscard]] static Result<std::shared_ptr<const FontFace>> open_face(std::unique_ptr<Impl> impl,
+                                                                         unsigned face_index);
   std::unique_ptr<Impl> impl_;
 };
 
-// ToUnicode CMap (bfchar, CID 오름차순, 같은 CID 는 먼저 나온 문자열). dst 는 UTF-16BE (여러 코드·서로게이트 허용)
-[[nodiscard]] std::string make_to_unicode_cmap(std::vector<std::pair<std::uint32_t, std::u32string>> cid_to_unicode);
+// ToUnicode CMap (bfchar, CID 오름차순, 같은 CID 는 먼저 나온 문자열). dst 는 UTF-16BE (여러
+// 코드·서로게이트 허용)
+[[nodiscard]] std::string make_to_unicode_cmap(
+    std::vector<std::pair<std::uint32_t, std::u32string>> cid_to_unicode);
 // 레이아웃 공백 (공백·탭·NBSP·CR·LF)
 [[nodiscard]] bool is_layout_whitespace(char32_t c) noexcept;
 

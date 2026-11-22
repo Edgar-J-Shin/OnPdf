@@ -75,8 +75,26 @@ void scan_file(const std::filesystem::path& p, unsigned min_glyphs, std::vector<
   }
 }
 
+// 소문자·구분자 제거만 (스타일 비교용 — normalize_name 은 family 용이라 스타일 접미를 뗀다)
+std::string fold(std::string_view name) {
+  std::string out;
+  for (const char ch : name) {
+    if (ch == ' ' || ch == '-' || ch == '_') continue;
+    out += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  }
+  return out;
+}
+
+bool is_style_word(std::string_view folded) {
+  for (const char* w : {"roman", "oblique", "bolditalic", "boldoblique", "bold", "italic",
+                        "regular", "medium", "light", "semibold", "black", "heavy"}) {
+    if (folded == w) return true;
+  }
+  return false;
+}
+
 bool is_regular(const FontEntry& e) {
-  const std::string s = FontCatalog::normalize_name(e.style);
+  const std::string s = fold(e.style);
   return (s.empty() || s == "regular" || s == "normal" || s == "book" || s == "roman") &&
          e.weight >= 350 && e.weight <= 450;
 }
@@ -143,12 +161,13 @@ std::string FontCatalog::normalize_name(std::string_view name) {
       break;
     }
   }
-  std::string out;
-  for (const char ch : s) {
-    if (ch == ' ' || ch == '-' || ch == '_') continue;
-    out += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  // Base14 식 "-스타일" 접미는 뗀다: "Times-Roman" → "times", "Courier-BoldOblique" → "courier"
+  // (리뷰 I1). 하이픈 뒤가 스타일 단어일 때만 (family 가 "bold" 로 끝나는 이름을 자르지 않게)
+  if (const auto dash = s.rfind('-');
+      dash != std::string::npos && dash > 0 && is_style_word(fold(s.substr(dash + 1)))) {
+    s.erase(dash);
   }
-  return out;
+  return fold(s);
 }
 
 std::vector<const FontEntry*> FontCatalog::match(std::string_view base_font_name,
@@ -163,7 +182,7 @@ std::vector<const FontEntry*> FontCatalog::match(std::string_view base_font_name
     // 가 정한다)
     if (family == want ||
         (want.size() > family.size() && want.compare(0, family.size(), family) == 0 &&
-         want.substr(family.size()) == normalize_name(e.style))) {
+         want.substr(family.size()) == fold(e.style))) {
       out.push_back(&e);
     }
   }

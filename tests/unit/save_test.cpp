@@ -1,16 +1,15 @@
+#include "onpdf/core/engine/save.h"
+
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/core/engine/qpdf_tools.h"
-#include "onpdf/core/engine/save.h"
 #include "onpdf/edit/add_text_command.h"
 #include "onpdf/edit/text_line_commands.h"
 
 #include "../test_support.h"
-
-#include <gtest/gtest.h>
-
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <gtest/gtest.h>
 
 namespace onpdf::engine {
 namespace {
@@ -129,20 +128,23 @@ TEST(SaveDocument, IncrementalSaveKeepsSignedBytes) {
   EXPECT_TRUE(saved->incremental);
   const auto after = read_bytes(target);
   ASSERT_GT(after.size(), original.size());
-  EXPECT_TRUE(std::equal(original.begin(), original.end(), after.begin())) << "signed bytes must be preserved";
+  EXPECT_TRUE(std::equal(original.begin(), original.end(), after.begin()))
+      << "signed bytes must be preserved";
   auto reopened = PdfiumDocument::open(target);
   ASSERT_TRUE(reopened);
   EXPECT_EQ(reopened->signature_count(), 1);
   EXPECT_EQ(*reopened->page_rotation(0), 1);
 }
 
-// 원본 권한을 유지한다: 본인만 읽을 수 있던 문서가 저장 뒤 다른 사용자에게 열리면 안 된다 (#31 리뷰 C1)
+// 원본 권한을 유지한다: 본인만 읽을 수 있던 문서가 저장 뒤 다른 사용자에게 열리면 안 된다 (#31 리뷰
+// C1)
 TEST(SaveDocument, PermissionsPreserved) {
   ScopedTempDir dir;
   const auto target = dir / "private.pdf";
   std::filesystem::copy_file(testdata("simple.pdf"), target);
-  std::filesystem::permissions(target, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
-                               std::filesystem::perm_options::replace);
+  std::filesystem::permissions(
+      target, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+      std::filesystem::perm_options::replace);
   const auto before = std::filesystem::status(target).permissions();
   auto doc = PdfiumDocument::open(target);
   ASSERT_TRUE(doc);
@@ -151,7 +153,8 @@ TEST(SaveDocument, PermissionsPreserved) {
   EXPECT_EQ(std::filesystem::status(target).permissions(), before);
 }
 
-// 읽기 전용 파일은 몰래 덮어쓰지 않는다: 쓸 수 없음으로 거절하고 원본·폴더를 그대로 둔다 (#31 리뷰 C1)
+// 읽기 전용 파일은 몰래 덮어쓰지 않는다: 쓸 수 없음으로 거절하고 원본·폴더를 그대로 둔다 (#31 리뷰
+// C1)
 TEST(SaveDocument, ReadOnlyFileIsRefused) {
   ScopedTempDir dir;
   const auto target = dir / "readonly.pdf";
@@ -160,11 +163,13 @@ TEST(SaveDocument, ReadOnlyFileIsRefused) {
   namespace fs = std::filesystem;
   fs::permissions(target, fs::perms::owner_read | fs::perms::group_read | fs::perms::others_read,
                   fs::perm_options::replace);
-  struct Restore {  // 폴더 정리를 위해 쓰기 권한을 되돌린다 (Windows 는 읽기 전용 파일을 지우지 못한다)
+  struct Restore {  // 폴더 정리를 위해 쓰기 권한을 되돌린다 (Windows 는 읽기 전용 파일을 지우지
+                    // 못한다)
     fs::path path;
     ~Restore() {
       std::error_code ec;
-      fs::permissions(path, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::add, ec);
+      fs::permissions(path, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::add,
+                      ec);
     }
   } restore{target};
   if (std::ofstream probe(target, std::ios::binary | std::ios::app); probe) {
@@ -180,8 +185,9 @@ TEST(SaveDocument, ReadOnlyFileIsRefused) {
   EXPECT_EQ(files_in(dir.path()), 1u);
 }
 
-// 파일은 쓸 수 있어도 폴더에 새 파일을 만들 수 없으면: 임시 파일을 만들지 못하므로 폴더 문제로 알린다 (#31 리뷰 I4).
-// Windows 는 폴더의 읽기 전용 속성이 파일 생성을 막지 않으므로 probe 가 성공해 건너뛴다
+// 파일은 쓸 수 있어도 폴더에 새 파일을 만들 수 없으면: 임시 파일을 만들지 못하므로 폴더 문제로
+// 알린다 (#31 리뷰 I4). Windows 는 폴더의 읽기 전용 속성이 파일 생성을 막지 않으므로 probe 가
+// 성공해 건너뛴다
 TEST(SaveDocument, ReadOnlyFolderIsRefused) {
   ScopedTempDir dir;
   namespace fs = std::filesystem;
@@ -218,12 +224,15 @@ TEST(SaveDocument, ReadOnlyFolderIsRefused) {
   EXPECT_EQ(files_in(folder), 1u);
 }
 
-// write_files_safely 골격: 쓰기·검증 실패 시 기존 대상 불변, 임시 0개. 성공 시 여러 대상이 함께 바뀐다 (#37)
+// write_files_safely 골격: 쓰기·검증 실패 시 기존 대상 불변, 임시 0개. 성공 시 여러 대상이 함께
+// 바뀐다 (#37)
 TEST(SaveDocument, WriteFilesSafelySkeleton) {
   ScopedTempDir dir;
   const auto a = dir / "a.txt";
   const auto b = dir / "b.txt";
-  { std::ofstream(a) << "old-a"; }
+  {
+    std::ofstream(a) << "old-a";
+  }
   SafeWriteHooks ok;
   ok.write = [](const std::vector<std::filesystem::path>& temps) -> Result<void> {
     for (const auto& t : temps) std::ofstream(t) << "new";
@@ -235,19 +244,23 @@ TEST(SaveDocument, WriteFilesSafelySkeleton) {
   EXPECT_EQ(files_in(dir.path()), 2u);
   EXPECT_EQ(read_bytes(a), read_bytes(b));
   SafeWriteHooks failing_write;
-  failing_write.write = [](const std::vector<std::filesystem::path>&) -> Result<void> { return make_error(ErrorCode::kIoError, "disk"); };
+  failing_write.write = [](const std::vector<std::filesystem::path>&) -> Result<void> {
+    return make_error(ErrorCode::kIoError, "disk");
+  };
   const auto before = read_bytes(a);
   EXPECT_FALSE(write_files_safely({a}, failing_write));
   EXPECT_EQ(read_bytes(a), before);
   SafeWriteHooks failing_verify = ok;
-  failing_verify.verify = [](std::size_t, const std::filesystem::path&, const std::filesystem::path&) -> Result<void> {
+  failing_verify.verify = [](std::size_t, const std::filesystem::path&,
+                             const std::filesystem::path&) -> Result<void> {
     return make_error(ErrorCode::kSaveVerifyFailed, "x");
   };
   EXPECT_FALSE(write_files_safely({a, b}, failing_verify));
   EXPECT_EQ(read_bytes(a), before);
   EXPECT_EQ(files_in(dir.path()), 2u) << "임시 파일 없음";
   EXPECT_FALSE(write_files_safely({a, a}, ok)) << "같은 대상 두 번";
-  EXPECT_FALSE(write_files_safely({dir / "new.txt", dir.path() / "." / "new.txt"}, ok)) << "다른 표기의 같은 새 파일 (리뷰 I3)";
+  EXPECT_FALSE(write_files_safely({dir / "new.txt", dir.path() / "." / "new.txt"}, ok))
+      << "다른 표기의 같은 새 파일 (리뷰 I3)";
   EXPECT_FALSE(write_files_safely({}, ok));
 }
 
@@ -279,14 +292,16 @@ TEST(SaveDocument, EditPermissionsByKind) {
   const EditPermissions all = plain->edit_permissions();
   EXPECT_TRUE(all.modify_contents && all.annotate && all.fill_forms && all.assemble);
 
-  auto restricted = PdfiumDocument::open(testdata("encrypted-owner-only.pdf"));  // P=-3904: 전부 금지
+  auto restricted =
+      PdfiumDocument::open(testdata("encrypted-owner-only.pdf"));  // P=-3904: 전부 금지
   ASSERT_TRUE(restricted);
   const EditPermissions none = restricted->edit_permissions();
   EXPECT_FALSE(none.modify_contents);
   EXPECT_FALSE(none.annotate);
   EXPECT_FALSE(none.fill_forms);
   EXPECT_FALSE(none.assemble);
-  auto owner = PdfiumDocument::open(testdata("encrypted-owner-only.pdf"), "owner");  // 소유자 암호: 제한 해제
+  auto owner = PdfiumDocument::open(testdata("encrypted-owner-only.pdf"),
+                                    "owner");  // 소유자 암호: 제한 해제
   ASSERT_TRUE(owner);
   EXPECT_TRUE(owner->edit_permissions().assemble);
 
@@ -312,7 +327,6 @@ TEST(SaveDocument, EditPermissionsByKind) {
   EXPECT_FALSE(none.extract);
   EXPECT_TRUE(all.extract);
 }
-
 
 // ---- 미참조 폰트 정리 (#61) ----
 
@@ -397,9 +411,12 @@ TEST(SaveDocument, NoCleanupWhenNothingUnreferenced) {
     auto saved = save_document_safely(*doc, target, {});
     ASSERT_TRUE(saved) << saved.error().message;
     EXPECT_FALSE(saved->fonts_cleaned);
-    // PDFium 저장은 매번 /ID·날짜가 달라 바이트 비교는 못 한다: 크기가 같고 폰트가 남아 있으면 재작성하지 않은 것
-    EXPECT_EQ(std::filesystem::file_size(target), std::filesystem::file_size(direct)) << "재작성 없음: PDFium 산출물 그대로";
-    EXPECT_GT(saved->bytes, std::filesystem::file_size(testdata("simple.pdf")) + 2000) << "쓰이는 폰트는 남는다";
+    // PDFium 저장은 매번 /ID·날짜가 달라 바이트 비교는 못 한다: 크기가 같고 폰트가 남아 있으면
+    // 재작성하지 않은 것
+    EXPECT_EQ(std::filesystem::file_size(target), std::filesystem::file_size(direct))
+        << "재작성 없음: PDFium 산출물 그대로";
+    EXPECT_GT(saved->bytes, std::filesystem::file_size(testdata("simple.pdf")) + 2000)
+        << "쓰이는 폰트는 남는다";
   }
   {
     auto doc = PdfiumDocument::open(testdata("simple.pdf"));
@@ -459,7 +476,9 @@ TEST(SaveDocument, RewriteFailureFallsBackToPdfiumOutput) {
   ASSERT_TRUE(cmd.undo(*doc));
   SaveOptions options;
   int calls = 0;
-  options.rewrite_for_testing = [&](const std::filesystem::path&, const std::filesystem::path&, std::string_view, const engine::RewriteOptions&) -> Result<void> {
+  options.rewrite_for_testing = [&](const std::filesystem::path&, const std::filesystem::path&,
+                                    std::string_view,
+                                    const engine::RewriteOptions&) -> Result<void> {
     ++calls;
     return make_error(ErrorCode::kJobFailed, "injected");
   };
@@ -468,7 +487,8 @@ TEST(SaveDocument, RewriteFailureFallsBackToPdfiumOutput) {
   ASSERT_TRUE(saved) << saved.error().message;
   EXPECT_EQ(calls, 1);
   EXPECT_FALSE(saved->fonts_cleaned);
-  EXPECT_GT(saved->bytes, std::filesystem::file_size(testdata("simple.pdf")) + 2000) << "폰트가 남은 채 저장";
+  EXPECT_GT(saved->bytes, std::filesystem::file_size(testdata("simple.pdf")) + 2000)
+      << "폰트가 남은 채 저장";
   ASSERT_TRUE(PdfiumDocument::open(target));
   EXPECT_EQ(files_in(dir.path()), 1u) << "두 번째 임시 파일도 정리";
 }
@@ -501,7 +521,9 @@ TEST(SaveDocument, RewriteCorruptionIsCaughtByVerify) {
   ASSERT_TRUE(cmd.execute(*doc));
   ASSERT_TRUE(cmd.undo(*doc));
   SaveOptions options;
-  options.rewrite_for_testing = [](const std::filesystem::path&, const std::filesystem::path& out, std::string_view, const engine::RewriteOptions&) -> Result<void> {
+  options.rewrite_for_testing = [](const std::filesystem::path&, const std::filesystem::path& out,
+                                   std::string_view,
+                                   const engine::RewriteOptions&) -> Result<void> {
     std::ofstream(out, std::ios::binary) << "%PDF-1.7 broken";
     return {};
   };
@@ -537,7 +559,8 @@ Bitmap render_first(const PdfiumDocument& doc) {
   return bmp ? std::move(*bmp) : Bitmap{};
 }
 
-// CFF 서브셋 → 저장: FontFile3/OpenType + CIDFontType0, CIDToGIDMap 없음, charset 항등, 렌더·추출 동일
+// CFF 서브셋 → 저장: FontFile3/OpenType + CIDFontType0, CIDToGIDMap 없음, charset 항등, 렌더·추출
+// 동일
 TEST(SaveDocument, CffFontIsConvertedOnSave) {
   ScopedTempDir dir;
   auto doc = PdfiumDocument::open(testdata("simple.pdf"));
@@ -586,7 +609,8 @@ TEST(SaveDocument, ConvertedCffFontIsReusedAsOriginalFont) {
   ASSERT_TRUE(objects);
   ASSERT_EQ(objects->size(), 1u);
   const Bitmap before = render_first(*reopened);
-  edit::ReplaceTextLineCommand replace(0, (*objects)[0].box, std::string("텍스트 한글"), std::nullopt, std::nullopt, cleanup_font());
+  edit::ReplaceTextLineCommand replace(0, (*objects)[0].box, std::string("텍스트 한글"),
+                                       std::nullopt, std::nullopt, cleanup_font());
   ASSERT_TRUE(replace.execute(*reopened)) << "ofont 상자";
   EXPECT_FALSE(replace.used_fallback()) << "변환된 CFF 글꼴을 원본 글꼴로 재사용";
   EXPECT_NE(render_first(*reopened).pixels, before.pixels);
@@ -667,6 +691,35 @@ TEST(SaveDocument, ForeignOttoFontIsLeftAlone) {
   EXPECT_EQ(report2->converted_fonts, 1);
 }
 
+// CFF 줄 수정을 취소하면 키만 남는다 — 재작성 결과가 한 일이 없으면 PDFium 산출물을 둔다 (리뷰 W3)
+TEST(SaveDocument, StaleCffKeyDoesNotReplaceOutput) {
+  ScopedTempDir dir;
+  auto doc = PdfiumDocument::open(testdata("text-lines-basic.pdf"));
+  ASSERT_TRUE(doc);
+  std::string target;
+  for (const auto& l : *doc->text_lines(0)) {
+    if (l.text.find("Hello world line") != std::string::npos) target = l.id;
+  }
+  ASSERT_FALSE(target.empty());
+  edit::ReplaceTextLineCommand replace(0, target, std::string("Hello 한글"), std::nullopt,
+                                       std::nullopt, cff_font());
+  ASSERT_TRUE(replace.execute(*doc));
+  ASSERT_EQ(doc->cff_font_keys().size(), 1u);
+  ASSERT_TRUE(replace.undo(*doc));
+  EXPECT_EQ(doc->cff_font_keys().size(), 1u) << "키는 남는다 (바이트 복원은 캐시를 모른다)";
+  const auto out = dir / "stale.pdf";
+  auto saved = save_document_safely(*doc, out, {});
+  ASSERT_TRUE(saved) << saved.error().message;
+  EXPECT_FALSE(saved->fonts_converted);
+  EXPECT_FALSE(saved->fonts_cleaned);
+  // 재작성본을 쓰지 않았는지: qpdf 산출물은 헤더 주석이 "%¿÷¢þ" 이고 PDFium 산출물은
+  // "\r\n%\xA1\xB3\xC5\xD7" 이다
+  const auto bytes = read_bytes(out);
+  ASSERT_GE(bytes.size(), 16u);
+  const std::string head(bytes.begin(), bytes.begin() + 16);
+  EXPECT_NE(head.find("\r\n%\xA1\xB3"), std::string::npos) << "PDFium 산출물 그대로";
+}
+
 // glyf 글꼴만 있으면 재작성 자체가 없다 (#61 조건 그대로)
 TEST(SaveDocument, GlyfSaveIsNotRewrittenWithoutUnreferencedFonts) {
   ScopedTempDir dir;
@@ -677,8 +730,8 @@ TEST(SaveDocument, GlyfSaveIsNotRewrittenWithoutUnreferencedFonts) {
   EXPECT_TRUE(doc->cff_font_keys().empty());
   bool rewrite_called = false;
   SaveOptions options;
-  options.rewrite_for_testing = [&](const std::filesystem::path&, const std::filesystem::path&, std::string_view,
-                                    const RewriteOptions&) -> Result<void> {
+  options.rewrite_for_testing = [&](const std::filesystem::path&, const std::filesystem::path&,
+                                    std::string_view, const RewriteOptions&) -> Result<void> {
     rewrite_called = true;
     return make_error(ErrorCode::kJobFailed, "should not be called");
   };

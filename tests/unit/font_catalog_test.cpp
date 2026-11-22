@@ -18,6 +18,18 @@ TEST(FontCatalog, NormalizeName) {
   EXPECT_EQ(FontCatalog::normalize_name("맑은 고딕"), "맑은고딕");
   EXPECT_EQ(FontCatalog::normalize_name("Noto Sans CJK KR"), "notosanscjkkr");
   EXPECT_EQ(FontCatalog::normalize_name(""), "");
+  EXPECT_EQ(FontCatalog::normalize_name("Times-Roman"), "times");
+  EXPECT_EQ(FontCatalog::normalize_name("Courier-BoldOblique"), "courier");
+  EXPECT_EQ(FontCatalog::normalize_name("Arial-BoldItalicMT"), "arial");
+  EXPECT_EQ(FontCatalog::normalize_name("Kobold"), "kobold") << "하이픈 없는 접미는 둔다";
+}
+
+TEST(FontCatalog, ScanCanBeCancelled) {
+  int calls = 0;
+  const FontCatalog catalog =
+      FontCatalog::scan({{testdata("fonts"), false}}, 0, [&] { return ++calls > 1; });
+  EXPECT_LE(catalog.entries().size(), 2u) << "첫 파일 뒤에 중단";
+  EXPECT_GE(calls, 2);
 }
 
 std::vector<FontEntry> fake_entries() {

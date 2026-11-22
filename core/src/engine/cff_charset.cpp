@@ -87,7 +87,7 @@ long dict_int(Reader& r, Range d, int want_op, bool* present = nullptr) {
       i += 5;
     } else if (b0 == 30) {  // 실수: 니블이 0xf 로 끝난다
       ++i;
-      while (r.ok) {
+      while (r.ok && i < d.end) {  // DICT 범위 안에서만 (잘린 실수가 다음 구조를 읽지 않게)
         const int v = r.u8(i++);
         if ((v & 0x0f) == 0x0f || (v >> 4) == 0x0f) break;
       }
