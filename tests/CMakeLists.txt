@@ -42,6 +42,8 @@ onpdf_add_test(onpdf_unit_tests
   unit/annotation_test.cpp
   unit/annotation_commands_test.cpp
   unit/font_face_test.cpp
+  unit/font_catalog_test.cpp
+  unit/cff_charset_test.cpp
   unit/text_layout_test.cpp
   unit/add_text_command_test.cpp
   unit/text_object_test.cpp
@@ -59,6 +61,7 @@ onpdf_add_test(onpdf_unit_tests
 )
 target_compile_definitions(onpdf_unit_tests PRIVATE ONPDF_TEST_GLOBAL_PDFIUM=1)
 target_link_libraries(onpdf_unit_tests PRIVATE onpdf::edit)
+target_include_directories(onpdf_unit_tests PRIVATE ${CMAKE_SOURCE_DIR}/core/src/engine)  # cff_charset·fnv 내부 헤더 (#73)
 
 onpdf_add_test(onpdf_render_tests
   render/render_regression_test.cpp

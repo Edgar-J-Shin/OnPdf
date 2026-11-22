@@ -160,13 +160,13 @@ TEST(TextLines, ReplaceNonEmbeddedLineUsesFallbackFont) {
   auto covers = doc->line_font_covers(0, hello->id, "Hello there");
   ASSERT_TRUE(covers);
   EXPECT_FALSE(*covers) << "비임베딩 글꼴은 재사용하지 않는다";
-  LineReplacement without_fallback{"Hello there", std::nullopt};
+  LineReplacement without_fallback{"Hello there", std::nullopt, std::nullopt, std::nullopt};
   auto refused = doc->replace_text_line(0, hello->id, without_fallback);
   ASSERT_FALSE(refused);
   EXPECT_EQ(refused.error().code, ErrorCode::kInvalidArgument);
   EXPECT_EQ(doc->document_state_count(), 0) << "거절은 토큰을 만들지 않는다";
   const Bitmap before = render(*doc);
-  LineReplacement replacement{"Hello there", fallback_for(*hello, "Hello there")};
+  LineReplacement replacement{"Hello there", fallback_for(*hello, "Hello there"), std::nullopt, std::nullopt};
   auto replaced = doc->replace_text_line(0, hello->id, replacement);
   ASSERT_TRUE(replaced) << replaced.error().message;
   EXPECT_TRUE(replaced->used_fallback);
@@ -183,7 +183,7 @@ TEST(TextLines, ReplaceNonEmbeddedLineUsesFallbackFont) {
   EXPECT_NEAR((*objects)[0].bbox.y, hello->bbox.y, 6.0) << "같은 자리";
   EXPECT_EQ(diff_outside(before, render(*doc), hello->bbox, 6.0), 0);
   // 새 상자는 OnPdf 텍스트 상자로 다시 고칠 수 있다 (수술 없음)
-  LineReplacement again{"Hello again", fallback_for(*hello, "Hello again")};
+  LineReplacement again{"Hello again", fallback_for(*hello, "Hello again"), std::nullopt, std::nullopt};
   auto rewritten = doc->replace_text_line(0, replaced->box, again);
   ASSERT_TRUE(rewritten) << rewritten.error().message;
   EXPECT_EQ(rewritten->before, 0u);
@@ -283,7 +283,7 @@ TEST(TextLines, EmbeddedCidLineReusesOriginalFontAndType3FallsBack) {
   EXPECT_FALSE(*doc->line_font_covers(0, korean->id, "서브셋에 없는 글자 ㉿"));
   EXPECT_FALSE(*doc->line_font_covers(0, type3->id, "AB"));
   const Bitmap before = render(*doc);
-  LineReplacement replacement{"줄 텍스트 한글", std::nullopt};
+  LineReplacement replacement{"줄 텍스트 한글", std::nullopt, std::nullopt, std::nullopt};
   auto replaced = doc->replace_text_line(0, korean->id, replacement);
   ASSERT_TRUE(replaced) << replaced.error().message;
   EXPECT_FALSE(replaced->used_fallback);
@@ -298,7 +298,7 @@ TEST(TextLines, EmbeddedCidLineReusesOriginalFontAndType3FallsBack) {
   EXPECT_EQ(text.find("한글 텍스트 줄"), std::string::npos);
   EXPECT_EQ(diff_outside(before, render(*doc), korean->bbox, 7.0), 0);
   // 같은 상자를 다시 원본 글꼴로 고친다 (수술 없음)
-  LineReplacement again{"한글 줄", std::nullopt};
+  LineReplacement again{"한글 줄", std::nullopt, std::nullopt, std::nullopt};
   auto rewritten = doc->replace_text_line(0, replaced->box, again);
   ASSERT_TRUE(rewritten) << rewritten.error().message;
   EXPECT_EQ(rewritten->before, 0u);
@@ -309,7 +309,7 @@ TEST(TextLines, EmbeddedCidLineReusesOriginalFontAndType3FallsBack) {
   ASSERT_TRUE(lines2);
   const TextLineInfo* type3_now = find_line(*lines2, "ABAB");
   ASSERT_NE(type3_now, nullptr);
-  LineReplacement t3{"BA", fallback_for(*type3_now, "BA")};
+  LineReplacement t3{"BA", fallback_for(*type3_now, "BA"), std::nullopt, std::nullopt};
   auto t3_replaced = doc->replace_text_line(0, type3_now->id, t3);
   ASSERT_TRUE(t3_replaced) << t3_replaced.error().message;
   EXPECT_TRUE(t3_replaced->used_fallback);

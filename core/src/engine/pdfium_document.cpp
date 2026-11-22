@@ -122,6 +122,7 @@ PdfiumDocument& PdfiumDocument::operator=(PdfiumDocument&& other) noexcept {
   snapshots_ = std::move(other.snapshots_);
   next_snapshot_ = other.next_snapshot_;
   fonts_ = std::move(other.fonts_);
+  cff_keys_ = std::move(other.cff_keys_);
   detached_ = std::move(other.detached_);
   next_detached_ = other.next_detached_;
   form_type_ = other.form_type_;
@@ -880,14 +881,16 @@ Result<TextObjectsResult> PdfiumDocument::add_text_objects_to(FPDF_PAGE raw_page
   // 폰트: 같은 서브셋은 문서당 한 번만 임베딩한다 (두 번 로드 = 두 번 임베딩, #43)
   FPDF_FONT font = nullptr;
   if (auto it = fonts_.find(spec.font.key); it != fonts_.end()) {
-    font = it->second.get();
+    font = it->second.font.get();
   } else {
     ScopedFont loaded(FPDFText_LoadCidType2Font(doc_.get(), spec.font.ttf.data(), static_cast<uint32_t>(spec.font.ttf.size()),
                                                 spec.font.to_unicode_cmap.c_str(), spec.font.cid_to_gid.data(),
                                                 static_cast<uint32_t>(spec.font.cid_to_gid.size())));
     if (!loaded) return make_error(ErrorCode::kInvalidState, "FPDFText_LoadCidType2Font failed");
     font = loaded.get();
-    fonts_.emplace(spec.font.key, std::move(loaded));
+    const bool cff = spec.font.ttf.size() >= 4 && std::memcmp(spec.font.ttf.data(), "OTTO", 4) == 0;
+    if (cff) cff_keys_.insert(spec.font.key);
+    fonts_.emplace(spec.font.key, LoadedFont{std::move(loaded), cff});
   }
   const detail::PageSpace space = detail::PageSpace::of(page->get());
   std::vector<std::string> ids;
@@ -988,6 +991,16 @@ Result<std::vector<TextObjectInfo>> PdfiumDocument::text_objects(int page_index)
     info.box_text = mark_blob(mark, "box_text");
     if (const std::string width = mark_string(mark, "width"); !width.empty()) info.width = parse_points(width);
     info.original_font = mark_string(mark, "ofont") == "1";
+    if (FPDF_FONT font = FPDFTextObj_GetFont(obj); font != nullptr) {
+      const std::size_t n = FPDFFont_GetBaseFontName(font, nullptr, 0);
+      if (n > 0) {
+        std::string name(n, '\0');
+        FPDFFont_GetBaseFontName(font, name.data(), n);
+        if (!name.empty() && name.back() == '\0') name.pop_back();
+        if (name.size() > 7 && name[6] == '+') name.erase(0, 7);  // 서브셋 태그
+        info.font_name = std::move(name);
+      }
+    }
     if (info.text.empty()) {
       if (!text_page) text_page.reset(FPDFText_LoadPage(page->get()));
       if (text_page) {
@@ -1327,13 +1340,19 @@ struct FileWriter : FPDF_FILEWRITE {
 
 }  // namespace
 
+std::vector<std::string> PdfiumDocument::cff_font_keys() const {
+  std::vector<std::string> keys(cff_keys_.begin(), cff_keys_.end());
+  std::sort(keys.begin(), keys.end());
+  return keys;
+}
+
 bool PdfiumDocument::has_unreferenced_fonts() const {
   PdfiumLibrary::assert_current_thread();
   if (fonts_.empty()) return false;
   // FPDFText_LoadCidType2Font 와 FPDFPageObj_CreateTextObj 는 같은 CPDF_Font 를 공유하므로 핸들 포인터로 대조한다.
   // OnPdf 텍스트는 쪽 직속 객체뿐이라 Form XObject 안은 보지 않는다
   std::unordered_set<FPDF_FONT> unused;
-  for (const auto& [key, font] : fonts_) unused.insert(font.get());
+  for (const auto& [key, loaded] : fonts_) unused.insert(loaded.font.get());
   const int pages = page_count();
   for (int i = 0; i < pages && !unused.empty(); ++i) {
     auto page = load_page(i);

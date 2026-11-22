@@ -2,6 +2,9 @@
 
 #include "onpdf/core/platform/path.h"
 
+#include "cff_charset.h"
+#include "fnv.h"
+
 #include <qpdf/Constants.h>
 #include <qpdf/qpdf-c.h>
 #include <qpdf/qpdfjob-c.h>
@@ -25,6 +28,8 @@
 #include <algorithm>
 #include <exception>
 #include <cstdio>
+#include <cstring>
+#include <span>
 #include <memory>
 #include <string>
 #include <utility>
@@ -243,18 +248,104 @@ Result<JobReport> QpdfTools::check(const std::filesystem::path& file, std::strin
   return run_job(json, {});
 }
 
+namespace {
+
+// OnPdf 가 넣은 CFF 서브셋 글꼴을 규격대로 (#73). 바꾼 글꼴 수를 돌려준다
+int convert_cff_fonts(QPDF& q, const std::vector<std::string>& keys) {
+  int converted = 0;
+  for (auto& font : q.getAllObjects()) {
+    if (!font.isDictionaryOfType("/Font") || !font.getKey("/Subtype").isNameAndEquals("/CIDFontType2")) continue;
+    QPDFObjectHandle desc = font.getKey("/FontDescriptor");
+    if (!desc.isDictionary()) continue;
+    QPDFObjectHandle file = desc.getKey("/FontFile2");
+    if (!file.isStream()) continue;
+    std::shared_ptr<Buffer> data = file.getStreamData(qpdf_dl_all);
+    if (data == nullptr || data->getSize() < 4 || std::memcmp(data->getBuffer(), "OTTO", 4) != 0) continue;
+    std::vector<std::uint8_t> otf(data->getBuffer(), data->getBuffer() + data->getSize());
+    if (std::find(keys.begin(), keys.end(), detail::fnv1a_hex(otf)) == keys.end()) continue;  // 우리 글꼴만
+    if (!detail::write_identity_charset(otf)) continue;  // 자리가 모자라면 그대로 둔다 (FreeType 뷰어는 여전히 그린다)
+    file.replaceStreamData(std::string(otf.begin(), otf.end()), QPDFObjectHandle::newNull(), QPDFObjectHandle::newNull());
+    file.getDict().replaceKey("/Subtype", QPDFObjectHandle::newName("/OpenType"));
+    file.getDict().removeKey("/Length1");
+    desc.removeKey("/FontFile2");
+    desc.replaceKey("/FontFile3", file);
+    font.replaceKey("/Subtype", QPDFObjectHandle::newName("/CIDFontType0"));
+    font.removeKey("/CIDToGIDMap");
+    ++converted;
+  }
+  return converted;
+}
+
+}  // namespace
+
 Result<JobReport> QpdfTools::rewrite(const std::filesystem::path& input, const std::filesystem::path& output,
-                                     std::string_view password) {
+                                     std::string_view password, const RewriteOptions& options) {
   std::error_code ec;
   if (!std::filesystem::exists(input, ec)) return make_error(ErrorCode::kFileNotFound, "file not found: " + path_to_utf8(input));
   if (std::filesystem::exists(output, ec) && std::filesystem::equivalent(input, output, ec)) {
     return make_error(ErrorCode::kInvalidArgument, "output must differ from input");
+  }
+  if (!options.convert_cff_keys.empty()) {
+    // 객체 모델 경로: 글꼴 사전을 고친 뒤 쓴다. QPDFWriter 는 트레일러에서 닿는 객체만 쓰므로 미참조 폐기는 같다
+    try {
+      QPDF q;
+      q.setSuppressWarnings(true);
+      const std::string pw(password);
+      q.processFile(path_to_utf8(input).c_str(), pw.empty() ? nullptr : pw.c_str());
+      JobReport report;
+      report.converted_fonts = convert_cff_fonts(q, options.convert_cff_keys);
+      QPDFWriter w(q, path_to_utf8(output).c_str());
+      w.setObjectStreamMode(qpdf_o_preserve);
+      w.setPreserveEncryption(true);
+      w.write();
+      for (const auto& warning : q.getWarnings()) report.warnings.push_back(warning.what());
+      return report;
+    } catch (const std::exception& e) {
+      const std::string text = e.what();
+      if (is_password_error(text)) return make_error(ErrorCode::kPasswordRequired, text);
+      return make_error(ErrorCode::kJobFailed, text);
+    }
   }
   std::string json = "{\"inputFile\": " + json_path(input);
   if (!password.empty()) json += ", \"password\": " + json_string(password);
   // decrypt 를 넣지 않으면 입력의 암호화가 그대로 유지된다 (병합·분할과 다르다 — 저장 검증은 같은 암호로 다시 연다)
   json += ", \"outputFile\": " + json_path(output) + ", \"objectStreams\": \"preserve\"}";
   return run_job(json, {});
+}
+
+Result<FontCensus> QpdfTools::font_census(const std::filesystem::path& file, std::string_view password) {
+  try {
+    QPDF q;
+    q.setSuppressWarnings(true);
+    const std::string pw(password);
+    q.processFile(path_to_utf8(file).c_str(), pw.empty() ? nullptr : pw.c_str());
+    FontCensus census;
+    for (auto& oh : q.getAllObjects()) {
+      if (!oh.isDictionaryOfType("/Font")) continue;
+      if (oh.getKey("/Subtype").isNameAndEquals("/CIDFontType2")) ++census.cid_type2;
+      if (oh.getKey("/Subtype").isNameAndEquals("/CIDFontType0")) ++census.cid_type0;
+      if (oh.hasKey("/CIDToGIDMap")) ++census.cid_to_gid_maps;
+      QPDFObjectHandle desc = oh.getKey("/FontDescriptor");
+      if (!desc.isDictionary()) continue;
+      if (QPDFObjectHandle f2 = desc.getKey("/FontFile2"); f2.isStream()) {
+        auto data = f2.getStreamData(qpdf_dl_all);
+        if (data != nullptr && data->getSize() >= 4 && std::memcmp(data->getBuffer(), "OTTO", 4) == 0) ++census.fontfile2_otto;
+      }
+      if (QPDFObjectHandle f3 = desc.getKey("/FontFile3"); f3.isStream() && f3.getDict().getKey("/Subtype").isNameAndEquals("/OpenType")) {
+        ++census.fontfile3_opentype;
+        auto data = f3.getStreamData(qpdf_dl_all);
+        if (data != nullptr) {
+          const auto info = detail::inspect_cff_charset(std::span<const std::uint8_t>(data->getBuffer(), data->getSize()));
+          if (info && info->cid_keyed && !info->identity) census.charsets_identity = false;
+        }
+      }
+    }
+    return census;
+  } catch (const std::exception& e) {
+    const std::string text = e.what();
+    if (is_password_error(text)) return make_error(ErrorCode::kPasswordRequired, text);
+    return make_error(ErrorCode::kJobFailed, text);
+  }
 }
 
 Result<int> QpdfTools::page_count(const std::filesystem::path& file, std::string_view password) {

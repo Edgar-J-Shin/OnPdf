@@ -2,11 +2,13 @@
 #include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/engine/save.h"
 #include "onpdf/edit/add_text_command.h"
+#include "onpdf/edit/text_line_commands.h"
 
 #include "../test_support.h"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 
@@ -457,7 +459,7 @@ TEST(SaveDocument, RewriteFailureFallsBackToPdfiumOutput) {
   ASSERT_TRUE(cmd.undo(*doc));
   SaveOptions options;
   int calls = 0;
-  options.rewrite_for_testing = [&](const std::filesystem::path&, const std::filesystem::path&, std::string_view) -> Result<void> {
+  options.rewrite_for_testing = [&](const std::filesystem::path&, const std::filesystem::path&, std::string_view, const engine::RewriteOptions&) -> Result<void> {
     ++calls;
     return make_error(ErrorCode::kJobFailed, "injected");
   };
@@ -499,7 +501,7 @@ TEST(SaveDocument, RewriteCorruptionIsCaughtByVerify) {
   ASSERT_TRUE(cmd.execute(*doc));
   ASSERT_TRUE(cmd.undo(*doc));
   SaveOptions options;
-  options.rewrite_for_testing = [](const std::filesystem::path&, const std::filesystem::path& out, std::string_view) -> Result<void> {
+  options.rewrite_for_testing = [](const std::filesystem::path&, const std::filesystem::path& out, std::string_view, const engine::RewriteOptions&) -> Result<void> {
     std::ofstream(out, std::ios::binary) << "%PDF-1.7 broken";
     return {};
   };
@@ -508,6 +510,182 @@ TEST(SaveDocument, RewriteCorruptionIsCaughtByVerify) {
   EXPECT_EQ(saved.error().code, ErrorCode::kSaveVerifyFailed);
   EXPECT_EQ(read_bytes(target), original) << "원본 불변";
   EXPECT_EQ(files_in(dir.path()), 1u) << "임시 파일 모두 제거";
+}
+
+// ---- CFF 글꼴 저장 후처리 (#73) ----
+
+std::shared_ptr<const edit::FontFace> cff_font() {
+  auto face = edit::FontFace::load(testdata("fonts") / "NotoSansCJKkr-subset.otf");
+  EXPECT_TRUE(face);
+  return face ? *face : nullptr;
+}
+
+edit::AddTextCommand cff_text_command(const std::string& utf8, double y = 100) {
+  edit::TextBoxSpec spec;
+  spec.page = 0;
+  spec.origin = {72, y};
+  spec.utf8 = utf8;
+  spec.face = cff_font();
+  return edit::AddTextCommand(spec);
+}
+
+Bitmap render_first(const PdfiumDocument& doc) {
+  RenderOptions ro;
+  ro.scale = 2.0f;
+  auto bmp = doc.render_page(0, ro);
+  EXPECT_TRUE(bmp);
+  return bmp ? std::move(*bmp) : Bitmap{};
+}
+
+// CFF 서브셋 → 저장: FontFile3/OpenType + CIDFontType0, CIDToGIDMap 없음, charset 항등, 렌더·추출 동일
+TEST(SaveDocument, CffFontIsConvertedOnSave) {
+  ScopedTempDir dir;
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc);
+  auto cmd = cff_text_command("한글 CFF 텍스트 123");
+  ASSERT_TRUE(cmd.execute(*doc));
+  ASSERT_EQ(doc->cff_font_keys().size(), 1u);
+  const Bitmap before = render_first(*doc);
+  const auto target = dir / "cff.pdf";
+  auto saved = save_document_safely(*doc, target, {});
+  ASSERT_TRUE(saved) << saved.error().message;
+  EXPECT_TRUE(saved->fonts_converted);
+  EXPECT_FALSE(saved->fonts_cleaned);
+  auto census = QpdfTools::font_census(target);
+  ASSERT_TRUE(census) << census.error().message;
+  EXPECT_EQ(census->cid_type0, 1);
+  EXPECT_EQ(census->fontfile3_opentype, 1);
+  EXPECT_EQ(census->fontfile2_otto, 0);
+  EXPECT_EQ(census->cid_to_gid_maps, 0);
+  EXPECT_TRUE(census->charsets_identity);
+  auto check = QpdfTools::check(target);
+  ASSERT_TRUE(check) << check.error().message;
+  EXPECT_TRUE(check->warnings.empty());
+  auto reopened = PdfiumDocument::open(target);
+  ASSERT_TRUE(reopened);
+  EXPECT_EQ(render_first(*reopened).pixels, before.pixels) << "변환 뒤에도 PDFium 은 같은 글리프";
+  EXPECT_NE(reopened->load_text(0)->all_text().find("한글 CFF 텍스트 123"), std::string::npos);
+  auto objects = reopened->text_objects(0);
+  ASSERT_TRUE(objects);
+  ASSERT_EQ(objects->size(), 1u);
+  EXPECT_EQ((*objects)[0].font_name, "NotoSansCJKkr-subset");
+}
+
+// 변환된 글꼴을 다시 열어 원본 글꼴(ofont)로 재사용·재저장
+TEST(SaveDocument, ConvertedCffFontIsReusedAsOriginalFont) {
+  ScopedTempDir dir;
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc);
+  auto cmd = cff_text_command("한글 텍스트");
+  ASSERT_TRUE(cmd.execute(*doc));
+  const auto target = dir / "cff.pdf";
+  ASSERT_TRUE(save_document_safely(*doc, target, {}));
+  auto reopened = PdfiumDocument::open(target);
+  ASSERT_TRUE(reopened);
+  auto objects = reopened->text_objects(0);
+  ASSERT_TRUE(objects);
+  ASSERT_EQ(objects->size(), 1u);
+  const Bitmap before = render_first(*reopened);
+  edit::ReplaceTextLineCommand replace(0, (*objects)[0].box, std::string("텍스트 한글"), std::nullopt, std::nullopt, cleanup_font());
+  ASSERT_TRUE(replace.execute(*reopened)) << "ofont 상자";
+  EXPECT_FALSE(replace.used_fallback()) << "변환된 CFF 글꼴을 원본 글꼴로 재사용";
+  EXPECT_NE(render_first(*reopened).pixels, before.pixels);
+  EXPECT_NE(reopened->load_text(0)->all_text().find("텍스트 한글"), std::string::npos);
+  EXPECT_TRUE(reopened->cff_font_keys().empty()) << "재사용은 새 서브셋을 넣지 않는다";
+  const auto again = dir / "cff2.pdf";
+  auto saved = save_document_safely(*reopened, again, {});
+  ASSERT_TRUE(saved) << saved.error().message;
+  EXPECT_FALSE(saved->fonts_converted);
+  auto census = QpdfTools::font_census(again);
+  ASSERT_TRUE(census);
+  EXPECT_EQ(census->cid_type0, 1);
+  EXPECT_EQ(census->fontfile2_otto, 0);
+}
+
+TEST(SaveDocument, EncryptedCffKeepsPasswordAndSignedIncrementalKeepsFontFile2) {
+  ScopedTempDir dir;
+  auto enc = PdfiumDocument::open(testdata("encrypted-aes256.pdf"), "owner");
+  ASSERT_TRUE(enc);
+  auto cmd = cff_text_command("한글 저장");
+  ASSERT_TRUE(cmd.execute(*enc));
+  const auto target = dir / "enc.pdf";
+  auto saved = save_document_safely(*enc, target, {});
+  ASSERT_TRUE(saved) << saved.error().message;
+  EXPECT_TRUE(saved->fonts_converted);
+  EXPECT_FALSE(PdfiumDocument::open(target)) << "암호 유지";
+  auto census = QpdfTools::font_census(target, "owner");
+  ASSERT_TRUE(census) << census.error().message;
+  EXPECT_EQ(census->fontfile3_opentype, 1);
+  EXPECT_EQ(census->fontfile2_otto, 0);
+
+  auto signed_doc = PdfiumDocument::open(testdata("signed-dummy.pdf"));
+  ASSERT_TRUE(signed_doc);
+  auto cmd2 = cff_text_command("한글 회전");
+  ASSERT_TRUE(cmd2.execute(*signed_doc));
+  const auto inc = dir / "signed.pdf";
+  SaveOptions options;
+  options.incremental = true;
+  auto saved2 = save_document_safely(*signed_doc, inc, options);
+  ASSERT_TRUE(saved2) << saved2.error().message;
+  EXPECT_FALSE(saved2->fonts_converted);
+  auto census2 = QpdfTools::font_census(inc);
+  ASSERT_TRUE(census2);
+  EXPECT_EQ(census2->fontfile2_otto, 1) << "증분 저장은 후처리하지 않는다 (알려진 제한)";
+  const auto original = read_bytes(testdata("signed-dummy.pdf"));
+  const auto bytes = read_bytes(inc);
+  ASSERT_GE(bytes.size(), original.size());
+  EXPECT_TRUE(std::equal(original.begin(), original.end(), bytes.begin()));
+}
+
+// 키 집합 밖(다른 프로그램이 넣은 OTTO)은 건드리지 않는다
+TEST(SaveDocument, ForeignOttoFontIsLeftAlone) {
+  ScopedTempDir dir;
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc);
+  auto cmd = cff_text_command("한글 편집");
+  ASSERT_TRUE(cmd.execute(*doc));
+  const auto raw = dir / "raw.pdf";
+  SaveOptions no_convert;
+  no_convert.convert_cff_fonts = false;
+  ASSERT_TRUE(save_document_safely(*doc, raw, no_convert));
+  auto census = QpdfTools::font_census(raw);
+  ASSERT_TRUE(census);
+  EXPECT_EQ(census->fontfile2_otto, 1);
+  // 그 파일을 "다른 프로그램 산출물"로 보고 빈 키·다른 키로 재작성
+  const auto out = dir / "rewritten.pdf";
+  auto report = QpdfTools::rewrite(raw, out, {}, RewriteOptions{{"0000000000000000"}});
+  ASSERT_TRUE(report) << report.error().message;
+  EXPECT_EQ(report->converted_fonts, 0);
+  auto census2 = QpdfTools::font_census(out);
+  ASSERT_TRUE(census2);
+  EXPECT_EQ(census2->fontfile2_otto, 1);
+  EXPECT_EQ(census2->cid_type2, 1);
+  // 맞는 키면 변환
+  const auto out2 = dir / "converted.pdf";
+  auto report2 = QpdfTools::rewrite(raw, out2, {}, RewriteOptions{doc->cff_font_keys()});
+  ASSERT_TRUE(report2) << report2.error().message;
+  EXPECT_EQ(report2->converted_fonts, 1);
+}
+
+// glyf 글꼴만 있으면 재작성 자체가 없다 (#61 조건 그대로)
+TEST(SaveDocument, GlyfSaveIsNotRewrittenWithoutUnreferencedFonts) {
+  ScopedTempDir dir;
+  auto doc = PdfiumDocument::open(testdata("simple.pdf"));
+  ASSERT_TRUE(doc);
+  auto cmd = text_command("glyf 텍스트");
+  ASSERT_TRUE(cmd.execute(*doc));
+  EXPECT_TRUE(doc->cff_font_keys().empty());
+  bool rewrite_called = false;
+  SaveOptions options;
+  options.rewrite_for_testing = [&](const std::filesystem::path&, const std::filesystem::path&, std::string_view,
+                                    const RewriteOptions&) -> Result<void> {
+    rewrite_called = true;
+    return make_error(ErrorCode::kJobFailed, "should not be called");
+  };
+  auto saved = save_document_safely(*doc, dir / "glyf.pdf", options);
+  ASSERT_TRUE(saved) << saved.error().message;
+  EXPECT_FALSE(rewrite_called);
+  EXPECT_FALSE(saved->fonts_converted);
 }
 }  // namespace
 }  // namespace onpdf::engine

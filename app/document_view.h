@@ -93,6 +93,7 @@ class DocumentView : public QAbstractScrollArea {
     std::string filter;
     bool marked = true;            // 이미지: 기존(다른 프로그램) 이미지면 false
     bool original_font = false;    // 텍스트: 기존 줄을 원본 글꼴로 고친 상자 (#65) — 재수정도 원본 글꼴 경로
+    std::string font_name;         // 텍스트: 첫 줄 객체 글꼴의 BaseFont — 재수정의 대체 글꼴 후보 (#73)
   };
   using SelectedTextBox = SelectedObject;
   [[nodiscard]] const std::vector<engine::TextObjectInfo>* text_objects(int page) const;  // 캐시에 있을 때만

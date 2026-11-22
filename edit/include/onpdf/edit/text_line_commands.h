@@ -27,6 +27,7 @@ class ReplaceTextLineCommand final : public Command {
   Result<engine::ChangeSet> undo(engine::EditableDocument& doc) override;
   void discard(engine::EditableDocument& doc) noexcept override;
   [[nodiscard]] bool used_fallback() const noexcept { return used_fallback_; }
+  [[nodiscard]] std::string fallback_family() const { return face_ ? face_->family_name() : std::string(); }  // 안내용 (#73)
   [[nodiscard]] const std::string& box() const noexcept { return box_; }
   [[nodiscard]] const std::vector<std::string>& ids() const noexcept { return ids_; }
   [[nodiscard]] int page() const noexcept { return page_; }

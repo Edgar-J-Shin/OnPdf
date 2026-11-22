@@ -6,6 +6,8 @@
 #include "onpdf/edit/font_face.h"
 #include "onpdf/edit/object_commands.h"
 #include "onpdf/edit/form_commands.h"
+#include "font_catalog_loader.h"
+#include "onpdf/edit/font_catalog.h"
 #include "structure_job.h"
 #include "print_job.h"
 #include "onpdf/core/engine/pdfium_worker.h"
@@ -125,6 +127,9 @@ class MainWindow : public QMainWindow {
   void settle_form_edits();
   [[nodiscard]] QAction* paste_action() const noexcept { return paste_action_; }
   [[nodiscard]] bool has_text_font() const noexcept { return text_font_ != nullptr; }
+  // 시스템 글꼴 카탈로그 (#73). 로더가 끝나면 자동으로 들어오고, 테스트는 가짜 카탈로그를 주입한다
+  void set_font_catalog(std::shared_ptr<const edit::FontCatalog> catalog);
+  [[nodiscard]] bool has_font_catalog() const noexcept { return font_catalog_ != nullptr; }
   [[nodiscard]] double text_size() const noexcept { return text_size_; }
   void set_text_size(double size);
   [[nodiscard]] QComboBox* text_size_combo() const noexcept { return text_size_combo_; }
@@ -201,11 +206,16 @@ class MainWindow : public QMainWindow {
   void on_text_line_edit_requested(int page, const engine::TextLineInfo& info);
   void on_text_line_delete_requested(int page, const engine::TextLineInfo& info);
   bool run_line_replace(int page, const std::string& line_id, std::optional<QString> text, std::optional<double> size,
-                        std::optional<engine::Color> color);
+                        std::optional<engine::Color> color, std::shared_ptr<const edit::FontFace> fallback_face);
   void announce_line_edit();  // 줄 수정 Command 가 끝나면 새 상자를 고르고 대체 글꼴 안내
   [[nodiscard]] QString line_reason_text(const engine::TextLineInfo& info) const;
-  bool replace_selected_text(std::optional<QString> utf8, std::optional<double> size, std::optional<engine::Color> color);
+  bool replace_selected_text(std::optional<QString> utf8, std::optional<double> size, std::optional<engine::Color> color,
+                             std::shared_ptr<const edit::FontFace> face = nullptr);  // face 가 없으면 번들
   void load_bundled_text_font();
+  // 대체 글꼴 (#73): 카탈로그에서 base_font_name 과 같은 이름 → 한글이면 기본 Sans → 번들. 후보마다 글자가 다 있는지 본다.
+  // 서명 문서는 CFF 후보를 제외한다(증분 저장은 후처리를 못 한다)
+  [[nodiscard]] std::shared_ptr<const edit::FontFace> fallback_font_for(const std::string& base_font_name, const QString& text);
+  [[nodiscard]] std::shared_ptr<const edit::FontFace> load_catalog_font(const edit::FontEntry& entry);
   void on_ink_requested(int page, const std::vector<onpdf::Point>& points, onpdf::Rect bbox);
   void on_shape_requested(int page, onpdf::engine::AnnotationKind kind, onpdf::Rect rect);
   void update_property_buttons();
@@ -289,6 +299,9 @@ class MainWindow : public QMainWindow {
   double shape_border_width_ = 2.0;
   std::uint8_t shape_alpha_ = 255;
   std::shared_ptr<const edit::FontFace> text_font_;  // 새 텍스트 글꼴 (불변, Command 와 공유)
+  FontCatalogLoader* catalog_loader_ = nullptr;      // 시스템 글꼴 스캔 (#73)
+  std::shared_ptr<const edit::FontCatalog> font_catalog_;
+  std::vector<std::pair<std::string, std::shared_ptr<const edit::FontFace>>> fallback_cache_;  // "경로#면" → 글꼴, 최근 8개
   std::weak_ptr<edit::Command> pending_line_edit_;  // 실행 중인 줄 수정 Command (#65)
   QString pending_line_notice_;                    // 새 상자가 선택된 뒤 보여 줄 안내 (대체 글꼴)
   QString text_font_path_;

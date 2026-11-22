@@ -525,6 +525,57 @@ TEST(Roundtrip, EditedLinesSurviveSave) {
   }
 }
 
+// #73: 비임베딩 줄을 CFF 대체 글꼴로 고쳐 저장 → 규격(FontFile3) 변환 뒤에도 렌더·추출 동일, 다시 열어 원본 글꼴로 재수정
+TEST(Roundtrip, CffLinesSurviveSave) {
+  auto cff = edit::FontFace::load(testdata("fonts") / "NotoSansCJKkr-subset.otf");
+  ASSERT_TRUE(cff);
+  EXPECT_TRUE((*cff)->is_cff());
+  for (const char* file : {"text-lines-basic.pdf", "text-lines-basic-enc.pdf"}) {
+    const std::string password = std::string(file).find("-enc") != std::string::npos ? "user" : "";
+    auto doc = PdfiumDocument::open(testdata(file), password);
+    ASSERT_TRUE(doc) << file;
+    std::string target;
+    for (const auto& l : *doc->text_lines(0)) if (l.text.find("Hello world line") != std::string::npos) target = l.id;
+    ASSERT_FALSE(target.empty()) << file;
+    edit::ReplaceTextLineCommand replace(0, target, std::string("Hello 한글 CID"), std::nullopt, std::nullopt, *cff);
+    ASSERT_TRUE(replace.execute(*doc)) << file;
+    EXPECT_TRUE(replace.used_fallback());
+    EXPECT_EQ(replace.fallback_family(), "NotoSansCJKkr-subset");
+    ASSERT_EQ(doc->cff_font_keys().size(), 1u);
+    RenderOptions render;
+    render.scale = 1.0f;
+    auto before = doc->render_page(0, render);
+    ASSERT_TRUE(before);
+    ScopedTempDir dir;
+    const auto path = dir / "cff-lines.pdf";
+    auto saved = save_document_safely(*doc, path, {});
+    ASSERT_TRUE(saved) << file << ": " << saved.error().message;
+    EXPECT_TRUE(saved->fonts_converted);
+    auto census = engine::QpdfTools::font_census(path, password);
+    ASSERT_TRUE(census) << census.error().message;
+    EXPECT_EQ(census->fontfile2_otto, 0);
+    EXPECT_EQ(census->fontfile3_opentype, 1);
+    EXPECT_TRUE(census->charsets_identity);
+    auto reopened = PdfiumDocument::open(path, password);
+    ASSERT_TRUE(reopened) << file;
+    auto after = reopened->render_page(0, render);
+    ASSERT_TRUE(after);
+    EXPECT_EQ(after->pixels, before->pixels) << file;
+    EXPECT_NE(reopened->load_text(0)->all_text().find("Hello 한글 CID"), std::string::npos);
+    auto objects = reopened->text_objects(0);
+    ASSERT_TRUE(objects);
+    ASSERT_EQ(objects->size(), 1u);
+    EXPECT_EQ((*objects)[0].font_name, "NotoSansCJKkr-subset");
+    // 변환된 글꼴을 원본 글꼴로 재사용 (수술 없음)
+    edit::ReplaceTextLineCommand again(0, (*objects)[0].box, std::string("CID 한글 Hello"), std::nullopt, std::nullopt, nullptr);
+    ASSERT_TRUE(again.execute(*reopened)) << file;
+    EXPECT_FALSE(again.used_fallback());
+    auto check = engine::QpdfTools::check(path, password);
+    ASSERT_TRUE(check) << check.error().message;
+    EXPECT_TRUE(check->warnings.empty());
+  }
+}
+
 TEST(Roundtrip, ImagesSurviveSave) {
   struct Case { const char* file; bool incremental; };
   for (const Case c : {Case{"simple.pdf", false}, Case{"scanned.pdf", false}, Case{"signed-dummy.pdf", true}}) {

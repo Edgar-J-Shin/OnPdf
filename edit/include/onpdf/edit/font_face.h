@@ -45,9 +45,10 @@ class FontFace {
   FontFace(const FontFace&) = delete;
   FontFace& operator=(const FontFace&) = delete;
 
-  // TTF/OTF(.ttf, 변형 폰트 포함) 파일. 실패: kFileNotFound·kInvalidFormat
-  [[nodiscard]] static Result<std::shared_ptr<const FontFace>> load(const std::filesystem::path& path);
-  [[nodiscard]] static Result<std::shared_ptr<const FontFace>> load_from_memory(std::vector<std::uint8_t> bytes);
+  // TTF/OTF(CFF)/TTC 파일. face_index 는 TTC 의 면 (단일 글꼴은 0). 실패: kFileNotFound·kInvalidFormat(면 번호 범위 밖 포함)
+  [[nodiscard]] static Result<std::shared_ptr<const FontFace>> load(const std::filesystem::path& path, unsigned face_index = 0);
+  [[nodiscard]] static Result<std::shared_ptr<const FontFace>> load_from_memory(std::vector<std::uint8_t> bytes,
+                                                                                unsigned face_index = 0);
 
   // 한 줄(개행 없음)을 size_pt 로 배치. 변형 폰트는 wght=400 으로 고정.
   // 탭·NBSP 처럼 글리프가 없는 레이아웃 공백은 공백 글리프로 바꾼다 (탭 = 공백 4칸)
@@ -59,6 +60,9 @@ class FontFace {
   [[nodiscard]] unsigned upem() const noexcept;
   [[nodiscard]] bool has_weight_axis() const noexcept;
   [[nodiscard]] std::string family_name() const;
+  [[nodiscard]] std::string style_name() const;              // name ID 2 ("Regular", "Bold"…)
+  [[nodiscard]] bool is_cff() const noexcept;                // CFF/CFF2 외곽선 — 서브셋이 OTTO 로 나온다 (#73 저장 후처리 대상)
+  [[nodiscard]] unsigned face_index() const noexcept;
 
  private:
   struct Impl;

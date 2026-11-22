@@ -1079,6 +1079,7 @@ std::optional<DocumentView::SelectedTextBox> DocumentView::text_box_by_id(int pa
       out.text = t.text;
       first = false;
       out.original_font = t.original_font;
+      out.font_name = t.font_name;
     } else {
       const double x0 = std::min(out.bbox.x, t.bbox.x), y0 = std::min(out.bbox.y, t.bbox.y);
       const double x1 = std::max(out.bbox.right(), t.bbox.right()), y1 = std::max(out.bbox.bottom(), t.bbox.bottom());

@@ -52,6 +52,8 @@ struct FontFace::Impl {
   Blob blob;
   Face face;
   bool has_wght = false;
+  bool cff = false;
+  unsigned face_index = 0;
 
   // 배치·측정용 폰트 (Regular 고정, 폰트 단위 = upem)
   Font make_font() const {
@@ -69,22 +71,28 @@ struct FontFace::Impl {
 FontFace::FontFace(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 FontFace::~FontFace() = default;
 
-Result<std::shared_ptr<const FontFace>> FontFace::load(const std::filesystem::path& path) {
+Result<std::shared_ptr<const FontFace>> FontFace::load(const std::filesystem::path& path, unsigned face_index) {
   std::ifstream in(path, std::ios::binary);
   if (!in) return make_error(ErrorCode::kFileNotFound, "cannot open font " + onpdf::path_to_utf8(path));
   std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-  return load_from_memory(std::move(bytes));
+  return load_from_memory(std::move(bytes), face_index);
 }
 
-Result<std::shared_ptr<const FontFace>> FontFace::load_from_memory(std::vector<std::uint8_t> bytes) {
+Result<std::shared_ptr<const FontFace>> FontFace::load_from_memory(std::vector<std::uint8_t> bytes, unsigned face_index) {
   if (bytes.empty()) return make_error(ErrorCode::kInvalidFormat, "empty font");
   auto impl = std::make_unique<Impl>();
   impl->bytes = std::move(bytes);
   impl->blob.reset(hb_blob_create(reinterpret_cast<const char*>(impl->bytes.data()), static_cast<unsigned>(impl->bytes.size()),
                                   HB_MEMORY_MODE_READONLY, nullptr, nullptr));
   if (!impl->blob || hb_blob_get_length(impl->blob.get()) == 0) return make_error(ErrorCode::kInvalidFormat, "cannot read font data");
-  impl->face.reset(hb_face_create(impl->blob.get(), 0));
+  if (face_index >= hb_face_count(impl->blob.get())) return make_error(ErrorCode::kInvalidFormat, "face index out of range");
+  impl->face.reset(hb_face_create(impl->blob.get(), face_index));
   if (!impl->face || hb_face_get_glyph_count(impl->face.get()) == 0) return make_error(ErrorCode::kInvalidFormat, "not a font");
+  impl->face_index = face_index;
+  for (const hb_tag_t tag : {HB_TAG('C', 'F', 'F', ' '), HB_TAG('C', 'F', 'F', '2')}) {
+    Blob table(hb_face_reference_table(impl->face.get(), tag));
+    if (table && hb_blob_get_length(table.get()) > 0) impl->cff = true;
+  }
   (void)hb_language_get_default();  // 첫 호출이 스레드 안전하지 않다 — 워커가 shape 에서 처음 부르기 전에 여기서(리뷰 I9)
   hb_ot_var_axis_info_t axis{};  // 출력 인자는 널이면 안 된다 (HarfBuzz 가 무조건 쓴다)
   impl->has_wght = hb_ot_var_find_axis_info(impl->face.get(), kWghtTag, &axis) != 0;
@@ -93,6 +101,15 @@ Result<std::shared_ptr<const FontFace>> FontFace::load_from_memory(std::vector<s
 
 unsigned FontFace::upem() const noexcept { return hb_face_get_upem(impl_->face.get()); }
 bool FontFace::has_weight_axis() const noexcept { return impl_->has_wght; }
+bool FontFace::is_cff() const noexcept { return impl_->cff; }
+unsigned FontFace::face_index() const noexcept { return impl_->face_index; }
+
+std::string FontFace::style_name() const {
+  char buffer[128] = {};
+  unsigned len = sizeof buffer;
+  hb_ot_name_get_utf8(impl_->face.get(), HB_OT_NAME_ID_FONT_SUBFAMILY, HB_LANGUAGE_INVALID, &len, buffer);
+  return buffer;
+}
 
 std::string FontFace::family_name() const {
   char buffer[128] = {};

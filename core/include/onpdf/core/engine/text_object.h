@@ -71,6 +71,7 @@ struct TextObjectInfo {
   Rect bbox;              // 쪽 포인트
   int index = -1;         // 쪽 객체 순서 (z 순서)
   bool original_font = false;  // 기존 줄을 원본 글꼴로 고친 객체 (마크 ofont, #65) — 재수정도 원본 글꼴 경로로
+  std::string font_name;       // 객체 글꼴의 BaseFont (서브셋 태그 제거) — 재수정 때 같은 계열의 대체 글꼴을 고른다 (#73)
 };
 
 }  // namespace onpdf::engine
