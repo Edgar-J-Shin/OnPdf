@@ -325,6 +325,7 @@ TEST_F(TextLineToolTest, FallbackFontComesFromCatalog) {
   ASSERT_TRUE(wait_text_contains(0, QStringLiteral("Hello 한글 again")));
   ASSERT_TRUE(spin_until([&] { return view()->selected_text_box().has_value(); }));
   EXPECT_EQ(view()->selected_text_box()->font_name, "NotoSansKR-subset") << "카탈로그가 비면 번들";
+  EXPECT_TRUE(window_.has_font_catalog()) << "주입한 카탈로그가 스캔 결과로 덮이지 않는다";
 }
 
 TEST_F(TextLineToolTest, UneditableLineAndSignedDocumentAreExplained) {
