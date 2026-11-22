@@ -138,4 +138,13 @@ if(ONPDF_BUILD_SPIKES)
   target_compile_definitions(onpdf_spike_font_cleanup PRIVATE ONPDF_TESTDATA_DIR="${ONPDF_TESTDATA_DIR}" ONPDF_TEST_GLOBAL_PDFIUM=1)
   onpdf_set_warnings(onpdf_spike_font_cleanup)
   onpdf_set_runtime_rpath(onpdf_spike_font_cleanup)
+
+  # Spike (#71): CFF 후처리·TTC 면 선택·시스템 글꼴 탐색 — HarfBuzz·qpdf 헤더 직접
+  find_package(harfbuzz CONFIG REQUIRED)
+  add_executable(onpdf_spike_font_subst spike/font_subst_spike.cpp)
+  target_include_directories(onpdf_spike_font_subst PRIVATE ${_spike_qpdf_inc})
+  target_link_libraries(onpdf_spike_font_subst PRIVATE onpdf::core onpdf::edit harfbuzz::harfbuzz-subset harfbuzz::harfbuzz GTest::gtest GTest::gtest_main)
+  target_compile_definitions(onpdf_spike_font_subst PRIVATE ONPDF_TESTDATA_DIR="${ONPDF_TESTDATA_DIR}" ONPDF_TEST_GLOBAL_PDFIUM=1)
+  onpdf_set_warnings(onpdf_spike_font_subst)
+  onpdf_set_runtime_rpath(onpdf_spike_font_subst)
 endif()
