@@ -818,5 +818,41 @@ TEST(TextLines, BoxReeditKeepsLetterSpacing) {
   doc->drop_document_state(replaced->before);
   EXPECT_EQ(render(*doc).pixels, before.pixels);
 }
+
+// #81: /Contents 배열이 피연산자와 연산자 사이에서 나뉜 쪽(Word·LiveCycle) — 이어 붙여 세고 스트림별로 지운다
+TEST(TextLines, OperatorSplitAcrossContentStreamsIsEdited) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-split.pdf"));
+  ASSERT_TRUE(doc);
+  const Bitmap before = render(*doc);
+  for (const auto& [needle, replacement] :
+       std::vector<std::pair<std::string, std::string>>{{"Split operands line", "Joined operands line"}, {"Arr ay split", "Array joined"}}) {
+    auto lines = doc->text_lines(0);
+    ASSERT_TRUE(lines);
+    const TextLineInfo* line = find_line(*lines, needle);
+    ASSERT_NE(line, nullptr) << needle;
+    EXPECT_TRUE(line->editable);
+    const TextLineInfo info = *line;
+    LineReplacement r{replacement, fallback_for(info, replacement), std::nullopt, std::nullopt};
+    auto replaced = doc->replace_text_line(0, info.id, r);
+    ASSERT_TRUE(replaced) << needle << ": " << replaced.error().message;
+    EXPECT_NE(page_text(*doc).find(replacement), std::string::npos);
+    EXPECT_EQ(page_text(*doc).find(needle), std::string::npos);
+    Rect mask = info.bbox;
+    mask.w += 30;
+    EXPECT_EQ(diff_outside(before, render(*doc), mask, 6.0), 0) << needle;
+    ASSERT_TRUE(doc->restore_document_state(replaced->before));
+    doc->drop_document_state(replaced->before);
+  }
+  EXPECT_EQ(render(*doc).pixels, before.pixels);
+  // 지우기도 같은 규칙: 나뉜 연산자의 앞 조각(스트림 A 의 피연산자)과 뒤 조각(스트림 B 의 Tj)이 함께 지워진다
+  auto lines = doc->text_lines(0);
+  const TextLineInfo split = *find_line(*lines, "Split operands line");
+  auto removed = doc->remove_text_line(0, split.id);
+  ASSERT_TRUE(removed) << removed.error().message;
+  EXPECT_EQ(page_text(*doc).find("Split operands line"), std::string::npos);
+  EXPECT_NE(page_text(*doc).find("Arr ay split"), std::string::npos) << "뒤 줄은 그대로";
+  auto check = QpdfTools::check(testdata("text-lines-split.pdf"));
+  ASSERT_TRUE(check);
+}
 }  // namespace
 }  // namespace onpdf::engine

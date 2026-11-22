@@ -860,6 +860,25 @@ def make_text_lines_kern() -> bytes:
     return w.write(root=root, info=info, file_id=g.file_id_for("text-lines-kern.pdf"))
 
 
+def make_text_lines_split() -> bytes:
+    """줄 폭·수술(#81): /Contents 배열이 피연산자와 연산자 사이에서 나뉜다 (Word·LiveCycle 식). 1쪽 3 스트림:
+    A 는 `(Split operands line)` 로 끝나고 B 가 `Tj ET` 로 시작, B 는 `[(Arr) -200 (ay split)]` 로 끝나고 C 가 `TJ ET` 로 시작."""
+    w = PdfWriter()
+    pages = w.reserve()
+    helv = g.simple_font(w)
+    s1 = w.stream(b"", content("BT /F1 12 Tf 72 700 Td (Split operands line)"), compress=False)
+    s2 = w.stream(b"", content("Tj ET", "BT /F1 12 Tf 72 670 Td [(Arr) -200 (ay split)]"), compress=False)
+    s3 = w.stream(b"", content("TJ ET", "BT /F1 12 Tf 72 640 Td (Whole line here) Tj ET", "0 0 1 rg 72 500 100 40 re f"),
+                  compress=False)
+    p = w.add(b"<< /Type /Page /Parent %d 0 R /MediaBox [0 0 612 792] /Contents [%d 0 R %d 0 R %d 0 R] "
+              b"/Resources << /Font << /F1 %d 0 R >> >> >>" % (pages, s1, s2, s3, helv))
+    g.pages_tree(w, pages, [p])
+    root = g.catalog(w, pages)
+    info = w.reserve()
+    g.info_dict(w, "Text lines split across content streams", num=info)
+    return w.write(root=root, info=info, file_id=g.file_id_for("text-lines-split.pdf"))
+
+
 def make_text_lines_basic_enc() -> bytes:
     return make_text_lines_basic(encrypt=g.Encryption("user", "owner"), file_id_name="text-lines-basic-enc.pdf")
 
