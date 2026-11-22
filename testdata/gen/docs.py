@@ -800,7 +800,7 @@ def make_transparency() -> bytes:
 
 def make_text_lines_basic(*, encrypt: g.Encryption | None = None, file_id_name: str = "text-lines-basic.pdf") -> bytes:
     """줄 단위 수정 회귀용: 평범한 줄, 자간·어간(Tc/Tw) 줄, 굵게 섞인 줄, 같은 BT 에서 Td 없이 이어지는 두 Tj(밀림),
-    지울 줄, 보존 확인용 도형."""
+    지울 줄, 공백만의 객체 뒤의 줄(순번), 보존 확인용 도형."""
     w = PdfWriter()
     pages = w.reserve()
     helv = g.simple_font(w)
@@ -815,6 +815,10 @@ def make_text_lines_basic(*, encrypt: g.Encryption | None = None, file_id_name: 
         "BT /F1 12 Tf 72 550 Td (Hello world line) Tj ET",
         "BT /F1 12 Tf 72 520 Td [(Array) -500 (show line)] TJ ET",
         "BT /F1 12 Tf 14 TL 72 500 Td (Quote first) Tj (Quote second) ' 1 0.2 (Double quote third) \" ET",
+        # 공백만의 객체(Quartz·Word 가 줄마다 수십 개): 추출 글은 비지만 PDFium 객체·qpdf 표시 연산자 모두에 든다 (#75 순번)
+        "BT /F1 12 Tf 72 445 Td ( ) Tj ET",
+        "BT /F1 12 Tf 80 445 Td (      ) Tj ET",
+        "BT /F1 12 Tf 150 445 Td (After spaces line) Tj ET",
         "0 0 1 rg 72 360 200 80 re f",
         "1 0 0 RG 3 w 300 360 m 500 440 l S",
     ), compress=False)

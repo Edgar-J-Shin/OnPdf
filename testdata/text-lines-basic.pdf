@@ -10,7 +10,7 @@ endobj
 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
 endobj
 4 0 obj
-<< /Length 640 >>
+<< /Length 761 >>
 stream
 BT /F1 14 Tf 72 700 Td (The quick brown fox jumps over the lazy dog) Tj ET
 BT /F1 12 Tf 0.5 Tc 2 Tw 72 670 Td (Spaced words with char and word spacing) Tj ET
@@ -21,6 +21,9 @@ BT /F1 12 Tf 72 580 Td (Delete me entirely) Tj ET
 BT /F1 12 Tf 72 550 Td (Hello world line) Tj ET
 BT /F1 12 Tf 72 520 Td [(Array) -500 (show line)] TJ ET
 BT /F1 12 Tf 14 TL 72 500 Td (Quote first) Tj (Quote second) ' 1 0.2 (Double quote third) " ET
+BT /F1 12 Tf 72 445 Td ( ) Tj ET
+BT /F1 12 Tf 80 445 Td (      ) Tj ET
+BT /F1 12 Tf 150 445 Td (After spaces line) Tj ET
 0 0 1 rg 72 360 200 80 re f
 1 0 0 RG 3 w 300 360 m 500 440 l S
 
@@ -42,11 +45,11 @@ xref
 0000000072 00000 n 
 0000000169 00000 n 
 0000000271 00000 n 
-0000000962 00000 n 
-0000001098 00000 n 
-0000001147 00000 n 
+0000001083 00000 n 
+0000001219 00000 n 
+0000001268 00000 n 
 trailer
 << /Size 8 /Root 6 0 R /Info 7 0 R /ID [<FE49F326F77149128C861EC86092514E> <FE49F326F77149128C861EC86092514E>] >>
 startxref
-1289
+1410
 %%EOF

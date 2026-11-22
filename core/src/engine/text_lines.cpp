@@ -14,8 +14,9 @@ using Mat = std::array<double, 6>;
 
 // PDF 행 벡터 규약: p' = p × A × B
 Mat mul(const Mat& A, const Mat& B) {
-  return {A[0] * B[0] + A[1] * B[2], A[0] * B[1] + A[1] * B[3], A[2] * B[0] + A[3] * B[2],
-          A[2] * B[1] + A[3] * B[3], A[4] * B[0] + A[5] * B[2] + B[4], A[4] * B[1] + A[5] * B[3] + B[5]};
+  return {A[0] * B[0] + A[1] * B[2],        A[0] * B[1] + A[1] * B[3],
+          A[2] * B[0] + A[3] * B[2],        A[2] * B[1] + A[3] * B[3],
+          A[4] * B[0] + A[5] * B[2] + B[4], A[4] * B[1] + A[5] * B[3] + B[5]};
 }
 
 void apply(const Mat& m, double x, double y, double& ox, double& oy) {
@@ -29,7 +30,9 @@ Mat matrix_of(FPDF_PAGEOBJECT obj) {
   return {m.a, m.b, m.c, m.d, m.e, m.f};
 }
 
-bool is_space(char32_t c) { return c == U' ' || c == 0xA0 || c == U'\t' || c == 0x3000; }
+bool is_space(char32_t c) {
+  return c == U' ' || c == 0xA0 || c == U'\t' || c == 0x3000;
+}
 
 std::u32string trim(const std::u32string& s) {
   std::size_t b = 0, e = s.size();
@@ -68,8 +71,11 @@ bool has_onpdf_mark(FPDF_PAGEOBJECT obj) {
     if (mark == nullptr) continue;
     unsigned short name[8] = {};
     unsigned long bytes = 0;
-    if (!FPDFPageObjMark_GetName(mark, reinterpret_cast<FPDF_WCHAR*>(name), sizeof name, &bytes) || bytes != 12) continue;
-    if (name[0] == 'O' && name[1] == 'n' && name[2] == 'P' && name[3] == 'd' && name[4] == 'f') return true;
+    if (!FPDFPageObjMark_GetName(mark, reinterpret_cast<FPDF_WCHAR*>(name), sizeof name, &bytes) ||
+        bytes != 12)
+      continue;
+    if (name[0] == 'O' && name[1] == 'n' && name[2] == 'P' && name[3] == 'd' && name[4] == 'f')
+      return true;
   }
   return false;
 }
@@ -79,7 +85,8 @@ struct Collector {
   PageAnalysis& out;
   int form_counter = 0;
 
-  void visit(FPDF_PAGEOBJECT obj, int index, FPDF_PAGEOBJECT parent, int container, const Mat& container_matrix, int depth) {
+  void visit(FPDF_PAGEOBJECT obj, int index, FPDF_PAGEOBJECT parent, int container,
+             const Mat& container_matrix, int depth) {
     const int type = FPDFPageObj_GetType(obj);
     if (type == FPDF_PAGEOBJ_FORM) {
       const int my_container = depth == 0 ? form_counter++ : container;
@@ -125,7 +132,8 @@ struct Collector {
     }
     t.font = FPDFTextObj_GetFont(obj);
     FPDFTextObj_GetFontSize(obj, &t.size);
-    const double hx = std::hypot(t.matrix[0], t.matrix[1]), vy = std::hypot(t.matrix[2], t.matrix[3]);
+    const double hx = std::hypot(t.matrix[0], t.matrix[1]),
+                 vy = std::hypot(t.matrix[2], t.matrix[3]);
     t.eff_size = t.size * (vy > 0 ? vy : 1.0);
     if (hx > 0) {
       t.dir_x = t.matrix[0] / hx;
@@ -152,8 +160,12 @@ struct Collector {
   }
 };
 
-double along_of(const AnalyzedObject& o, double x, double y) { return x * o.dir_x + y * o.dir_y; }
-double normal_of(const AnalyzedObject& o) { return -o.matrix[4] * o.dir_y + o.matrix[5] * o.dir_x; }
+double along_of(const AnalyzedObject& o, double x, double y) {
+  return x * o.dir_x + y * o.dir_y;
+}
+double normal_of(const AnalyzedObject& o) {
+  return -o.matrix[4] * o.dir_y + o.matrix[5] * o.dir_x;
+}
 
 std::pair<double, double> along_range(const AnalyzedObject& o) {
   if (!o.has_bounds) {
@@ -172,7 +184,9 @@ std::pair<double, double> along_range(const AnalyzedObject& o) {
   return {lo, hi};
 }
 
-int dir_key(const AnalyzedObject& o) { return static_cast<int>(std::lround(std::atan2(o.dir_y, o.dir_x) * 180.0 / 3.14159265358979)); }
+int dir_key(const AnalyzedObject& o) {
+  return static_cast<int>(std::lround(std::atan2(o.dir_y, o.dir_x) * 180.0 / 3.14159265358979));
+}
 
 // 추출 글자 → 객체·줄 번호 대응
 struct Extraction {
@@ -265,12 +279,16 @@ PageAnalysis analyze_page(FPDF_PAGE page, FPDF_TEXTPAGE text_page) {
   Collector col{text_page, out};
   const int n = FPDFPage_CountObjects(page);
   for (int i = 0; i < n; ++i) {
-    if (FPDF_PAGEOBJECT o = FPDFPage_GetObject(page, i)) col.visit(o, i, nullptr, -1, {1, 0, 0, 1, 0, 0}, 0);
+    if (FPDF_PAGEOBJECT o = FPDFPage_GetObject(page, i))
+      col.visit(o, i, nullptr, -1, {1, 0, 0, 1, 0, 0}, 0);
   }
   out.form_text_objects.assign(static_cast<std::size_t>(col.form_counter), 0);
-  // 순번: 컨테이너 안 "비어 있지 않은" 텍스트 객체 순서 — qpdf 의 비어 있지 않은 표시 연산자 순번과 같다
+  // 순번: 컨테이너 안 "비어 있지 않은" 텍스트 객체 순서 — qpdf 의 비어 있지 않은 표시 연산자 순번과
+  // 같다 PDFium 은 비어 있지 않은 문자열이 하나라도 있어야 텍스트 객체를
+  // 만들므로(Handle_ShowText/ShowText_Positioning) 모든 객체가 qpdf 의 "비어 있지 않은 표시 연산자"
+  // 하나에 대응한다. 추출 글(FPDFTextObj_GetText)이 비는 공백만의 객체(` ( ) Tj`, Quartz· Word 가
+  // 줄마다 수십 개)도 세야 한다 — 빼면 순번이 밀려 수술을 거절했다 (#75 측정: 코퍼스 65% 거절)
   for (auto& o : out.objects) {
-    if (o.text.empty()) continue;  // 빈 문자열 객체는 qpdf 가 세지 않는다
     if (o.container < 0) {
       o.ordinal = out.page_text_objects++;
     } else {
@@ -279,15 +297,20 @@ PageAnalysis analyze_page(FPDF_PAGE page, FPDF_TEXTPAGE text_page) {
   }
   const Extraction ex = extract(text_page);
   for (auto& o : out.objects) {
-    if (auto it = ex.obj_lines.find(o.handle); it != ex.obj_lines.end()) o.extract_lines.assign(it->second.begin(), it->second.end());
+    if (auto it = ex.obj_lines.find(o.handle); it != ex.obj_lines.end())
+      o.extract_lines.assign(it->second.begin(), it->second.end());
   }
-  // 줄 묶기: 방향(1도) → 기준선 → 진행 방향 순 정렬 뒤, 같은 방향·기준선(±0.25em) 묶음을 1.5em 넘는 간격에서 자른다
+  // 줄 묶기: 방향(1도) → 기준선 → 진행 방향 순 정렬 뒤, 같은 방향·기준선(±0.25em) 묶음을 1.5em 넘는
+  // 간격에서 자른다
   std::vector<int> idx;
   for (int i = 0; i < static_cast<int>(out.objects.size()); ++i) {
     const auto& o = out.objects[static_cast<std::size_t>(i)];
-    if (!o.onpdf && !trim(o.text).empty() && o.eff_size > 0.1) idx.push_back(i);  // OnPdf 상자는 줄이 아니다
+    if (!o.onpdf && !trim(o.text).empty() && o.eff_size > 0.1)
+      idx.push_back(i);  // OnPdf 상자는 줄이 아니다
   }
-  auto obj = [&](int i) -> const AnalyzedObject& { return out.objects[static_cast<std::size_t>(i)]; };
+  auto obj = [&](int i) -> const AnalyzedObject& {
+    return out.objects[static_cast<std::size_t>(i)];
+  };
   std::sort(idx.begin(), idx.end(), [&](int x, int y) {
     const int dx = dir_key(obj(x)), dy = dir_key(obj(y));
     if (dx != dy) return dx < dy;
@@ -310,7 +333,8 @@ PageAnalysis analyze_page(FPDF_PAGE page, FPDF_TEXTPAGE text_page) {
     bands.push_back({i});
   }
   for (auto& band : bands) {
-    std::sort(band.begin(), band.end(), [&](int x, int y) { return along_range(obj(x)).first < along_range(obj(y)).first; });
+    std::sort(band.begin(), band.end(),
+              [&](int x, int y) { return along_range(obj(x)).first < along_range(obj(y)).first; });
     AnalyzedLine cur;
     double cur_end = -1e18;
     auto flush = [&] {
@@ -332,7 +356,8 @@ PageAnalysis analyze_page(FPDF_PAGE page, FPDF_TEXTPAGE text_page) {
         }
       }
       cur.merged_lines = extract_ids.size() > 1;
-      cur.invisible = obj(cur.members.front()).render_mode == 3 || obj(cur.members.front()).render_mode == 7;
+      cur.invisible =
+          obj(cur.members.front()).render_mode == 3 || obj(cur.members.front()).render_mode == 7;
       cur.text = line_text(ex, members);
       cur.container = obj(cur.members.front()).container;
       out.lines.push_back(std::move(cur));
@@ -375,8 +400,8 @@ std::string line_id_of(const PageAnalysis& analysis, const AnalyzedLine& line) {
 
 bool font_covers(FPDF_FONT font, const std::u32string& chars) {
   if (font == nullptr) return false;
-  // 없는 글자의 서명(.notdef): 사용자 정의 영역(U+E000)과 cmap 에 거의 없는 U+10FFFD 두 곳을 찍는다 — PUA 에 진짜 글리프가 있는
-  // 글꼴(기호·옛 한글)에서도 하나는 .notdef 가 된다 (리뷰 I4)
+  // 없는 글자의 서명(.notdef): 사용자 정의 영역(U+E000)과 cmap 에 거의 없는 U+10FFFD 두 곳을 찍는다
+  // — PUA 에 진짜 글리프가 있는 글꼴(기호·옛 한글)에서도 하나는 .notdef 가 된다 (리뷰 I4)
   const GlyphSig probes[2] = {glyph_signature(font, 0xE000), glyph_signature(font, 0x10FFFD)};
   for (char32_t c : chars) {
     if (is_space(c) || c == U'\n' || c == U'\r') continue;
@@ -429,7 +454,8 @@ std::u32string utf8_to_utf32(std::string_view s) {
       cp = c & 0x07;
       n = 4;
     }
-    for (std::size_t k = 1; k < n && i + k < s.size(); ++k) cp = (cp << 6) | (static_cast<unsigned char>(s[i + k]) & 0x3F);
+    for (std::size_t k = 1; k < n && i + k < s.size(); ++k)
+      cp = (cp << 6) | (static_cast<unsigned char>(s[i + k]) & 0x3F);
     i += n;
     out += cp;
   }

@@ -1,5 +1,5 @@
-// 기존 텍스트 줄 수정 (#65) 엔진: 줄 묶기, qpdf 수술 삭제·교체(원본 글꼴·대체 글꼴), 줄 밖 보존, 상태 토큰, 떼어 둔 객체 이월,
-// Form XObject, 암호·서명 문서, 거절 조건
+// 기존 텍스트 줄 수정 (#65) 엔진: 줄 묶기, qpdf 수술 삭제·교체(원본 글꼴·대체 글꼴), 줄 밖 보존,
+// 상태 토큰, 떼어 둔 객체 이월, Form XObject, 암호·서명 문서, 거절 조건
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/engine/save.h"
@@ -8,11 +8,9 @@
 #include "onpdf/edit/text_box_commands.h"
 
 #include "../test_support.h"
-
-#include <gtest/gtest.h>
-
 #include <algorithm>
 #include <cmath>
+#include <gtest/gtest.h>
 
 namespace onpdf::engine {
 namespace {
@@ -61,7 +59,9 @@ long diff_outside(const Bitmap& a, const Bitmap& b, const Rect& mask, double pad
   long n = 0;
   for (int y = 0; y < a.height; ++y) {
     for (int x = 0; x < a.width; ++x) {
-      if (x >= mask.x - pad && x <= mask.right() + pad && y >= mask.y - pad && y <= mask.bottom() + pad) continue;
+      if (x >= mask.x - pad && x <= mask.right() + pad && y >= mask.y - pad &&
+          y <= mask.bottom() + pad)
+        continue;
       const auto* pa = a.row(y) + x * 4;
       const auto* pb = b.row(y) + x * 4;
       if (pa[0] != pb[0] || pa[1] != pb[1] || pa[2] != pb[2]) ++n;
@@ -81,7 +81,7 @@ TEST(TextLines, GroupsLinesAndFlagsFontsAndEditability) {
   ASSERT_TRUE(doc);
   auto lines = doc->text_lines(0);
   ASSERT_TRUE(lines) << lines.error().message;
-  EXPECT_EQ(lines->size(), 10u);
+  EXPECT_EQ(lines->size(), 11u);
   const TextLineInfo* fox = find_line(*lines, "quick brown fox");
   ASSERT_NE(fox, nullptr);
   EXPECT_EQ(fox->font_name, "Helvetica");
@@ -94,7 +94,8 @@ TEST(TextLines, GroupsLinesAndFlagsFontsAndEditability) {
   ASSERT_NE(mixed, nullptr);
   EXPECT_TRUE(mixed->mixed_fonts);
   EXPECT_EQ(mixed->object_count, 2);
-  EXPECT_NE(mixed->text.find("mixed line"), std::string::npos) << "두 객체가 한 줄로 묶인다: " << mixed->text;
+  EXPECT_NE(mixed->text.find("mixed line"), std::string::npos)
+      << "두 객체가 한 줄로 묶인다: " << mixed->text;
   const TextLineInfo* spaced = find_line(*lines, "Spaced words");
   ASSERT_NE(spaced, nullptr);
   EXPECT_TRUE(spaced->editable);
@@ -126,7 +127,7 @@ TEST(TextLines, RemoveLinePreservesEverythingElse) {
   EXPECT_NE(text.find("Spaced words"), std::string::npos);
   auto after_lines = doc->text_lines(0);
   ASSERT_TRUE(after_lines);
-  EXPECT_EQ(after_lines->size(), 9u);
+  EXPECT_EQ(after_lines->size(), 10u);
   const Bitmap after = render(*doc);
   EXPECT_EQ(diff_outside(before, after, bbox, 5.0), 0) << "줄 밖은 픽셀 하나도 안 바뀐다";
   EXPECT_GT(diff_outside(before, after, Rect{0, 0, 0, 0}, 0.0), 100) << "줄 자체는 지워졌다";
@@ -166,7 +167,8 @@ TEST(TextLines, ReplaceNonEmbeddedLineUsesFallbackFont) {
   EXPECT_EQ(refused.error().code, ErrorCode::kInvalidArgument);
   EXPECT_EQ(doc->document_state_count(), 0) << "거절은 토큰을 만들지 않는다";
   const Bitmap before = render(*doc);
-  LineReplacement replacement{"Hello there", fallback_for(*hello, "Hello there"), std::nullopt, std::nullopt};
+  LineReplacement replacement{"Hello there", fallback_for(*hello, "Hello there"), std::nullopt,
+                              std::nullopt};
   auto replaced = doc->replace_text_line(0, hello->id, replacement);
   ASSERT_TRUE(replaced) << replaced.error().message;
   EXPECT_TRUE(replaced->used_fallback);
@@ -183,7 +185,8 @@ TEST(TextLines, ReplaceNonEmbeddedLineUsesFallbackFont) {
   EXPECT_NEAR((*objects)[0].bbox.y, hello->bbox.y, 6.0) << "같은 자리";
   EXPECT_EQ(diff_outside(before, render(*doc), hello->bbox, 6.0), 0);
   // 새 상자는 OnPdf 텍스트 상자로 다시 고칠 수 있다 (수술 없음)
-  LineReplacement again{"Hello again", fallback_for(*hello, "Hello again"), std::nullopt, std::nullopt};
+  LineReplacement again{"Hello again", fallback_for(*hello, "Hello again"), std::nullopt,
+                        std::nullopt};
   auto rewritten = doc->replace_text_line(0, replaced->box, again);
   ASSERT_TRUE(rewritten) << rewritten.error().message;
   EXPECT_EQ(rewritten->before, 0u);
@@ -256,7 +259,9 @@ TEST(TextLines, FormXObjectLinesAreEditableOneLevelDeep) {
   EXPECT_EQ(diff_outside(before, render(*doc), inside->bbox, 5.0), 0) << "이미지·다른 줄 보존";
   auto objects = doc->page_objects(0);
   ASSERT_TRUE(objects);
-  EXPECT_EQ(std::count_if(objects->begin(), objects->end(), [](const auto& o) { return o.kind == ObjectKind::kImage; }), 1);
+  EXPECT_EQ(std::count_if(objects->begin(), objects->end(),
+                          [](const auto& o) { return o.kind == ObjectKind::kImage; }),
+            1);
 }
 
 TEST(TextLines, EmbeddedCidLineReusesOriginalFontAndType3FallsBack) {
@@ -347,7 +352,8 @@ TEST(TextLines, DetachedObjectsSurviveReopenAndRestore) {
   auto removed = doc->remove_text_line(0, target->id);
   ASSERT_TRUE(removed) << removed.error().message;
   EXPECT_EQ(doc->detached_count(), 1) << "다시 열어도 떼어 둔 객체가 이월된다";
-  EXPECT_EQ(diff_outside(without_image, render(*doc), target->bbox, 5.0), 0) << "되돌린 이미지가 보이면 안 된다";
+  EXPECT_EQ(diff_outside(without_image, render(*doc), target->bbox, 5.0), 0)
+      << "되돌린 이미지가 보이면 안 된다";
   // 되살리기 (반대 순서): 줄 복원 → 이미지 재부착
   ASSERT_TRUE(doc->restore_document_state(removed->before));
   doc->drop_document_state(removed->before);
@@ -356,7 +362,9 @@ TEST(TextLines, DetachedObjectsSurviveReopenAndRestore) {
   ASSERT_TRUE(doc->reattach_objects(*detached));
   auto objects = doc->page_objects(0);
   ASSERT_TRUE(objects);
-  EXPECT_EQ(std::count_if(objects->begin(), objects->end(), [&](const auto& o) { return o.id == *image; }), 1);
+  EXPECT_EQ(std::count_if(objects->begin(), objects->end(),
+                          [&](const auto& o) { return o.id == *image; }),
+            1);
   // 버린(drop) 객체는 상태 복원 뒤 되살아나지 않는다
   auto detached2 = doc->detach_objects(0, {*image});
   ASSERT_TRUE(detached2);
@@ -371,7 +379,9 @@ TEST(TextLines, DetachedObjectsSurviveReopenAndRestore) {
   doc->drop_document_state(removed2->before);
   auto objects2 = doc->page_objects(0);
   ASSERT_TRUE(objects2);
-  EXPECT_EQ(std::count_if(objects2->begin(), objects2->end(), [&](const auto& o) { return o.id == *image; }), 0);
+  EXPECT_EQ(std::count_if(objects2->begin(), objects2->end(),
+                          [&](const auto& o) { return o.id == *image; }),
+            0);
   EXPECT_EQ(doc->detached_count(), 0);
 }
 
@@ -398,8 +408,8 @@ TEST(TextLines, StateTokenLimitEvictsOldest) {
   ASSERT_TRUE(doc->restore_document_state(removed2->before));
 }
 
-
-// 리뷰 C1: 줄 수정 뒤에 추가해 떼어 둔 객체는 토큰에 없다 → 취소는 성공하되 그 객체는 lost (reattach 거절)
+// 리뷰 C1: 줄 수정 뒤에 추가해 떼어 둔 객체는 토큰에 없다 → 취소는 성공하되 그 객체는 lost
+// (reattach 거절)
 TEST(TextLines, DetachedObjectAddedAfterTokenIsLostNotSilentlyEmpty) {
   auto doc = PdfiumDocument::open(testdata("text-lines-basic.pdf"));
   ASSERT_TRUE(doc);
@@ -435,7 +445,7 @@ TEST(TextLines, DetachedTextBoxOnSamePageDoesNotBlockEdits) {
   ASSERT_NE(hello, nullptr);
   auto added = doc->add_text_objects(0, fallback_for(*hello, "Temporary box"));
   ASSERT_TRUE(added);
-  EXPECT_EQ(doc->text_lines(0)->size(), 10u) << "OnPdf 상자는 줄 목록에 들어가지 않는다";
+  EXPECT_EQ(doc->text_lines(0)->size(), 11u) << "OnPdf 상자는 줄 목록에 들어가지 않는다";
   auto detached = doc->detach_objects(0, added->ids);
   ASSERT_TRUE(detached);
   auto lines2 = doc->text_lines(0);
@@ -464,7 +474,8 @@ TEST(TextLines, ArrayAndQuoteOperatorsAreRemovedInPlace) {
   EXPECT_EQ(text.find("Quote second"), std::string::npos);
   EXPECT_NE(text.find("Quote first"), std::string::npos);
   EXPECT_NE(text.find("Double quote third"), std::string::npos);
-  EXPECT_EQ(diff_outside(before, render(*doc), quote->bbox, 5.0), 0) << "' 를 지워도 뒤 줄(\")은 제자리";
+  EXPECT_EQ(diff_outside(before, render(*doc), quote->bbox, 5.0), 0)
+      << "' 를 지워도 뒤 줄(\")은 제자리";
   auto lines2 = doc->text_lines(0);
   ASSERT_TRUE(lines2);
   const TextLineInfo* array = find_line(*lines2, "Array show line");
@@ -503,7 +514,8 @@ TEST(TextLines, SharedFormXObjectIsRefused) {
   EXPECT_NE(page_text(*doc, 3).find("Shared form line"), std::string::npos) << "4쪽도 그대로";
 }
 
-// 리뷰 W3: /Contents 배열이 BT 안에서 나뉘어 앞 스트림의 Tj 를 지우면 뒤 스트림의 Tj 가 밀린다 → 거절
+// 리뷰 W3: /Contents 배열이 BT 안에서 나뉘어 앞 스트림의 Tj 를 지우면 뒤 스트림의 Tj 가 밀린다 →
+// 거절
 TEST(TextLines, DisplacementAcrossContentStreamsIsRefused) {
   auto doc = PdfiumDocument::open(testdata("text-lines-form.pdf"));
   ASSERT_TRUE(doc);
@@ -528,7 +540,8 @@ TEST(TextLines, DisplacementAcrossContentStreamsIsRefused) {
   EXPECT_EQ(report->page_show_ops, 3);
 }
 
-// #69: 크기·색 변경 — 원본 글꼴 유지, 기준선 유지(상자 아래쪽이 원래 줄 아래쪽 근처), 줄 밖 보존, 복원
+// #69: 크기·색 변경 — 원본 글꼴 유지, 기준선 유지(상자 아래쪽이 원래 줄 아래쪽 근처), 줄 밖 보존,
+// 복원
 TEST(TextLines, FormatChangesSizeAndColorKeepingBaseline) {
   auto doc = PdfiumDocument::open(testdata("text-lines-type3.pdf"));
   ASSERT_TRUE(doc);
@@ -559,6 +572,32 @@ TEST(TextLines, FormatChangesSizeAndColorKeepingBaseline) {
   ASSERT_TRUE(doc->restore_document_state(replaced->before));
   EXPECT_EQ(render(*doc).pixels, before.pixels);
   doc->drop_document_state(replaced->before);
+}
+
+// #75: 공백만의 객체(` ( ) Tj`)는 추출 글이 비지만 PDFium 객체·qpdf 표시 연산자 모두에 들어 순번에
+// 포함돼야 한다. 빼면 뒤 줄의 순번이 밀려 "content stream does not match page objects" 로 거절됐다
+// (코퍼스 65%)
+TEST(TextLines, SpaceOnlyObjectsKeepOrdinalsAligned) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-basic.pdf"));
+  ASSERT_TRUE(doc);
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines);
+  const TextLineInfo* after = find_line(*lines, "After spaces line");
+  ASSERT_NE(after, nullptr);
+  EXPECT_TRUE(after->editable);
+  const Bitmap before = render(*doc);
+  LineReplacement r{"After spaces edited", fallback_for(*after, "After spaces edited"),
+                    std::nullopt, std::nullopt};
+  auto replaced = doc->replace_text_line(0, after->id, r);
+  ASSERT_TRUE(replaced) << replaced.error().message;
+  EXPECT_NE(page_text(*doc).find("After spaces edited"), std::string::npos);
+  EXPECT_EQ(page_text(*doc).find("After spaces line"), std::string::npos);
+  EXPECT_EQ(diff_outside(before, render(*doc), after->bbox, 6.0), 0)
+      << "공백 객체·다른 줄은 그대로";
+  // 지우기도 같은 순번 규칙
+  auto removed = doc->remove_text_line(0, find_line(*doc->text_lines(0), "Hello world line")->id);
+  ASSERT_TRUE(removed) << removed.error().message;
+  EXPECT_EQ(page_text(*doc).find("Hello world line"), std::string::npos);
 }
 }  // namespace
 }  // namespace onpdf::engine
