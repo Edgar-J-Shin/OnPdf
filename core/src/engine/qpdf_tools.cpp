@@ -513,32 +513,12 @@ struct RewriteResult {
 };
 // fit 대상 연산자를 `[<c1> k <c2> … <cn>] TJ` 로 (PDFium 생성기 형태 `[<hex>] TJ` 만). 형태가
 // 다르면 nullopt
-std::optional<std::string> fitted_operands(const ContentOp& op, const ShowOpFit& fit) {
-  if (op.name != "TJ" || op.operands.size() != 1 || !op.operands[0].isArray()) return std::nullopt;
-  const auto items = op.operands[0].getArrayAsVector();
-  if (items.size() != 1 || !items[0].isString()) return std::nullopt;
-  const std::string s = items[0].getStringValue();
-  if (fit.code_count <= 1 || s.empty() || s.size() % static_cast<std::size_t>(fit.code_count) != 0)
-    return std::nullopt;
-  const std::size_t unit = s.size() / static_cast<std::size_t>(fit.code_count);
-  if (unit != 1 && unit != 2) return std::nullopt;
-  // 단위가 틀리면 2바이트 CID 가 둘로 찢긴다 (리뷰 W2)
-  if (fit.code_bytes > 0 && unit != static_cast<std::size_t>(fit.code_bytes)) return std::nullopt;
-  // 숫자는 로캘과 무관하게 (snprintf 는 LC_NUMERIC 을 따라 "-166,67" 이 될 수 있다 — 리뷰 W1)
-  const std::string number = QPDFObjectHandle::newReal(fit.kerning, 2).unparse();
-  std::string out = "[";
-  for (std::size_t i = 0; i < s.size(); i += unit) {
-    if (i > 0) out += " " + number + " ";
-    out += "<";
-    for (std::size_t j = 0; j < unit; ++j) {
-      char hex[3];
-      std::snprintf(hex, sizeof hex, "%02X", static_cast<unsigned char>(s[i + j]));
-      out += hex;
-    }
-    out += ">";
-  }
-  out += "] TJ";
-  return out;
+// fit 대상 표시 연산자(Tj/TJ)를 `<cs> Tc <원래 피연산자와 연산자> 0 Tc` 로. 피연산자 바이트는 그대로 둔다
+std::optional<std::string> fitted_operands(const ContentOp& op, std::string_view op_bytes, const ShowOpFit& fit) {
+  if ((op.name != "TJ" && op.name != "Tj") || op.operands.empty()) return std::nullopt;
+  // 숫자는 로캘과 무관하게 (snprintf 는 LC_NUMERIC 을 따라 "1,50" 이 될 수 있다 — 리뷰 W1)
+  const std::string number = QPDFObjectHandle::newReal(fit.char_space, 3).unparse();
+  return number + " Tc " + std::string(op_bytes) + " 0 Tc";
 }
 
 RewriteResult rewrite_content(QPDF& owner, const std::string& data, const std::set<int>& ordinals,
@@ -585,8 +565,9 @@ RewriteResult rewrite_content(QPDF& owner, const std::string& data, const std::s
       const auto fit = std::find_if(fits.begin(), fits.end(),
                                     [&](const ShowOpFit& f) { return f.ordinal == ordinal_of[i]; });
       if (fit == fits.end()) continue;
-      const auto replaced = fitted_operands(c.ops[i], *fit);
-      if (!replaced) continue;  // 예상 형태가 아니면 커닝만 건너뛴다 (수정은 성공)
+      const auto replaced = fitted_operands(
+          c.ops[i], std::string_view(data).substr(c.ops[i].start, c.ops[i].end - c.ops[i].start), *fit);
+      if (!replaced) continue;  // 예상 형태가 아니면 자간만 건너뛴다 (수정은 성공)
       r.changed = true;
       r.out.append(data, pos, c.ops[i].start - pos);
       r.out += *replaced;

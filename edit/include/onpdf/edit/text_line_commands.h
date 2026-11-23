@@ -26,6 +26,8 @@ class ReplaceTextLineCommand final : public Command {
   Result<engine::ChangeSet> execute(engine::EditableDocument& doc) override;
   Result<engine::ChangeSet> undo(engine::EditableDocument& doc) override;
   void discard(engine::EditableDocument& doc) noexcept override;
+  // 같은 상자의 서식만 바꾸는 연타(크기 콤보·색 팔레트)는 실행 취소 한 단계로 (#79). 첫 토큰을 유지하고 뒤 값으로 갱신
+  bool merge_with(const Command& next) override;
   [[nodiscard]] bool used_fallback() const noexcept { return used_fallback_; }
   [[nodiscard]] std::string fallback_family() const { return face_ ? face_->family_name() : std::string(); }  // 안내용 (#73)
   [[nodiscard]] const std::string& box() const noexcept { return box_; }

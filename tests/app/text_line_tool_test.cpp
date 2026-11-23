@@ -237,15 +237,12 @@ TEST_F(TextLineToolTest, SizeComboAndPaletteApplyToSelectedLine) {
   EXPECT_TRUE((*view()->text_objects(0))[0].original_font);
   EXPECT_NEAR((*view()->text_objects(0))[0].font_size, 36.0, 0.05);
   EXPECT_NE(window_.annotation_color().b, 255) << "기본 색은 그대로";
-  ASSERT_TRUE(window_.edit_controller()->undo());
-  ASSERT_TRUE(spin_until([&] {
-    return idle() && view()->text_objects(0) && view()->text_objects(0)->size() == 1 &&
-           (*view()->text_objects(0))[0].color.b == 0;
-  }));
-  EXPECT_TRUE((*view()->text_objects(0))[0].original_font);
+  // 같은 상자의 서식 연타(크기 → 색)는 한 단계로 합쳐져 실행 취소 한 번에 원래 줄로 (#79)
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("줄 서식 변경")));
   ASSERT_TRUE(window_.edit_controller()->undo());
   ASSERT_TRUE(spin_until(
       [&] { return idle() && view()->text_objects(0) && view()->text_objects(0)->empty(); }));
+  EXPECT_FALSE(window_.edit_controller()->can_undo()) << "합쳐져 한 단계뿐";
   ASSERT_TRUE(wait_lines(0));
   EXPECT_NE(line_containing(0, QStringLiteral("한글 텍스트 줄")), nullptr);
 }
