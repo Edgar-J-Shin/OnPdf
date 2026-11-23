@@ -73,11 +73,21 @@ if(APPLE)
   install(TARGETS onpdf_app BUNDLE DESTINATION .)
   install(FILES "${ONPDF_PDFIUM_SHARED_LIB}" DESTINATION "onpdf_app.app/Contents/Frameworks")
 else()
-  install(TARGETS onpdf_app RUNTIME DESTINATION .)
   if(WIN32)
-    # PDFium·vcpkg(qpdf·zlib·jpeg·harfbuzz…) 공유 라이브러리. Qt DLL 도 섞여 오지만 windeployqt 가 같은 파일을 쓴다
-    install(FILES $<TARGET_RUNTIME_DLLS:onpdf_app> DESTINATION .)
+    # PDFium·vcpkg(qpdf·zlib·jpeg·harfbuzz…) 공유 라이브러리를 실행 파일의 PE 가져오기 표에서 전이적으로 찾아 옆에 둔다.
+    # $<TARGET_RUNTIME_DLLS> 는 직접 링크한 imported 타깃만 담아 harfbuzz(edit)·zlib·jpeg(qpdf) 가 빠졌다 (#90 리허설).
+    # Qt 는 windeployqt 가, MSVC 런타임은 워크플로우가 넣는다. 시스템 DLL·API 집합은 제외
+    get_filename_component(_onpdf_pdfium_bin "${ONPDF_PDFIUM_SHARED_LIB}" DIRECTORY)
+    get_target_property(_onpdf_qtcore Qt6::Core IMPORTED_LOCATION_RELEASE)
+    get_filename_component(_onpdf_qt_bin "${_onpdf_qtcore}" DIRECTORY)
+    install(TARGETS onpdf_app
+      RUNTIME DESTINATION .
+      RUNTIME_DEPENDENCIES
+        DIRECTORIES "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin" "${_onpdf_pdfium_bin}" "${_onpdf_qt_bin}"
+        PRE_EXCLUDE_REGEXES "^api-ms-" "^ext-ms-"
+        POST_EXCLUDE_REGEXES ".*[Ss]ystem32/.*" "/Qt6[A-Za-z]*\\.dll$" "/(msvcp|vcruntime|concrt)[0-9_a-z]*\\.dll$")
   else()
+    install(TARGETS onpdf_app RUNTIME DESTINATION .)
     install(FILES "${ONPDF_PDFIUM_SHARED_LIB}" DESTINATION .)
   endif()
 endif()
