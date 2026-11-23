@@ -89,16 +89,16 @@ TEST(FontCatalog, ScansTestdataFonts) {
 
 TEST(FontCatalog, ScanWithoutThresholdFindsAllFaces) {
   const FontCatalog catalog = FontCatalog::scan({{testdata("fonts"), false}}, 0);
-  ASSERT_EQ(catalog.entries().size(), 4u);
+  ASSERT_EQ(catalog.entries().size(), 5u);  // ttf·otf(CID)·otf(비CID)·ttc 2면
   int cff = 0, hangul = 0, face1 = 0;
   for (const auto& e : catalog.entries()) {
     if (e.cff) ++cff;
     if (e.hangul) ++hangul;
     if (e.face_index == 1) ++face1;
-    EXPECT_EQ(e.style, "Regular");
+    EXPECT_EQ(e.style, "Regular") << e.family;
   }
-  EXPECT_EQ(cff, 1);
-  EXPECT_EQ(hangul, 4);
+  EXPECT_EQ(cff, 2);
+  EXPECT_EQ(hangul, 4) << "SourceSans3 에는 한글이 없다";
   EXPECT_EQ(face1, 1);
   auto face1_match = catalog.match("NotoSansKR-subset-Face1", true);
   ASSERT_EQ(face1_match.size(), 1u);

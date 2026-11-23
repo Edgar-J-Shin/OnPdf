@@ -1,5 +1,6 @@
 #include "onpdf/edit/font_face.h"
 
+#include "onpdf/core/fnv.h"
 #include "onpdf/core/platform/path.h"
 
 #include <algorithm>
@@ -42,17 +43,6 @@ using Font = std::unique_ptr<hb_font_t, FontDeleter>;
 using Buffer = std::unique_ptr<hb_buffer_t, BufferDeleter>;
 using SubsetInput = std::unique_ptr<hb_subset_input_t, SubsetInputDeleter>;
 using SubsetPlan = std::unique_ptr<hb_subset_plan_t, SubsetPlanDeleter>;
-
-std::string fnv1a_hex(const std::vector<std::uint8_t>& bytes) {
-  std::uint64_t h = 14695981039346656037ull;
-  for (std::uint8_t b : bytes) {
-    h ^= b;
-    h *= 1099511628211ull;
-  }
-  char hex[17];
-  std::snprintf(hex, sizeof hex, "%016llx", static_cast<unsigned long long>(h));
-  return hex;
-}
 
 }  // namespace
 
@@ -273,7 +263,7 @@ Result<FontSubset> FontFace::subset(const std::vector<std::uint32_t>& gids) cons
     out.cid_to_gid[static_cast<std::size_t>(i) * 2] = static_cast<std::uint8_t>(i >> 8);
     out.cid_to_gid[static_cast<std::size_t>(i) * 2 + 1] = static_cast<std::uint8_t>(i & 0xFF);
   }
-  out.key = fnv1a_hex(out.ttf);
+  out.key = onpdf::fnv1a_hex(out.ttf);  // 엔진의 저장 후처리와 같은 키 (core/fnv.h)
   return out;
 }
 

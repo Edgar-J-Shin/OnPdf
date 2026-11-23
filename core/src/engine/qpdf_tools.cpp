@@ -3,7 +3,7 @@
 #include "onpdf/core/platform/path.h"
 
 #include "cff_charset.h"
-#include "fnv.h"
+#include "onpdf/core/fnv.h"
 #include <qpdf/Constants.h>
 #include <qpdf/qpdf-c.h>
 #include <qpdf/qpdfjob-c.h>
@@ -298,7 +298,7 @@ int convert_cff_fonts(QPDF& q, const std::vector<std::string>& keys) {
       if (data == nullptr || data->getSize() < 4 || std::memcmp(data->getBuffer(), "OTTO", 4) != 0)
         continue;
       std::vector<std::uint8_t> otf(data->getBuffer(), data->getBuffer() + data->getSize());
-      if (std::find(keys.begin(), keys.end(), detail::fnv1a_hex(otf)) == keys.end())
+      if (std::find(keys.begin(), keys.end(), onpdf::fnv1a_hex(otf)) == keys.end())
         continue;  // 우리 글꼴만
       const auto info = detail::inspect_cff_charset(otf);
       if (!info) continue;

@@ -4,7 +4,7 @@
 #include "onpdf/edit/font_face.h"
 
 #include "../test_support.h"
-#include "fnv.h"
+#include "onpdf/core/fnv.h"
 #include <gtest/gtest.h>
 
 namespace onpdf::engine::detail {
@@ -75,8 +75,25 @@ TEST(CffCharset, RejectsGlyfAndTruncatedData) {
 TEST(CffCharset, SubsetKeyMatchesCoreFnv) {
   std::string key;
   const auto otf = cff_subset_bytes("키 검증", &key);
-  EXPECT_EQ(fnv1a_hex(otf), key) << "저장 후처리가 FontFile2 바이트로 OnPdf 글꼴을 찾는 근거";
+  EXPECT_EQ(onpdf::fnv1a_hex(otf), key) << "저장 후처리가 FontFile2 바이트로 OnPdf 글꼴을 찾는 근거";
 }
 
+
+TEST(CffCharset, NonCidFontIsReportedAndLeftAlone) {
+  auto face = edit::FontFace::load(testdata("fonts") / "SourceSans3-subset.otf");
+  ASSERT_TRUE(face);
+  const auto shaped = (*face)->shape("Latin text", 12.0);
+  std::vector<std::uint32_t> gids;
+  for (const auto& g : shaped.glyphs) gids.push_back(g.gid);
+  auto subset = (*face)->subset(gids);
+  ASSERT_TRUE(subset);
+  std::vector<std::uint8_t> otf = subset->ttf;
+  auto info = inspect_cff_charset(otf);
+  ASSERT_TRUE(info);
+  EXPECT_FALSE(info->cid_keyed);
+  const auto copy = otf;
+  EXPECT_FALSE(write_identity_charset(otf)) << "비CID 는 손대지 않는다";
+  EXPECT_EQ(otf, copy);
+}
 }  // namespace
 }  // namespace onpdf::engine::detail
