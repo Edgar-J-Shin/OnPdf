@@ -11,7 +11,7 @@ Your goal is to write Safe, Testable, and Maintainable modern C++ (C++23, std::e
 Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜치 `develop`, 릴리스 `main`)
 1인 개발(주 10~15시간). 전체 계획서: [pdf-editor-plan.md](pdf-editor-plan.md) — 범위·로드맵·위험 대응은 이 문서가 기준이다.
 
-**현재 단계**: M3 완료 → v0.3.0 릴리스(2026-11-20: 텍스트·이미지 추가, 객체 편집, 폼 채우기, 폰트 임베딩·정리). 다음은 M4 기존 텍스트 줄 단위 수정 — #55 스파이크 결론대로 PDFium 분석 + qpdf 콘텐츠 스트림 수술. 남은 수동 QA: Windows 실기기, Adobe Reader·Chrome·Edge 에서 추가한 한글 텍스트·주석 동일 표시, OTF(CFF) 산출물 Adobe 확인
+**현재 단계**: M4 완료 → v0.5.0 릴리스(2026-11-23: 기존 텍스트 줄 수정·서식·시스템 글꼴 대체·폭 맞춤. 코퍼스 48개 — 수정 성공 94%, 줄 밖 픽셀 동일 100%, 원본 글꼴 줄 폭 ±5% 90%). 다음은 M5 마무리 — 성능, 설치 파일(Windows 설치기·macOS DMG 공증), 다국어, 문서화, 이동 뒤 자간 재적용(#87). 남은 수동 QA: Windows 실기기, Adobe Reader·Chrome·Edge 에서 고친 줄·추가한 한글 텍스트·주석·CFF 변환 글꼴 표시
 
 | 마일스톤 | 핵심 | 완료 기준 |
 |---|---|---|
