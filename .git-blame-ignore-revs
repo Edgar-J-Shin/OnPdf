@@ -1,0 +1,5 @@
+# git blame 이 건너뛸 서식 전용 커밋 (동작 변경 없음)
+# 로컬 설정: git config blame.ignoreRevsFile .git-blame-ignore-revs  (GitHub 는 자동으로 읽는다)
+
+# #85: 저장소 전체 clang-format 일괄 정리
+c6f949f6fc78369a52b65cad4d7deb3111c78568

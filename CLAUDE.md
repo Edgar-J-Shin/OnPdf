@@ -159,7 +159,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 3. **스레드**: PDFium 워커 외 스레드에서 PDFium 객체 접근 금지. 공유 상태는 `std::mutex` 또는 메시지 전달로 보호. 데이터 레이스는 Critical 이슈로 취급.
 4. **텍스트는 UTF-8**: 유니코드 매핑 오류 글자와 유니코드 스칼라가 아닌 값은 U+FFFD(`view::sanitize_text_code`). 내부 문자열은 UTF-8 `std::string`. PDFium 의 UTF-16LE 와는 core/engine 경계에서만 변환. 한글(CID 폰트) 경로는 항상 테스트를 함께 만든다. 글자 좌표는 PDFium 사용자 좌표(좌하단, 회전 전)가 아니라 `TextPage` 가 `FPDF_PageToDevice`(×1000 트릭)로 바꾼 "쪽 포인트"(좌상단, 회전 반영)를 쓴다.
 5. **플랫폼 분기 최소화**: `#ifdef _WIN32` 는 `core/platform/`, `app/`, `cli/main.cpp`(wmain) 에만. 경로는 `std::filesystem::path` 이되 **UTF-8 문자열에서 만들 때는 반드시 `onpdf::path_from_utf8`**(`core/platform/path.h`) 를 쓴다 — Windows 는 `path(std::string)` 을 코드 페이지로 해석해 한글 경로가 깨진다. 오류 메시지 등 역변환은 `path_to_utf8`.
-6. **스타일**: `.clang-format` 준수(생기면). 클래스 `PascalCase`, 함수·변수 `snake_case`, 멤버 `name_`, 상수 `kName`. 헤더는 `#pragma once`. 주석·문서는 한국어, 식별자·커밋 메시지 제목은 영어.
+6. **스타일**: `.clang-format`(Google, 100열) 준수 — 저장소 전체가 정리돼 있다(#85). 커밋 전 바꾼 파일에만 `clang-format -i`. 서식 전용 커밋은 `.git-blame-ignore-revs` 에 등록한다(로컬: `git config blame.ignoreRevsFile .git-blame-ignore-revs`). 클래스 `PascalCase`, 함수·변수 `snake_case`, 멤버 `name_`, 상수 `kName`. 헤더는 `#pragma once`. 주석·문서는 한국어, 식별자·커밋 메시지 제목은 영어.
 7. **i18n**: 사용자 노출 문자열은 `tr()` 로 감싸고 `app/i18n/` 에 ko/en 둘 다 추가. 하드코딩 금지.
 8. **Simplicity**: 보일러플레이트 최소화, 기존 패턴 우선. 새 의존성은 `vcpkg.json` 추가 전에 상의.
 
