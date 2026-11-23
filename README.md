@@ -2,7 +2,7 @@
 
 PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편집기입니다.
 
-> 현재 단계: **M1 뷰어** — M0(빌드·PDFium 연결·첫 쪽 표시·테스트 PDF)은 끝났고, 연속 스크롤·확대·축소를 만드는 중입니다. 공개 릴리스는 M1 완료 시 v0.1 로 나옵니다.
+> 현재 단계: **v0.5.0** — 뷰어·주석·쪽 조작·텍스트/이미지 추가·폼 채우기에 이어 기존 텍스트 줄 단위 수정(M4)까지 나왔습니다. 다음은 M5(성능·설치 파일·다국어·문서화, v1.0)입니다. 변경 내역은 [CHANGELOG.md](CHANGELOG.md) 를 참고하세요.
 
 ## 목표
 
@@ -16,17 +16,17 @@ PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편
 | 단계 | 내용 | 버전 |
 |---|---|---|
 | M0 | 저장소, CMake, PDFium 연결, 첫 쪽 표시 | 완료 |
-| M1 | 뷰어: 연속 스크롤, 확대·축소, 검색, 썸네일, 목차, 인쇄 | v0.1 |
-| M2 | 주석, 페이지 조작(회전·삭제·재배열·병합·분할), 저장, 실행 취소 | v0.2 |
-| M3 | 텍스트·이미지 추가, 객체 편집, 폼 채우기, 폰트 임베딩 | v0.3 |
-| M4 | 기존 텍스트 줄 단위 수정 | v0.5 |
+| M1 | 뷰어: 연속 스크롤, 확대·축소, 검색, 썸네일, 목차, 인쇄 | v0.1 (완료) |
+| M2 | 주석, 페이지 조작(회전·삭제·재배열·병합·분할), 저장, 실행 취소 | v0.2 (완료) |
+| M3 | 텍스트·이미지 추가, 객체 편집, 폼 채우기, 폰트 임베딩 | v0.3 (완료) |
+| M4 | 기존 텍스트 줄 단위 수정, 서식 변경, 시스템 글꼴 대체, 폭 맞춤 | v0.5 (완료) |
 | M5 | 성능, Windows 설치 파일·macOS DMG, 코드 서명, 다국어, 문서화 | v1.0 |
 
 자세한 계획은 [pdf-editor-plan.md](pdf-editor-plan.md) 를 참고하세요.
 
 ## 기술 스택
 
-- C++20, CMake + vcpkg, Ninja
+- C++23, CMake + vcpkg, Ninja
 - [PDFium](https://pdfium.googlesource.com/pdfium/) ([pdfium-binaries](https://github.com/bblanchon/pdfium-binaries) 사전 빌드)
 - [qpdf](https://github.com/qpdf/qpdf), Qt 6 Widgets (동적 링크), HarfBuzz + FreeType
 - GoogleTest, GitHub Actions
