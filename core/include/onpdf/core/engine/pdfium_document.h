@@ -18,7 +18,9 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <deque>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace onpdf::engine {
@@ -99,6 +101,22 @@ class PdfiumDocument final : public EditableDocument {
   // 폰트 캐시(fonts_)의 글꼴 가운데 어느 쪽의 텍스트 객체도 쓰지 않는 것이 있는가 (취소한 텍스트의 서브셋 — #61).
   // 캐시가 비어 있으면 쪽을 열지 않고 false. 쪽을 못 열면 보수적으로 false (쓰이는지 모르면 지우지 않는다)
   [[nodiscard]] bool has_unreferenced_fonts() const;
+  // 폰트 캐시 가운데 OTF(CFF) 서브셋의 key (#73). 저장 후처리가 FontFile2 바이트 해시로 찾아 규격(FontFile3)으로 바꾼다.
+  // 미참조여도 포함한다 (재작성이 어차피 떨어뜨린다)
+  [[nodiscard]] std::vector<std::string> cff_font_keys() const;
+
+  // ---- 기존 텍스트 줄 수정 (#65) ----
+  [[nodiscard]] Result<std::vector<TextLineInfo>> text_lines(int page_index) const override;
+  [[nodiscard]] Result<bool> line_font_covers(int page_index, std::string_view line_id, std::string_view utf8) const override;
+  [[nodiscard]] Result<LineEditResult> remove_text_line(int page_index, std::string_view line_id) override;
+  [[nodiscard]] Result<LineEditResult> replace_text_line(int page_index, std::string_view line_id,
+                                                         const LineReplacement& replacement) override;
+  [[nodiscard]] Result<void> restore_document_state(DocumentStateId id) override;
+  void drop_document_state(DocumentStateId id) noexcept override;
+  [[nodiscard]] int document_state_count() const noexcept { return static_cast<int>(states_.size()); }  // 테스트용
+  void set_state_byte_limit(std::size_t bytes) noexcept { state_byte_limit_ = bytes; }                   // 테스트용
+  // 현재 문서를 메모리에 저장 (FPDF_SaveAsCopy, 비증분). 수술·상태 토큰용
+  [[nodiscard]] Result<std::vector<std::uint8_t>> save_to_memory() const;
 
   // ---- 저장 ----
   // 파일에 스트림으로 저장한다 (FPDF_SaveAsCopy). incremental 이면 원본 바이트 뒤에 변경만 덧붙인다(서명 보존).
@@ -142,6 +160,26 @@ class PdfiumDocument final : public EditableDocument {
   void draw_form(FPDF_BITMAP bitmap, FPDF_PAGE page, int start_x, int start_y, int size_x, int size_y, int rotate,
                  int flags) const;
   [[nodiscard]] Result<SnapshotId> store_snapshot(std::vector<std::uint8_t> data, ScopedDocument doc);
+  // 저장 전처리 (포커스 해제·주석 AP) — save_to 와 save_to_memory 공용
+  [[nodiscard]] Result<void> prepare_for_save() const;
+  [[nodiscard]] Result<TextObjectsResult> add_text_objects_to(FPDF_PAGE page, const TextObjectsSpec& spec);
+  // 줄 삭제·교체 공용 (replacement == nullptr 이면 삭제)
+  [[nodiscard]] Result<LineEditResult> edit_line(int page_index, std::string_view line_id, const LineReplacement* replacement);
+  // 문서를 새 바이트로 다시 연다 (같은 객체 안에서). 실패하면 옛 문서 유지. 폼 환경·폰트 캐시·필드 지도는 재설정
+  [[nodiscard]] Result<void> replace_bytes(std::vector<std::uint8_t> bytes);
+  // 떼어 둔 객체를 원래 자리에 임시로 되돌려 저장 바이트에 포함시키고(park), 다시 연 뒤 마크 id 로 다시 떼어 낸다(unpark)
+  struct ParkedDetached {
+    DetachedId id = 0;
+    int page = 0;
+    std::vector<std::string> mark_ids;
+    std::vector<int> indices;  // 원래 쪽 객체 index (되돌릴 때 복원)
+  };
+  [[nodiscard]] Result<std::vector<ParkedDetached>> park_detached();
+  [[nodiscard]] Result<void> unpark_detached(const std::vector<ParkedDetached>& parked);
+  // 쪽 구조 편집(삭제·이동·삽입) 뒤 떼어 둔 객체·버린 마크의 쪽 번호를 새 번호로 옮긴다 (#66). 지워진 쪽의 것은 lost
+  void remap_detached_pages(const std::vector<int>& new_index_of_old);
+  // 상태 토큰 저장 (상한을 넘으면 오래된 것부터 폐기)
+  DocumentStateId store_state(std::vector<std::uint8_t> bytes);
 
   // 보조 문서: 삭제 취소용 쪽 사본 또는 삽입 소스 파일. data 가 doc 보다 오래 살아야 한다 (선언 순서)
   struct Snapshot {
@@ -156,14 +194,30 @@ class PdfiumDocument final : public EditableDocument {
   std::unordered_map<SnapshotId, Snapshot> snapshots_;
   SnapshotId next_snapshot_ = 1;
   // 임베딩 폰트 캐시: 서브셋 key → 문서에 로드된 폰트. doc_ 보다 뒤에 선언 → 먼저 닫힌다
-  std::unordered_map<std::string, ScopedFont> fonts_;
+  struct LoadedFont {
+    ScopedFont font;
+    bool cff = false;  // 서브셋 바이트가 OTTO (#73 저장 후처리 대상)
+  };
+  std::unordered_map<std::string, LoadedFont> fonts_;
+  // 이 문서에 넣은 CFF 서브셋의 key 전부 (#73). 줄 수정이 replace_bytes 로 다시 열면 fonts_ 는 비지만 글꼴은 바이트에 남아
+  // 있으므로 따로 기억한다. 취소로 사라진 key 는 재작성이 그냥 지나친다(변환 0)
+  std::unordered_set<std::string> cff_keys_;
   // 떼어 낸 쪽 객체 (삭제·추가 취소, #49). doc_ 보다 뒤에 선언 → 문서보다 먼저 Destroy 된다
   struct Detached {
     int page = 0;
     std::vector<std::pair<int, ScopedFPDFPageObject>> objects;  // (원래 쪽 객체 index, 객체) — index 오름차순
+    bool foreign = false;  // 마크 없는 기존 객체가 섞여 있다 → 줄 수정의 다시 열기에서 이월할 수 없다 (#65)
+    bool lost = false;     // 줄 수정 취소로 이 객체가 없던 바이트로 돌아갔다 → 다시 붙일 수 없다 (#65 리뷰 C1)
   };
   std::unordered_map<DetachedId, Detached> detached_;
   DetachedId next_detached_ = 1;
+  // 줄 수정의 상태 토큰 (#65): 수술 전 문서 바이트. 합계 상한을 넘으면 오래된 것부터 폐기한다
+  std::unordered_map<DocumentStateId, std::vector<std::uint8_t>> states_;
+  std::deque<DocumentStateId> state_order_;
+  std::size_t state_bytes_ = 0;
+  std::size_t state_byte_limit_ = static_cast<std::size_t>(256) << 20;
+  DocumentStateId next_state_ = 1;
+  std::unordered_map<int, std::unordered_set<std::string>> dropped_marks_;  // 쪽 → drop_detached 로 버린 마크 id (복원 뒤 되살아나면 지운다)
   // 폼 필 환경 (#51). 마지막에 선언 → 가장 먼저 소멸 (FPDFDOC_ExitFormFillEnvironment 는 문서를 닫기 전에)
   FormType form_type_ = FormType::kNone;
   std::unique_ptr<detail::FormEnvironment> form_;

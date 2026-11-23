@@ -11,6 +11,7 @@
 #include "onpdf/core/engine/annotation.h"
 #include "onpdf/core/engine/document_handle.h"
 #include "onpdf/core/engine/form.h"
+#include "onpdf/core/engine/text_line.h"
 #include "onpdf/core/view/page_layout.h"
 #include "onpdf/core/view/tile_cache.h"
 #include "onpdf/core/view/search.h"
@@ -91,6 +92,8 @@ class DocumentView : public QAbstractScrollArea {
     int pixel_height = 0;
     std::string filter;
     bool marked = true;            // 이미지: 기존(다른 프로그램) 이미지면 false
+    bool original_font = false;    // 텍스트: 기존 줄을 원본 글꼴로 고친 상자 (#65) — 재수정도 원본 글꼴 경로
+    std::string font_name;         // 텍스트: 첫 줄 객체 글꼴의 BaseFont — 재수정의 대체 글꼴 후보 (#73)
   };
   using SelectedTextBox = SelectedObject;
   [[nodiscard]] const std::vector<engine::TextObjectInfo>* text_objects(int page) const;  // 캐시에 있을 때만
@@ -109,6 +112,15 @@ class DocumentView : public QAbstractScrollArea {
   // 편집(추가) 뒤 새 목록이 오면 이 객체를 고른다 (이미지 추가 직후 선택)
   void select_after_refresh(int page, const std::string& key);
   void clear_text_box_selection();
+
+  // ---- 기존 텍스트 줄 (#65): 다른 프로그램이 만든 줄의 hover·선택. 선택은 상자·주석과 동시에 되지 않는다 ----
+  struct SelectedLine {
+    int page = -1;
+    engine::TextLineInfo info;
+  };
+  [[nodiscard]] std::optional<SelectedLine> selected_line() const { return selected_line_; }
+  [[nodiscard]] const std::vector<engine::TextLineInfo>* text_lines(int page) const;  // 캐시에 있을 때만
+  void clear_line_selection();
 
   // ---- 폼 채우기 (#51) ----
   [[nodiscard]] const std::vector<engine::FormWidgetInfo>* form_widgets(int page) const;
@@ -202,6 +214,10 @@ class DocumentView : public QAbstractScrollArea {
   void text_width_requested(int page, const QString& box, double left_x, double width);              // 텍스트 상자 폭 핸들
   void object_nudge_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta);    // 화살표 키 (쪽 포인트)
   void locked_object_edit_attempted();  // 기존 이미지를 옮기거나 지우려 했다 (#57) — 수신자가 안내
+  // ---- 기존 텍스트 줄 (#65) ----
+  void text_line_selected(bool has, int page, const onpdf::engine::TextLineInfo& info);
+  void text_line_edit_requested(int page, const onpdf::engine::TextLineInfo& info);    // 두 번 클릭·Enter
+  void text_line_delete_requested(int page, const onpdf::engine::TextLineInfo& info);  // Delete
   void annotation_edit_requested(int page, const onpdf::engine::AnnotationInfo& info);
   void form_field_clicked(int page, const onpdf::engine::FormWidgetInfo& widget);              // 선택 도구로 칸 클릭 (#51)
   void form_text_committed(int page, const onpdf::engine::FormWidgetInfo& widget, const QString& text);  // 오버레이 확정
@@ -316,6 +332,14 @@ class DocumentView : public QAbstractScrollArea {
   [[nodiscard]] int handle_at(QPointF viewport_pos) const;  // 선택한 이미지의 핸들 (없으면 -1)
   [[nodiscard]] onpdf::Rect resized_rect(onpdf::Point pt, bool keep_aspect) const;
   std::unordered_map<int, engine::TaskHandle> text_box_requested_;
+  // 기존 텍스트 줄 (#65)
+  std::unordered_map<int, std::shared_ptr<const std::vector<engine::TextLineInfo>>> line_cache_;
+  std::unordered_map<int, engine::TaskHandle> line_requested_;
+  std::optional<std::pair<int, std::string>> hovered_line_;  // (쪽, 줄 id)
+  std::optional<SelectedLine> selected_line_;
+  void request_text_lines();
+  void on_text_lines(int page, int generation, std::shared_ptr<const std::vector<engine::TextLineInfo>> list, bool cancelled);
+  [[nodiscard]] const engine::TextLineInfo* text_line_at(int page, onpdf::Point pt) const;
   std::optional<SelectedTextBox> selected_text_;
   bool text_editable_ = false;
   bool nudge_enabled_ = false;

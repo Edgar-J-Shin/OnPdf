@@ -1,0 +1,44 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Pages /Kids [4 0 R] /Count 1 >>
+endobj
+2 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+3 0 obj
+<< /Length 462 >>
+stream
+q BT /F1 12 Tf 72 700 Td [(Kerned) -500 (wide) -500 (gaps) -500 (here)] TJ ET Q
+q BT /F1 12 Tf 2 Tc 72 670 Td (Char spaced line here) Tj ET Q
+q BT /F1 12 Tf 72 640 Td (Trailing spaces line          ) Tj ET Q
+q BT /F1 12 Tf 72 610 Td [(Ti) 80 (ght) 80 (ly) 80 ( kerned) 80 ( line)] TJ ET Q
+q BT /F1 12 Tf 72 580 Td (Plain line without spacing) Tj ET Q
+q BT /F1 12 Tf 20 Tc 72 550 Td (Huge spacing) Tj ET Q
+q BT /F1 12 Tf 72 520 Td [(Single array string)] TJ ET Q
+
+endstream
+endobj
+4 0 obj
+<< /Type /Page /Parent 1 0 R /MediaBox [0 0 612 792] /Contents 3 0 R /Resources << /Font << /F1 2 0 R >> >> >>
+endobj
+5 0 obj
+<< /Type /Catalog /Pages 1 0 R >>
+endobj
+6 0 obj
+<< /Title (Text lines with kerning) /Author (OnPdf testdata) /Producer (onpdf pdfgen) /CreationDate (D:20260101000000Z) >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000072 00000 n 
+0000000169 00000 n 
+0000000682 00000 n 
+0000000808 00000 n 
+0000000857 00000 n 
+trailer
+<< /Size 7 /Root 5 0 R /Info 6 0 R /ID [<FEEF48FF79052F3CCC9E3D25031FA83C> <FEEF48FF79052F3CCC9E3D25031FA83C>] >>
+startxref
+995
+%%EOF

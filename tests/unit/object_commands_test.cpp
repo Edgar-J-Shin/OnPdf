@@ -9,6 +9,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 namespace onpdf::edit {
 namespace {
 
@@ -202,5 +204,50 @@ TEST(ObjectCommands, ExecuteUndoRedoOnPdfium) {
   EXPECT_NEAR(scanned->page_objects(0)->front().bbox.x, foreign.bbox.x, 0.5);
 }
 
+
+// #66: 떼어 둔 객체의 쪽 번호는 쪽 삭제·이동·삽입 뒤에도 맞아야 한다 (삭제된 쪽의 것은 lost)
+TEST(DetachedObjects, PageIndexFollowsStructuralEdits) {
+  auto doc = engine::PdfiumDocument::open(testdata("simple.pdf"));  // 2쪽
+  ASSERT_TRUE(doc);
+  engine::ImagePixels px{4, 4, std::vector<std::uint8_t>(64, 0)};
+  for (std::size_t k = 0; k < px.bgra.size(); k += 4) px.bgra[k + 3] = 255;
+  auto image = doc->add_image_object(1, engine::ImageSpec{px, Rect{100, 100, 40, 40}, {}});
+  ASSERT_TRUE(image);
+  auto count_on = [&](int page) {
+    auto objects = doc->page_objects(page);
+    EXPECT_TRUE(objects);
+    return objects ? std::count_if(objects->begin(), objects->end(), [](const auto& o) { return o.kind == engine::ObjectKind::kImage; }) : -1;
+  };
+  // 삭제: 0쪽을 지우면 1쪽 → 0쪽
+  auto d1 = doc->detach_objects(1, {*image});
+  ASSERT_TRUE(d1);
+  ASSERT_TRUE(doc->delete_pages({0}));
+  ASSERT_TRUE(doc->reattach_objects(*d1));
+  EXPECT_EQ(count_on(0), 1);
+  // 삽입: 앞에 한 쪽을 넣으면 0쪽 → 1쪽
+  auto d2 = doc->detach_objects(0, {*image});
+  ASSERT_TRUE(d2);
+  auto snapshot = doc->copy_pages_to_snapshot({0});  // 뗀 뒤에 복사해야 사본에 이미지가 없다
+  ASSERT_TRUE(snapshot);
+  ASSERT_TRUE(doc->insert_from_snapshot(*snapshot, {0}, 0));
+  ASSERT_TRUE(doc->reattach_objects(*d2));
+  EXPECT_EQ(count_on(1), 1);
+  EXPECT_EQ(count_on(0), 0);
+  // 이동: 1쪽을 0 으로 옮기면 1쪽 → 0쪽
+  auto d3 = doc->detach_objects(1, {*image});
+  ASSERT_TRUE(d3);
+  ASSERT_TRUE(doc->move_pages({1}, 0));
+  ASSERT_TRUE(doc->reattach_objects(*d3));
+  EXPECT_EQ(count_on(0), 1);
+  // 그 쪽을 지우면 되돌릴 수 없다
+  auto d4 = doc->detach_objects(0, {*image});
+  ASSERT_TRUE(d4);
+  ASSERT_TRUE(doc->delete_pages({0}));
+  auto lost = doc->reattach_objects(*d4);
+  ASSERT_FALSE(lost);
+  EXPECT_EQ(lost.error().code, ErrorCode::kInvalidState);
+  doc->drop_detached(*d4);
+  EXPECT_EQ(doc->detached_count(), 0);
+}
 }  // namespace
 }  // namespace onpdf::edit

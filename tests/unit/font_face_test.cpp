@@ -123,5 +123,48 @@ TEST(FontFace, DecodesUtf8) {
   EXPECT_EQ(s[3], U'�');
 }
 
+
+// #73: TTC 면 선택·CFF 판별·CFF 서브셋이 OTTO
+TEST(FontFace, LoadsTtcFaceByIndexAndDetectsCff) {
+  const auto ttc = testdata("fonts") / "NotoSansKR-subset.ttc";
+  auto face0 = FontFace::load(ttc);
+  ASSERT_TRUE(face0) << face0.error().message;
+  EXPECT_EQ((*face0)->family_name(), "NotoSansKR-subset");
+  EXPECT_EQ((*face0)->face_index(), 0u);
+  EXPECT_FALSE((*face0)->is_cff());
+  auto face1 = FontFace::load(ttc, 1);
+  ASSERT_TRUE(face1) << face1.error().message;
+  EXPECT_EQ((*face1)->family_name(), "NotoSansKR-subset-Face1");
+  EXPECT_EQ((*face1)->face_index(), 1u);
+  EXPECT_EQ((*face1)->style_name(), "Regular");
+  auto out_of_range = FontFace::load(ttc, 2);
+  ASSERT_FALSE(out_of_range);
+  EXPECT_EQ(out_of_range.error().code, ErrorCode::kInvalidFormat);
+  EXPECT_FALSE(FontFace::load(testdata("fonts") / "NotoSansKR-subset.ttf", 1)) << "단일 글꼴은 면 0 만";
+  // 면 1 의 서브셋은 그 면의 이름을 가진 독립 글꼴이다
+  const auto shaped = (*face1)->shape("한글", 12.0);
+  std::vector<std::uint32_t> gids;
+  for (const auto& g : shaped.glyphs) gids.push_back(g.gid);
+  auto subset = (*face1)->subset(gids);
+  ASSERT_TRUE(subset) << subset.error().message;
+  auto reloaded = FontFace::load_from_memory(subset->ttf);
+  ASSERT_TRUE(reloaded);
+  EXPECT_EQ((*reloaded)->family_name(), "NotoSansKR-subset-Face1");
+  EXPECT_FALSE((*reloaded)->is_cff());
+
+  auto cff = FontFace::load(testdata("fonts") / "NotoSansCJKkr-subset.otf");
+  ASSERT_TRUE(cff) << cff.error().message;
+  EXPECT_TRUE((*cff)->is_cff());
+  EXPECT_EQ((*cff)->family_name(), "NotoSansCJKkr-subset");
+  EXPECT_TRUE((*cff)->missing("한글 텍스트 123").empty());
+  const auto cff_shaped = (*cff)->shape("한글", 12.0);
+  gids.clear();
+  for (const auto& g : cff_shaped.glyphs) gids.push_back(g.gid);
+  auto cff_subset = (*cff)->subset(gids);
+  ASSERT_TRUE(cff_subset) << cff_subset.error().message;
+  ASSERT_GE(cff_subset->ttf.size(), 4u);
+  EXPECT_EQ(std::string(cff_subset->ttf.begin(), cff_subset->ttf.begin() + 4), "OTTO") << "CFF 서브셋은 OpenType(OTTO)";
+  EXPECT_NE(cff_subset->key, subset->key);
+}
 }  // namespace
 }  // namespace onpdf::edit

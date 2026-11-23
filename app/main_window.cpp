@@ -1,36 +1,34 @@
 #include "main_window.h"
 
-#include "document_view.h"
-#include "onpdf/core/platform/path.h"
-#include "annotation_dialog.h"
-#include "form_field_editor.h"
-#include "image_import.h"
 #include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/engine/save.h"
 #include "onpdf/core/page_ranges.h"
+#include "onpdf/core/platform/font_dirs.h"
+#include "onpdf/core/platform/path.h"
 #include "onpdf/edit/add_text_command.h"
 #include "onpdf/edit/annotation_commands.h"
-#include "onpdf/edit/object_commands.h"
-#include "onpdf/edit/text_box_commands.h"
 #include "onpdf/edit/delete_pages.h"
 #include "onpdf/edit/insert_pages.h"
 #include "onpdf/edit/move_pages.h"
+#include "onpdf/edit/object_commands.h"
 #include "onpdf/edit/page_ops.h"
 #include "onpdf/edit/rotate_page.h"
+#include "onpdf/edit/text_box_commands.h"
+#include "onpdf/edit/text_line_commands.h"
+
+#include "annotation_dialog.h"
+#include "document_view.h"
+#include "form_field_editor.h"
+#include "image_import.h"
 #include "outline_panel.h"
 #include "search_bar.h"
 #include "thumbnail_panel.h"
-
 #include <QAction>
 #include <QActionGroup>
-#include <QPainter>
-#include <QPixmap>
-#include <QToolBar>
-#include <QComboBox>
-#include <QToolButton>
 #include <QApplication>
 #include <QClipboard>
 #include <QCloseEvent>
+#include <QComboBox>
 #include <QDesktopServices>
 #include <QDir>
 #include <QDragEnterEvent>
@@ -46,12 +44,14 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QPainter>
+#include <QPixmap>
 #include <QPointer>
 #include <QPrintDialog>
-#include <QPushButton>
 #include <QPrinter>
 #include <QProgressBar>
 #include <QProgressDialog>
+#include <QPushButton>
 #include <QScopedValueRollback>
 #include <QScrollBar>
 #include <QSpinBox>
@@ -59,12 +59,14 @@
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QTimer>
+#include <QToolBar>
+#include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
-
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace onpdf::app {
 
@@ -122,6 +124,11 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
 
   edit_ = new EditController(dispatcher_, this);
   structure_job_ = new StructureJob(dispatcher_, this);
+  catalog_loader_ = new FontCatalogLoader(dispatcher_, this);
+  connect(catalog_loader_, &FontCatalogLoader::ready, this, [this] {
+    if (font_catalog_ == nullptr)
+      set_font_catalog(catalog_loader_->catalog());  // 테스트가 먼저 주입했으면 그대로
+  });
   connect(structure_job_, &StructureJob::finished, this, &MainWindow::on_structure_finished);
   build_menus();
   build_annotation_ui();
@@ -130,18 +137,27 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(view_, &DocumentView::note_requested, this, &MainWindow::on_note_requested);
   connect(view_, &DocumentView::text_requested, this, &MainWindow::on_text_requested);
   connect(view_, &DocumentView::text_box_selected, this, &MainWindow::on_text_box_selected);
-  connect(view_, &DocumentView::text_box_reselected, this, [this](const DocumentView::SelectedTextBox&) {
-    update_edit_actions();
-    update_property_buttons();
-  });
+  connect(view_, &DocumentView::text_box_reselected, this,
+          [this](const DocumentView::SelectedTextBox&) {
+            update_edit_actions();
+            update_property_buttons();
+          });
   connect(view_, &DocumentView::text_move_requested, this, &MainWindow::on_text_move_requested);
   connect(view_, &DocumentView::text_delete_requested, this, &MainWindow::on_text_delete_requested);
   connect(view_, &DocumentView::text_edit_requested, this, &MainWindow::on_text_edit_requested);
   connect(view_, &DocumentView::image_requested, this, &MainWindow::on_image_requested);
-  connect(view_, &DocumentView::object_resize_requested, this, &MainWindow::on_object_resize_requested);
+  connect(view_, &DocumentView::object_resize_requested, this,
+          &MainWindow::on_object_resize_requested);
   connect(view_, &DocumentView::text_width_requested, this, &MainWindow::on_text_width_requested);
-  connect(view_, &DocumentView::object_nudge_requested, this, &MainWindow::on_object_nudge_requested);
-  connect(view_, &DocumentView::locked_object_edit_attempted, this, &MainWindow::explain_locked_object);
+  connect(view_, &DocumentView::object_nudge_requested, this,
+          &MainWindow::on_object_nudge_requested);
+  connect(view_, &DocumentView::locked_object_edit_attempted, this,
+          &MainWindow::explain_locked_object);
+  connect(view_, &DocumentView::text_line_selected, this, &MainWindow::on_text_line_selected);
+  connect(view_, &DocumentView::text_line_edit_requested, this,
+          &MainWindow::on_text_line_edit_requested);
+  connect(view_, &DocumentView::text_line_delete_requested, this,
+          &MainWindow::on_text_line_delete_requested);
   connect(view_, &DocumentView::form_field_clicked, this, &MainWindow::on_form_field_clicked);
   connect(view_, &DocumentView::form_text_committed, this, &MainWindow::on_form_text_committed);
   connect(view_, &DocumentView::ink_requested, this, &MainWindow::on_ink_requested);
@@ -152,11 +168,14 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
     update_edit_actions();
     update_property_buttons();
   });
-  connect(view_, &DocumentView::annotation_edit_requested, this, &MainWindow::on_annotation_edit_requested);
-  connect(view_, &DocumentView::annotation_delete_requested, this, [this](int, const QString&) { delete_selected_annotation(); });
+  connect(view_, &DocumentView::annotation_edit_requested, this,
+          &MainWindow::on_annotation_edit_requested);
+  connect(view_, &DocumentView::annotation_delete_requested, this,
+          [this](int, const QString&) { delete_selected_annotation(); });
   connect(edit_, &EditController::state_changed, this, [this] {
     update_edit_actions();
     update_title();
+    announce_line_edit();
     flush_pending_nudge();
     if (!edit_->busy()) form_in_flight_ = false;
     flush_form_commands();
@@ -197,11 +216,13 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
           [this](const QString& path, int drop_row) { insert_pages_from(path, drop_row); });
   connect(thumbnail_panel_, &ThumbnailPanel::delete_requested, this,
           [this](const std::vector<int>& pages) { delete_pages(pages); });
-  connect(thumbnail_panel_, &ThumbnailPanel::context_menu_requested, this, &MainWindow::on_thumbnail_context_menu);
+  connect(thumbnail_panel_, &ThumbnailPanel::context_menu_requested, this,
+          &MainWindow::on_thumbnail_context_menu);
   connect(outline_panel_, &OutlinePanel::item_activated, this, &MainWindow::on_outline_item);
   connect(view_->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] {
     // 스로틀: 진행 중이면 다시 시작하지 않는다 → 연속(관성) 스크롤 중에도 100ms 마다 갱신
-    if (sidebar_->isVisible() && sidebar_->currentWidget() == outline_panel_ && !outline_highlight_timer_->isActive()) {
+    if (sidebar_->isVisible() && sidebar_->currentWidget() == outline_panel_ &&
+        !outline_highlight_timer_->isActive()) {
       outline_highlight_timer_->start();
     }
   });
@@ -215,16 +236,18 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
 }
 
 MainWindow::~MainWindow() {
-  print_job_.reset();  // 신호 없이 취소 (printer_ 보다 먼저)
+  print_job_.reset();          // 신호 없이 취소 (printer_ 보다 먼저)
   view_->set_search(nullptr);  // 세션이 먼저 사라지므로 뷰가 댕글 포인터를 들지 않게
 }
 
 void MainWindow::build_menus() {
   QMenu* file = menuBar()->addMenu(tr("파일(&F)"));
-  QAction* open = file->addAction(tr("열기(&O)..."), QKeySequence::Open, this, &MainWindow::on_open_action);
+  QAction* open =
+      file->addAction(tr("열기(&O)..."), QKeySequence::Open, this, &MainWindow::on_open_action);
   open->setStatusTip(tr("PDF 파일을 연다"));
   save_action_ = file->addAction(tr("저장(&S)"), QKeySequence::Save, this, &MainWindow::on_save);
-  save_as_action_ = file->addAction(tr("다른 이름으로 저장(&A)..."), QKeySequence::SaveAs, this, &MainWindow::on_save_as);
+  save_as_action_ = file->addAction(tr("다른 이름으로 저장(&A)..."), QKeySequence::SaveAs, this,
+                                    &MainWindow::on_save_as);
   file->addSeparator();
   merge_action_ = file->addAction(tr("병합(&M)..."), this, &MainWindow::on_merge_action);
   merge_action_->setStatusTip(tr("PDF 여러 개를 한 파일로 합친다 (첫 문서의 목차·폼 유지)"));
@@ -232,12 +255,14 @@ void MainWindow::build_menus() {
   split_action_->setStatusTip(tr("현재 문서를 N쪽마다 나눠 저장한다"));
   split_action_->setEnabled(false);
   file->addSeparator();
-  print_action_ = file->addAction(tr("인쇄(&P)..."), QKeySequence::Print, this, &MainWindow::on_print);
+  print_action_ =
+      file->addAction(tr("인쇄(&P)..."), QKeySequence::Print, this, &MainWindow::on_print);
   print_action_->setEnabled(false);
   file->addSeparator();
   // QKeySequence::Quit 은 Windows 에서 비어 있으므로 Ctrl+Q 를 명시한다
   // 종료는 창 닫기로: closeEvent 에서 저장 확인을 거친다 (마지막 창이 닫히면 앱이 끝난다)
-  QAction* quit = file->addAction(tr("종료(&Q)"), QKeySequence(Qt::CTRL | Qt::Key_Q), this, &QWidget::close);
+  QAction* quit =
+      file->addAction(tr("종료(&Q)"), QKeySequence(Qt::CTRL | Qt::Key_Q), this, &QWidget::close);
   quit->setMenuRole(QAction::QuitRole);
 
   QMenu* edit = menuBar()->addMenu(tr("편집(&E)"));
@@ -249,9 +274,11 @@ void MainWindow::build_menus() {
       show_transient(tr("라디오 단추는 선택을 해제할 수 없어 첫 선택은 그대로 둡니다"));
     }
   });
-  redo_action_ = edit->addAction(tr("다시 실행(&R)"), QKeySequence::Redo, this, [this] { edit_->redo(); });
+  redo_action_ =
+      edit->addAction(tr("다시 실행(&R)"), QKeySequence::Redo, this, [this] { edit_->redo(); });
   edit->addSeparator();
-  paste_action_ = edit->addAction(tr("이미지 붙여넣기(&V)"), QKeySequence::Paste, this, [this] { paste_image(); });
+  paste_action_ = edit->addAction(tr("이미지 붙여넣기(&V)"), QKeySequence::Paste, this,
+                                  [this] { paste_image(); });
   paste_action_->setObjectName(QStringLiteral("paste_image"));
   paste_action_->setStatusTip(tr("클립보드의 이미지를 현재 쪽 가운데에 놓는다"));
   edit->addSeparator();
@@ -261,39 +288,48 @@ void MainWindow::build_menus() {
                                        &MainWindow::on_select_all);
   edit->addSeparator();
   edit->addAction(tr("찾기(&F)..."), QKeySequence::Find, this, &MainWindow::open_find);
-  find_next_action_ = edit->addAction(tr("다음 찾기(&N)"), QKeySequence::FindNext, this, &MainWindow::on_find_next);
-  find_previous_action_ =
-      edit->addAction(tr("이전 찾기(&P)"), QKeySequence::FindPrevious, this, &MainWindow::on_find_previous);
+  find_next_action_ =
+      edit->addAction(tr("다음 찾기(&N)"), QKeySequence::FindNext, this, &MainWindow::on_find_next);
+  find_previous_action_ = edit->addAction(tr("이전 찾기(&P)"), QKeySequence::FindPrevious, this,
+                                          &MainWindow::on_find_previous);
 
   QMenu* page = menuBar()->addMenu(tr("쪽(&P)"));
-  rotate_cw_action_ = page->addAction(tr("오른쪽으로 회전(&R)"), QKeySequence(Qt::CTRL | Qt::Key_R), this,
-                                      [this] { rotate_current_page(1); });
-  rotate_ccw_action_ = page->addAction(tr("왼쪽으로 회전(&L)"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R), this,
-                                       [this] { rotate_current_page(3); });
+  rotate_cw_action_ = page->addAction(tr("오른쪽으로 회전(&R)"), QKeySequence(Qt::CTRL | Qt::Key_R),
+                                      this, [this] { rotate_current_page(1); });
+  rotate_ccw_action_ =
+      page->addAction(tr("왼쪽으로 회전(&L)"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R), this,
+                      [this] { rotate_current_page(3); });
   page->addSeparator();
-  // Delete 단축키는 썸네일 목록이 직접 처리한다 (목록 밖에서는 현재 쪽). 메뉴에 단축키를 두면 목록의 키와 겹친다
-  delete_pages_action_ = page->addAction(tr("쪽 삭제(&D)"), this, [this] { delete_pages(target_pages()); });
-  move_up_action_ = page->addAction(tr("위로 이동(&U)"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Up), this,
-                                    [this] { move_selection(-1); });
-  move_down_action_ = page->addAction(tr("아래로 이동(&W)"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Down), this,
-                                      [this] { move_selection(+1); });
+  // Delete 단축키는 썸네일 목록이 직접 처리한다 (목록 밖에서는 현재 쪽). 메뉴에 단축키를 두면
+  // 목록의 키와 겹친다
+  delete_pages_action_ =
+      page->addAction(tr("쪽 삭제(&D)"), this, [this] { delete_pages(target_pages()); });
+  move_up_action_ =
+      page->addAction(tr("위로 이동(&U)"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Up), this,
+                      [this] { move_selection(-1); });
+  move_down_action_ =
+      page->addAction(tr("아래로 이동(&W)"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Down),
+                      this, [this] { move_selection(+1); });
   page->addSeparator();
-  insert_pages_action_ = page->addAction(tr("파일에서 쪽 삽입(&I)..."), this, &MainWindow::on_insert_pages_action);
+  insert_pages_action_ =
+      page->addAction(tr("파일에서 쪽 삽입(&I)..."), this, &MainWindow::on_insert_pages_action);
 
   QMenu* view = menuBar()->addMenu(tr("보기(&V)"));
   view->addAction(tr("너비 맞춤(&W)"), QKeySequence(Qt::CTRL | Qt::Key_1), this,
                   [this] { view_->set_zoom_mode(ZoomMode::kFitWidth); });
   view->addAction(tr("쪽 맞춤(&P)"), QKeySequence(Qt::CTRL | Qt::Key_2), this,
                   [this] { view_->set_zoom_mode(ZoomMode::kFitPage); });
-  view->addAction(tr("실제 크기(&A)"), QKeySequence(Qt::CTRL | Qt::Key_0), this, [this] { view_->set_zoom(1.0); });
+  view->addAction(tr("실제 크기(&A)"), QKeySequence(Qt::CTRL | Qt::Key_0), this,
+                  [this] { view_->set_zoom(1.0); });
   view->addSeparator();
   view->addAction(tr("확대(&I)"), QKeySequence::ZoomIn, this, [this] { view_->zoom_in(); });
   view->addAction(tr("축소(&O)"), QKeySequence::ZoomOut, this, [this] { view_->zoom_out(); });
   view->addSeparator();
-  sidebar_action_ = view->addAction(tr("사이드바(&S)"), QKeySequence(Qt::Key_F4), this, [this](bool checked) {
-    sidebar_->setVisible(checked);
-    if (checked) update_outline_highlight();
-  });
+  sidebar_action_ =
+      view->addAction(tr("사이드바(&S)"), QKeySequence(Qt::Key_F4), this, [this](bool checked) {
+        sidebar_->setVisible(checked);
+        if (checked) update_outline_highlight();
+      });
   sidebar_action_->setCheckable(true);
   sidebar_action_->setChecked(true);
 
@@ -397,8 +433,12 @@ void MainWindow::on_opened(const QString& path, int page_count) {
 // 주석 속성 표시용 (두께는 도형·펜만)
 namespace {
 using engine::has_border_width;
-QString width_text(double width) { return MainWindow::tr("%1pt").arg(width); }
-QString opacity_text(double opacity) { return MainWindow::tr("%1%").arg(qRound(opacity * 100.0)); }
+QString width_text(double width) {
+  return MainWindow::tr("%1pt").arg(width);
+}
+QString opacity_text(double opacity) {
+  return MainWindow::tr("%1%").arg(qRound(opacity * 100.0));
+}
 }  // namespace
 
 QString MainWindow::command_label(std::string_view id) const {
@@ -421,6 +461,9 @@ QString MainWindow::command_label(std::string_view id) const {
   if (id == "remove_text") return tr("텍스트 삭제");
   if (id == "replace_text") return tr("텍스트 수정");
   if (id == "resize_text") return tr("텍스트 폭 변경");
+  if (id == "replace_line") return tr("줄 수정");
+  if (id == "format_line") return tr("줄 서식 변경");
+  if (id == "remove_line") return tr("줄 삭제");
   if (id == "form_text") return tr("폼 입력");
   if (id == "form_check" || id == "form_choice") return tr("폼 선택");
   if (id == "set_annotation_border_width") return tr("선 두께 변경");
@@ -445,27 +488,34 @@ void MainWindow::update_title() {
 void MainWindow::update_edit_actions() {
   if (updating_actions_) return;  // set_tool → annotation_selected → 여기로 되돌아오는 재진입 차단
   const QScopedValueRollback guard(updating_actions_, true);
-  const bool has_pages = session_.has_document() && session_.handle().valid() && session_.handle().info().page_count > 0;
+  const bool has_pages = session_.has_document() && session_.handle().valid() &&
+                         session_.handle().info().page_count > 0;
   const bool printing = print_job_ && print_job_->active();
   // 편집 가능 상태(작업 중이 아님)와 편집 종류별 문서 권한을 따로 본다
   const bool idle = has_pages && !edit_->busy() && !saving_ && !printing;
-  const bool can_assemble = has_pages && session_.handle().info().permissions.assemble;  // 쪽 회전·삭제·삽입
-  form_edits_allowed_ = has_pages && session_.handle().info().permissions.fill_forms;  // 폼 (#51): 바쁘면 대기열
+  const bool can_assemble =
+      has_pages && session_.handle().info().permissions.assemble;  // 쪽 회전·삭제·삽입
+  form_edits_allowed_ =
+      has_pages && session_.handle().info().permissions.fill_forms;  // 폼 (#51): 바쁘면 대기열
   view_->set_form_fillable(form_edits_allowed_);
   rotate_cw_action_->setEnabled(idle && can_assemble);
   rotate_ccw_action_->setEnabled(idle && can_assemble);
-  const QString assemble_tip = has_pages && !can_assemble ? tr("이 문서는 쪽 편집(회전·삭제·삽입)이 허용되지 않습니다")
-                                                          : QString();
+  const QString assemble_tip = has_pages && !can_assemble
+                                   ? tr("이 문서는 쪽 편집(회전·삭제·삽입)이 허용되지 않습니다")
+                                   : QString();
   rotate_cw_action_->setStatusTip(assemble_tip);
   rotate_ccw_action_->setStatusTip(assemble_tip);
-  for (QAction* action : {delete_pages_action_, move_up_action_, move_down_action_, insert_pages_action_}) {
+  for (QAction* action :
+       {delete_pages_action_, move_up_action_, move_down_action_, insert_pages_action_}) {
     action->setEnabled(idle && can_assemble);
     action->setStatusTip(assemble_tip);
   }
   thumbnail_panel_->set_editable(idle && can_assemble);
   const bool can_annotate = has_pages && session_.handle().info().permissions.annotate;
-  const QString annotate_tip = has_pages && !can_annotate ? tr("이 문서는 주석이 허용되지 않습니다") : QString();
-  // 도구는 권한으로만 켜고 끈다. 바쁨·저장·인쇄 중에는 요청(annotation_edits_allowed_)만 막아 도구가 유지된다 (리뷰 W1)
+  const QString annotate_tip =
+      has_pages && !can_annotate ? tr("이 문서는 주석이 허용되지 않습니다") : QString();
+  // 도구는 권한으로만 켜고 끈다. 바쁨·저장·인쇄 중에는 요청(annotation_edits_allowed_)만 막아
+  // 도구가 유지된다 (리뷰 W1)
   annotation_edits_allowed_ = idle && can_annotate;
   for (QAction* action : tool_actions_) {
     if (action == nullptr) continue;
@@ -473,38 +523,50 @@ void MainWindow::update_edit_actions() {
     action->setEnabled(select || can_annotate);
     action->setStatusTip(select ? QString() : annotate_tip);
   }
-  if (!can_annotate && view_->tool() != AnnotationTool::kSelect) {  // 권한을 잃으면(문서 교체) 선택 도구로
+  if (!can_annotate &&
+      view_->tool() != AnnotationTool::kSelect) {  // 권한을 잃으면(문서 교체) 선택 도구로
     tool_actions_[0]->setChecked(true);
     view_->set_tool(AnnotationTool::kSelect);
   }
   for (QAction* action : markup_selection_actions_) {
     if (action != nullptr) action->setEnabled(idle && can_annotate && view_->has_selection());
   }
-  delete_annotation_action_->setEnabled((annotation_edits_allowed_ && view_->selected_annotation().has_value()) ||
-                                        (content_edits_allowed_ && view_->selected_object().has_value() && !view_->selected_object_locked()));
+  delete_annotation_action_->setEnabled(
+      (annotation_edits_allowed_ && view_->selected_annotation().has_value()) ||
+      (content_edits_allowed_ && view_->selected_object().has_value() &&
+       !view_->selected_object_locked()) ||
+      (content_edits_allowed_ && view_->selected_line().has_value() &&
+       view_->selected_line()->info.editable));
   color_button_->setEnabled(can_annotate);
-  // 텍스트 추가는 내용 수정 권한(비트 4) + 번들 폰트. 바쁨·저장·인쇄 중 요청은 annotation_edits_allowed_ 와 같은 규칙으로 막는다
-  if (QAction* text_tool = tool_actions_[static_cast<int>(AnnotationTool::kText)]; text_tool != nullptr) {
-    const bool can_edit_contents = has_pages && session_.handle().info().permissions.modify_contents;
+  // 텍스트 추가는 내용 수정 권한(비트 4) + 번들 폰트. 바쁨·저장·인쇄 중 요청은
+  // annotation_edits_allowed_ 와 같은 규칙으로 막는다
+  if (QAction* text_tool = tool_actions_[static_cast<int>(AnnotationTool::kText)];
+      text_tool != nullptr) {
+    const bool can_edit_contents =
+        has_pages && session_.handle().info().permissions.modify_contents;
     const bool text_ok = can_edit_contents && text_font_ != nullptr;
     text_edits_allowed_ = idle && text_ok;
     content_edits_allowed_ = idle && can_edit_contents;
     if (paste_action_ != nullptr) paste_action_->setEnabled(can_edit_contents);
     view_->set_text_editable(content_edits_allowed_);  // 이동·크기 조절 (글꼴과 무관)
-    view_->set_nudge_enabled(can_edit_contents);  // 화살표는 바쁜 동안에도 받아 모은다
-    if (QAction* image_tool = tool_actions_[static_cast<int>(AnnotationTool::kImage)]; image_tool != nullptr) {
+    view_->set_nudge_enabled(can_edit_contents);       // 화살표는 바쁜 동안에도 받아 모은다
+    if (QAction* image_tool = tool_actions_[static_cast<int>(AnnotationTool::kImage)];
+        image_tool != nullptr) {
       image_tool->setEnabled(can_edit_contents);
-      image_tool->setStatusTip(has_pages && !can_edit_contents ? tr("이 문서는 내용 수정이 허용되지 않습니다") : QString());
+      image_tool->setStatusTip(has_pages && !can_edit_contents
+                                   ? tr("이 문서는 내용 수정이 허용되지 않습니다")
+                                   : QString());
       if (!can_edit_contents && view_->tool() == AnnotationTool::kImage) {
         tool_actions_[0]->setChecked(true);
         view_->set_tool(AnnotationTool::kSelect);
       }
     }
     text_tool->setEnabled(text_ok);
-    text_tool->setStatusTip(!has_pages ? QString()
+    text_tool->setStatusTip(!has_pages           ? QString()
                             : !can_edit_contents ? tr("이 문서는 내용 수정이 허용되지 않습니다")
-                            : text_font_ == nullptr ? tr("글꼴 파일이 없습니다 (python3 third_party/fetch_fonts.py)")
-                                                    : QString());
+                            : text_font_ == nullptr
+                                ? tr("글꼴 파일이 없습니다 (python3 third_party/fetch_fonts.py)")
+                                : QString());
     if (text_size_combo_ != nullptr) text_size_combo_->setEnabled(text_ok);
     if (!text_ok && view_->tool() == AnnotationTool::kText) {
       tool_actions_[0]->setChecked(true);
@@ -525,15 +587,20 @@ void MainWindow::update_edit_actions() {
   // 실행 취소 대상은 이미 허용된 편집이므로 작업 중이 아니면 된다
   undo_action_->setEnabled(idle && edit_->can_undo());
   redo_action_->setEnabled(idle && edit_->can_redo());
-  undo_action_->setText(edit_->can_undo() ? tr("실행 취소: %1(&U)").arg(command_label(edit_->undo_id()))
-                                          : tr("실행 취소(&U)"));
-  redo_action_->setText(edit_->can_redo() ? tr("다시 실행: %1(&R)").arg(command_label(edit_->redo_id()))
-                                          : tr("다시 실행(&R)"));
-  save_action_->setEnabled(session_.has_document() && edit_->is_modified() && !saving_ && !edit_->busy());
+  undo_action_->setText(edit_->can_undo()
+                            ? tr("실행 취소: %1(&U)").arg(command_label(edit_->undo_id()))
+                            : tr("실행 취소(&U)"));
+  redo_action_->setText(edit_->can_redo()
+                            ? tr("다시 실행: %1(&R)").arg(command_label(edit_->redo_id()))
+                            : tr("다시 실행(&R)"));
+  save_action_->setEnabled(session_.has_document() && edit_->is_modified() && !saving_ &&
+                           !edit_->busy());
   save_as_action_->setEnabled(has_pages && !saving_ && !edit_->busy());
 }
 
-void MainWindow::rotate_current_page(int quarter_turns) { rotate_pages(target_pages(), quarter_turns); }
+void MainWindow::rotate_current_page(int quarter_turns) {
+  rotate_pages(target_pages(), quarter_turns);
+}
 
 std::vector<int> MainWindow::target_pages() const {
   if (!view_->has_document()) return {};
@@ -552,7 +619,8 @@ bool MainWindow::rotate_pages(std::vector<int> pages, int quarter_turns) {
 bool MainWindow::warn_signature_once() {
   if (signature_warned_ || session_.handle().info().signature_count <= 0) return true;
   QMessageBox box(QMessageBox::Warning, tr("서명된 문서"),
-                  tr("이 문서에는 전자서명이 있습니다. 쪽이나 주석을 바꾸면 서명이 무효화될 수 있습니다.\n계속할까요?"),
+                  tr("이 문서에는 전자서명이 있습니다. 쪽이나 주석을 바꾸면 서명이 무효화될 수 "
+                     "있습니다.\n계속할까요?"),
                   QMessageBox::NoButton, this);
   box.setObjectName(QStringLiteral("signature_warning"));
   QPushButton* go = box.addButton(tr("계속"), QMessageBox::AcceptRole);
@@ -590,7 +658,8 @@ bool MainWindow::move_pages(std::vector<int> pages, int drop_row) {
   // 자리가 그대로인 이동은 편집으로 치지 않는다
   const std::vector<int> order = edit::simulate_move(count, pages, dest);
   bool identity = true;
-  for (std::size_t i = 0; i < order.size(); ++i) identity = identity && order[i] == static_cast<int>(i);
+  for (std::size_t i = 0; i < order.size(); ++i)
+    identity = identity && order[i] == static_cast<int>(i);
   if (identity) return false;
   if (!warn_signature_once()) return false;
   return edit_->run(std::make_shared<edit::MovePagesCommand>(std::move(pages), dest));
@@ -608,7 +677,8 @@ void MainWindow::move_selection(int delta) {
 
 void MainWindow::on_insert_pages_action() {
   if (!insert_pages_action_->isEnabled() || !view_->has_document()) return;
-  const QString path = QFileDialog::getOpenFileName(this, tr("쪽을 가져올 PDF"), QFileInfo(session_.path()).absolutePath(),
+  const QString path = QFileDialog::getOpenFileName(this, tr("쪽을 가져올 PDF"),
+                                                    QFileInfo(session_.path()).absolutePath(),
                                                     tr("PDF 문서 (*.pdf)"));
   if (path.isEmpty()) return;
   insert_pages_from(path, std::max(0, view_->current_page()) + 1);  // 현재 쪽 뒤
@@ -634,9 +704,12 @@ void MainWindow::on_edit_failed(onpdf::ErrorCode code, const QString& message) {
     // PDFium 이 넣지 못한 JPEG(CMYK·일부 프로그레시브 등)은 디코딩해 픽셀로 다시 넣는다
     if (pending.jpeg && code == ErrorCode::kInvalidFormat && !pending.path.isEmpty()) {
       if (auto imported = import_image_file(pending.path, true)) {
-        const engine::PageSize size = session_.handle().info().page_sizes.at(static_cast<std::size_t>(pending.page));
-        imported->spec.rect = place_image(size, pending.origin, imported->pixel_width, imported->pixel_height, pending.center);
-        pending_image_ = PendingImage{pending.path, pending.page, pending.origin, pending.center, false};
+        const engine::PageSize size =
+            session_.handle().info().page_sizes.at(static_cast<std::size_t>(pending.page));
+        imported->spec.rect = place_image(size, pending.origin, imported->pixel_width,
+                                          imported->pixel_height, pending.center);
+        pending_image_ =
+            PendingImage{pending.path, pending.page, pending.origin, pending.center, false};
         if (run_add_image(pending.page, std::move(imported->spec))) return;
       }
     }
@@ -648,7 +721,8 @@ void MainWindow::on_edit_failed(onpdf::ErrorCode code, const QString& message) {
     QInputDialog dialog(this);
     dialog.setObjectName(QStringLiteral("insert_password"));
     dialog.setWindowTitle(tr("암호"));
-    dialog.setLabelText(tr("%1 은(는) 암호로 보호되어 있습니다. 암호를 입력하세요.").arg(QFileInfo(pending.path).fileName()));
+    dialog.setLabelText(tr("%1 은(는) 암호로 보호되어 있습니다. 암호를 입력하세요.")
+                            .arg(QFileInfo(pending.path).fileName()));
     dialog.setTextEchoMode(QLineEdit::Password);
     if (dialog.exec() != QDialog::Accepted || dialog.textValue().isEmpty()) return;
     insert_pages_from(pending.path, pending.at, dialog.textValue());
@@ -659,6 +733,27 @@ void MainWindow::on_edit_failed(onpdf::ErrorCode code, const QString& message) {
     show_transient(tr("이 문서는 쪽 추출이 허용되지 않아 삽입할 수 없습니다"));
     return;
   }
+  // 줄 수정(#65)의 거절 사유는 사용자 문구로
+  if (message.startsWith(QStringLiteral("displacement"))) {
+    show_transient(tr("이 줄 뒤에 같은 줄에서 이어지는 글이 있어 고칠 수 없습니다"));
+    return;
+  }
+  if (message.startsWith(QStringLiteral("shared-form"))) {
+    show_transient(tr("여러 쪽이 함께 쓰는 서식 안의 글은 고칠 수 없습니다"));
+    return;
+  }
+  if (message.startsWith(QStringLiteral("content stream does not match"))) {
+    show_transient(tr("이 문서의 내용 구조를 읽을 수 없어 줄을 고칠 수 없습니다"));
+    return;
+  }
+  if (message.startsWith(QStringLiteral("line edit changed other content"))) {
+    show_transient(tr("다른 내용이 바뀔 수 있어 줄 수정을 취소했습니다"));
+    return;
+  }
+  if (message.startsWith(QStringLiteral("undo history evicted"))) {
+    show_transient(tr("실행 취소 기록이 메모리 상한으로 지워졌습니다"));
+    return;
+  }
   show_transient(tr("편집하지 못했습니다: %1").arg(message));
 }
 
@@ -667,7 +762,8 @@ void MainWindow::on_edit_failed(onpdf::ErrorCode code, const QString& message) {
 namespace {
 
 constexpr engine::Color kPalette[] = {
-    {255, 255, 0, 255}, {0, 200, 0, 255}, {0, 150, 255, 255}, {255, 105, 180, 255}, {255, 0, 0, 255}, {255, 140, 0, 255},
+    {255, 255, 0, 255},   {0, 200, 0, 255}, {0, 150, 255, 255},
+    {255, 105, 180, 255}, {255, 0, 0, 255}, {255, 140, 0, 255},
 };
 const char* const kPaletteNames[] = {QT_TR_NOOP("노랑"), QT_TR_NOOP("초록"), QT_TR_NOOP("파랑"),
                                      QT_TR_NOOP("분홍"), QT_TR_NOOP("빨강"), QT_TR_NOOP("주황")};
@@ -684,16 +780,26 @@ QIcon color_icon(engine::Color c) {
 
 QString kind_name(engine::AnnotationKind kind) {
   switch (kind) {
-    case engine::AnnotationKind::kHighlight: return MainWindow::tr("하이라이트");
-    case engine::AnnotationKind::kUnderline: return MainWindow::tr("밑줄");
-    case engine::AnnotationKind::kStrikeOut: return MainWindow::tr("취소선");
-    case engine::AnnotationKind::kSquiggly: return MainWindow::tr("물결선");
-    case engine::AnnotationKind::kText: return MainWindow::tr("메모");
-    case engine::AnnotationKind::kInk: return MainWindow::tr("펜");
-    case engine::AnnotationKind::kSquare: return MainWindow::tr("사각형");
-    case engine::AnnotationKind::kCircle: return MainWindow::tr("원");
-    case engine::AnnotationKind::kLink: return MainWindow::tr("링크");
-    case engine::AnnotationKind::kOther: break;
+    case engine::AnnotationKind::kHighlight:
+      return MainWindow::tr("하이라이트");
+    case engine::AnnotationKind::kUnderline:
+      return MainWindow::tr("밑줄");
+    case engine::AnnotationKind::kStrikeOut:
+      return MainWindow::tr("취소선");
+    case engine::AnnotationKind::kSquiggly:
+      return MainWindow::tr("물결선");
+    case engine::AnnotationKind::kText:
+      return MainWindow::tr("메모");
+    case engine::AnnotationKind::kInk:
+      return MainWindow::tr("펜");
+    case engine::AnnotationKind::kSquare:
+      return MainWindow::tr("사각형");
+    case engine::AnnotationKind::kCircle:
+      return MainWindow::tr("원");
+    case engine::AnnotationKind::kLink:
+      return MainWindow::tr("링크");
+    case engine::AnnotationKind::kOther:
+      break;
   }
   return MainWindow::tr("주석");
 }
@@ -715,12 +821,17 @@ void MainWindow::build_annotation_ui() {
   QMenu* menu = menuBar()->addMenu(tr("주석(&N)"));
   tool_group_ = new QActionGroup(this);
   tool_group_->setExclusive(true);
-  const QString names[kAnnotationToolCount] = {tr("선택(&S)"), tr("하이라이트(&H)"), tr("밑줄(&U)"), tr("취소선(&K)"),
-                                               tr("메모(&N)"), tr("펜(&P)"), tr("사각형(&R)"), tr("원(&O)"), tr("텍스트(&T)"),
-                                               tr("이미지(&G)")};
-  const QString tips[kAnnotationToolCount] = {tr("텍스트를 선택하거나 주석을 고른다"), tr("드래그한 글에 하이라이트"),
-                                              tr("드래그한 글에 밑줄"), tr("드래그한 글에 취소선"), tr("클릭한 자리에 메모"),
-                                              tr("드래그로 자유 선"), tr("드래그한 영역에 사각형 테두리"), tr("드래그한 영역에 원"),
+  const QString names[kAnnotationToolCount] = {
+      tr("선택(&S)"), tr("하이라이트(&H)"), tr("밑줄(&U)"), tr("취소선(&K)"), tr("메모(&N)"),
+      tr("펜(&P)"),   tr("사각형(&R)"),     tr("원(&O)"),   tr("텍스트(&T)"), tr("이미지(&G)")};
+  const QString tips[kAnnotationToolCount] = {tr("텍스트를 선택하거나 주석을 고른다"),
+                                              tr("드래그한 글에 하이라이트"),
+                                              tr("드래그한 글에 밑줄"),
+                                              tr("드래그한 글에 취소선"),
+                                              tr("클릭한 자리에 메모"),
+                                              tr("드래그로 자유 선"),
+                                              tr("드래그한 영역에 사각형 테두리"),
+                                              tr("드래그한 영역에 원"),
                                               tr("클릭한 자리에 텍스트 상자 (쪽 내용에 들어간다)"),
                                               tr("파일을 골라 클릭한 자리에 이미지를 놓는다")};
   for (int i = 0; i < kAnnotationToolCount; ++i) {
@@ -729,7 +840,10 @@ void MainWindow::build_annotation_ui() {
     action->setStatusTip(tips[i]);
     action->setChecked(i == 0);
     connect(action, &QAction::triggered, this, [this, i](bool checked) {
-      if (checked) view_->set_tool(static_cast<AnnotationTool>(i));
+      if (!checked) return;
+      view_->set_tool(static_cast<AnnotationTool>(i));
+      if (static_cast<AnnotationTool>(i) == AnnotationTool::kText)
+        ensure_font_catalog();  // 줄 수정 전에 미리 (#73)
     });
     tool_actions_[i] = action;
     annotation_toolbar_->addAction(action);
@@ -753,7 +867,8 @@ void MainWindow::build_annotation_ui() {
   color_button_->setMenu(palette);
   update_color_icon();
   annotation_toolbar_->addWidget(color_button_);
-  // 두께 ▾ (도형·펜) · 불투명도 ▾ — 선택이 있으면 그 주석, 없으면 새 도형·펜의 기본값 (색 버튼과 같은 규칙)
+  // 두께 ▾ (도형·펜) · 불투명도 ▾ — 선택이 있으면 그 주석, 없으면 새 도형·펜의 기본값 (색 버튼과
+  // 같은 규칙)
   width_button_ = new QToolButton(annotation_toolbar_);
   width_button_->setObjectName(QStringLiteral("annotation_width"));
   width_button_->setToolTip(tr("선 두께 (도형·펜)"));
@@ -789,7 +904,8 @@ void MainWindow::build_annotation_ui() {
   text_size_combo_ = new QComboBox(annotation_toolbar_);
   text_size_combo_->setObjectName(QStringLiteral("text_size"));
   text_size_combo_->setToolTip(tr("텍스트 크기"));
-  for (int pt : {8, 10, 12, 14, 18, 24, 36, 48, 72}) text_size_combo_->addItem(tr("%1pt").arg(pt), pt);
+  for (int pt : {8, 10, 12, 14, 18, 24, 36, 48, 72})
+    text_size_combo_->addItem(tr("%1pt").arg(pt), pt);
   text_size_combo_->setCurrentIndex(5);  // 24pt
   connect(text_size_combo_, &QComboBox::currentIndexChanged, this, [this](int index) {
     if (index < 0 || syncing_text_size_) return;
@@ -798,24 +914,31 @@ void MainWindow::build_annotation_ui() {
   annotation_toolbar_->addWidget(text_size_combo_);
   update_property_buttons();
   annotation_toolbar_->addSeparator();
-  delete_annotation_action_ = annotation_toolbar_->addAction(tr("주석 삭제"), this, [this] { delete_selected_annotation(); });
+  delete_annotation_action_ = annotation_toolbar_->addAction(
+      tr("주석 삭제"), this, [this] { delete_selected_annotation(); });
   delete_annotation_action_->setStatusTip(tr("선택한 주석을 지운다 (Delete)"));
   delete_annotation_action_->setEnabled(false);
   menu->addAction(delete_annotation_action_);
   menu->addSeparator();
-  const engine::AnnotationKind kinds[3] = {engine::AnnotationKind::kHighlight, engine::AnnotationKind::kUnderline,
+  const engine::AnnotationKind kinds[3] = {engine::AnnotationKind::kHighlight,
+                                           engine::AnnotationKind::kUnderline,
                                            engine::AnnotationKind::kStrikeOut};
-  const QString sel_names[3] = {tr("선택 영역 하이라이트"), tr("선택 영역 밑줄"), tr("선택 영역 취소선")};
-  const QKeySequence keys[3] = {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_H), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_U),
+  const QString sel_names[3] = {tr("선택 영역 하이라이트"), tr("선택 영역 밑줄"),
+                                tr("선택 영역 취소선")};
+  const QKeySequence keys[3] = {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_H),
+                                QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_U),
                                 QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_K)};
   for (int i = 0; i < 3; ++i) {
     const engine::AnnotationKind kind = kinds[i];
-    markup_selection_actions_[i] = menu->addAction(sel_names[i], keys[i], this, [this, kind] { add_markup_from_selection(kind); });
+    markup_selection_actions_[i] = menu->addAction(
+        sel_names[i], keys[i], this, [this, kind] { add_markup_from_selection(kind); });
     markup_selection_actions_[i]->setEnabled(false);
   }
 }
 
-QAction* MainWindow::tool_action(AnnotationTool tool) const { return tool_actions_[static_cast<int>(tool)]; }
+QAction* MainWindow::tool_action(AnnotationTool tool) const {
+  return tool_actions_[static_cast<int>(tool)];
+}
 
 void MainWindow::update_color_icon() {
   color_button_->setIcon(color_icon(annotation_color_));
@@ -826,7 +949,8 @@ void MainWindow::update_property_buttons() {
   if (text_size_combo_ != nullptr) {
     // 선택한 텍스트 상자의 크기를 콤보에 비춘다 (선택이 없으면 기본값)
     const auto selected = view_->selected_text_box();
-    const double shown = selected ? selected->font_size : text_size_;
+    const auto line = view_->selected_line();
+    const double shown = line ? line->info.font_size : selected ? selected->font_size : text_size_;
     const int index = text_size_combo_->findData(static_cast<int>(std::lround(shown)));
     if (index >= 0 && index != text_size_combo_->currentIndex()) {
       QScopedValueRollback<bool> guard(syncing_text_size_, true);
@@ -849,10 +973,13 @@ void MainWindow::update_property_buttons() {
 
 void MainWindow::set_annotation_border_width(double width) {
   if (auto selected = view_->selected_annotation(); selected) {
-    if (!annotation_edits_allowed_ || !has_border_width(selected->kind) || !warn_signature_once()) return;
+    if (!annotation_edits_allowed_ || !has_border_width(selected->kind) || !warn_signature_once())
+      return;
     const bool recreate = selected->has_bs;
-    if (edit_->run(std::make_shared<edit::SetAnnotationBorderWidthCommand>(view_->selected_annotation_page(), selected->id, width))) {
-      show_transient(recreate ? tr("다른 프로그램이 만든 주석이라 다시 만들었습니다 (실행 취소 때 원래 두께는 돌아오지 않을 수 있습니다)")
+    if (edit_->run(std::make_shared<edit::SetAnnotationBorderWidthCommand>(
+            view_->selected_annotation_page(), selected->id, width))) {
+      show_transient(recreate ? tr("다른 프로그램이 만든 주석이라 다시 만들었습니다 (실행 취소 때 "
+                                   "원래 두께는 돌아오지 않을 수 있습니다)")
                               : tr("선택한 주석의 두께를 바꿨습니다"));
     }
     return;
@@ -864,7 +991,8 @@ void MainWindow::set_annotation_border_width(double width) {
 void MainWindow::set_annotation_opacity(std::uint8_t alpha) {
   if (auto selected = view_->selected_annotation(); selected) {
     if (!annotation_edits_allowed_ || !warn_signature_once()) return;
-    if (edit_->run(std::make_shared<edit::SetAnnotationOpacityCommand>(view_->selected_annotation_page(), selected->id, alpha))) {
+    if (edit_->run(std::make_shared<edit::SetAnnotationOpacityCommand>(
+            view_->selected_annotation_page(), selected->id, alpha))) {
       show_transient(tr("선택한 주석의 불투명도를 바꿨습니다"));
     }
     return;
@@ -879,17 +1007,41 @@ std::string MainWindow::annotation_author() const {
 }
 
 void MainWindow::set_annotation_color(engine::Color color) {
-  // 주석이 선택돼 있으면 그 주석의 색만 바꾼다 (다음 주석의 기본 색은 그대로). 선택이 없을 때만 기본 색을 바꾼다
+  // 주석이 선택돼 있으면 그 주석의 색만 바꾼다 (다음 주석의 기본 색은 그대로). 선택이 없을 때만
+  // 기본 색을 바꾼다
   if (auto selected = view_->selected_annotation(); selected) {
     if (!annotation_edits_allowed_ || !warn_signature_once()) return;
-    if (edit_->run(std::make_shared<edit::SetAnnotationColorCommand>(view_->selected_annotation_page(), selected->id, color))) {
+    if (edit_->run(std::make_shared<edit::SetAnnotationColorCommand>(
+            view_->selected_annotation_page(), selected->id, color))) {
       show_transient(tr("선택한 주석의 색을 바꿨습니다 (새 주석의 기본 색은 그대로입니다)"));
     }
     return;
   }
+  if (auto line = view_->selected_line();
+      line) {  // 기존 줄의 색만 (#69). 불가 줄은 안내만 (기본값도 그대로)
+    if (!line->info.editable) {
+      show_transient(line_reason_text(line->info));
+      return;
+    }
+    if (line->info.color.r == color.r && line->info.color.g == color.g &&
+        line->info.color.b == color.b)
+      return;
+    run_line_replace(
+        line->page, line->info.id, std::nullopt, std::nullopt, color,
+        fallback_font_for(line->info.font_name, QString::fromStdString(line->info.text)));
+    return;
+  }
   if (auto selected = view_->selected_text_box(); selected) {  // 선택한 텍스트 상자의 색만
-    if (selected->color.r == color.r && selected->color.g == color.g && selected->color.b == color.b) return;
-    replace_selected_text(std::nullopt, std::nullopt, color);
+    if (selected->color.r == color.r && selected->color.g == color.g &&
+        selected->color.b == color.b)
+      return;
+    if (selected->original_font)
+      run_line_replace(
+          selected->page, selected->box, std::nullopt, std::nullopt, color,
+          fallback_font_for(selected->font_name,
+                            QString::fromStdString(selected->text)));  // 원본 글꼴 유지
+    else
+      replace_selected_text(std::nullopt, std::nullopt, color);
     return;
   }
   annotation_color_ = color;
@@ -947,12 +1099,69 @@ bool MainWindow::add_note(int page, onpdf::Point pt, const QString& contents) {
 // ---------------------------------------------------------------- 텍스트 추가 (#45)
 
 void MainWindow::load_bundled_text_font() {
-  // 빌드가 third_party/fonts/ 의 Noto Sans KR 을 실행 파일 옆 fonts/ 로 복사한다 (fetch_fonts.py). 없으면 도구 비활성
+  // 빌드가 third_party/fonts/ 의 Noto Sans KR 을 실행 파일 옆 fonts/ 로 복사한다 (fetch_fonts.py).
+  // 없으면 도구 비활성
   const QString dir = QCoreApplication::applicationDirPath();
-  for (const QString& candidate : {dir + QStringLiteral("/fonts/NotoSansKR[wght].ttf"),
-                                   dir + QStringLiteral("/../Resources/fonts/NotoSansKR[wght].ttf")}) {
+  for (const QString& candidate :
+       {dir + QStringLiteral("/fonts/NotoSansKR[wght].ttf"),
+        dir + QStringLiteral("/../Resources/fonts/NotoSansKR[wght].ttf")}) {
     if (QFileInfo::exists(candidate) && set_text_font(candidate)) return;
   }
+}
+
+void MainWindow::set_font_catalog(std::shared_ptr<const edit::FontCatalog> catalog) {
+  font_catalog_ = std::move(catalog);
+  fallback_cache_.clear();
+}
+
+void MainWindow::ensure_font_catalog() {
+  if (font_catalog_ != nullptr || font_scan_started_) return;
+  font_scan_started_ = true;
+  catalog_loader_->start(platform::system_font_dirs());
+}
+
+std::shared_ptr<const edit::FontFace> MainWindow::load_catalog_font(const edit::FontEntry& entry) {
+  const std::string key = onpdf::path_to_utf8(entry.path) + "#" + std::to_string(entry.face_index);
+  for (auto it = fallback_cache_.begin(); it != fallback_cache_.end(); ++it) {
+    if (it->first != key) continue;
+    auto face = it->second;
+    fallback_cache_.erase(it);
+    fallback_cache_.emplace_back(key, face);  // 최근 사용을 뒤로
+    return face;
+  }
+  auto face = edit::FontFace::load(entry.path, entry.face_index);
+  if (!face) return nullptr;
+  fallback_cache_.emplace_back(key, *face);
+  if (fallback_cache_.size() > 8) fallback_cache_.erase(fallback_cache_.begin());
+  return *face;
+}
+
+std::shared_ptr<const edit::FontFace> MainWindow::fallback_font_for(
+    const std::string& base_font_name, const QString& text) {
+  if (font_catalog_ == nullptr) {
+    ensure_font_catalog();  // 끝나기 전에는 번들
+    return text_font_;
+  }
+  const bool allow_cff = session_.handle().info().signature_count == 0;
+  const std::string utf8 = text.toUtf8().toStdString();
+  std::vector<const edit::FontEntry*> candidates = font_catalog_->match(base_font_name, allow_cff);
+  bool hangul = false;
+  for (const QChar ch : text) {
+    const ushort u = ch.unicode();
+    if ((u >= 0xAC00 && u <= 0xD7A3) || (u >= 0x1100 && u <= 0x11FF) ||
+        (u >= 0x3130 && u <= 0x318F))
+      hangul = true;
+  }
+  if (hangul) {
+    if (const edit::FontEntry* sans = font_catalog_->default_hangul_sans(allow_cff);
+        sans != nullptr)
+      candidates.push_back(sans);
+  }
+  for (const edit::FontEntry* entry : candidates) {
+    auto face = load_catalog_font(*entry);
+    if (face != nullptr && face->missing(utf8).empty()) return face;
+  }
+  return text_font_;
 }
 
 bool MainWindow::set_text_font(const QString& path) {
@@ -970,10 +1179,30 @@ bool MainWindow::set_text_font(const QString& path) {
 }
 
 void MainWindow::set_text_size(double size) {
-  // 텍스트 상자가 선택돼 있으면 그 상자의 크기만 바꾼다 (주석 색 버튼과 같은 규칙). 없으면 새 텍스트의 기본값
+  // 기존 줄(텍스트 도구)이 선택돼 있으면 그 줄의 크기만 (#69)
+  if (auto line = view_->selected_line(); line) {
+    if (!line->info.editable) {  // 불가 줄은 안내만 (기본값도 그대로, 콤보는 되돌린다)
+      show_transient(line_reason_text(line->info));
+      update_property_buttons();
+      return;
+    }
+    if (std::abs(line->info.font_size - size) < 0.01) return;
+    run_line_replace(
+        line->page, line->info.id, std::nullopt, size, std::nullopt,
+        fallback_font_for(line->info.font_name, QString::fromStdString(line->info.text)));
+    return;
+  }
+  // 텍스트 상자가 선택돼 있으면 그 상자의 크기만 바꾼다 (주석 색 버튼과 같은 규칙). 없으면 새
+  // 텍스트의 기본값
   if (auto selected = view_->selected_text_box(); selected && !view_->selected_annotation()) {
     if (std::abs(selected->font_size - size) < 0.01) return;
-    replace_selected_text(std::nullopt, size, std::nullopt);
+    if (selected->original_font)
+      run_line_replace(
+          selected->page, selected->box, std::nullopt, size, std::nullopt,
+          fallback_font_for(selected->font_name,
+                            QString::fromStdString(selected->text)));  // 원본 글꼴 유지
+    else
+      replace_selected_text(std::nullopt, size, std::nullopt);
     return;
   }
   text_size_ = size;
@@ -991,7 +1220,8 @@ void MainWindow::on_text_requested(int page, onpdf::Point pt) {
     AnnotationDialog dialog(tr("텍스트"), QString(), this);
     dialog.setObjectName(QStringLiteral("text_input"));
     if (dialog.exec() != QDialog::Accepted) return;
-    const QString text = dialog.text().normalized(QString::NormalizationForm_C);  // NFD 입력(macOS 파일명 등)은 NFC 로 (리뷰 W3)
+    const QString text = dialog.text().normalized(
+        QString::NormalizationForm_C);     // NFD 입력(macOS 파일명 등)은 NFC 로 (리뷰 W3)
     if (text.trimmed().isEmpty()) return;  // 빈 텍스트는 만들지 않는다
     const std::u32string missing = text_font_->missing(text.toUtf8().toStdString());
     if (missing.empty()) {
@@ -1031,14 +1261,22 @@ void MainWindow::on_text_box_selected(bool has, const DocumentView::SelectedText
     if (selection_status_shown_) show_transient(QString());
     return;
   }
+  if (!pending_line_notice_.isEmpty()) {  // 줄 수정 뒤 새 상자 선택: 선택 문구 대신 안내 (#65)
+    statusBar()->showMessage(std::exchange(pending_line_notice_, QString()), 6000);
+    selection_status_shown_ = true;
+    return;
+  }
   QStringList parts;
   if (box.kind == engine::ObjectKind::kImage) {
     parts << tr("이미지") << tr("%1×%2 px").arg(box.pixel_width).arg(box.pixel_height)
           << tr("%1×%2 pt").arg(qRound(box.bbox.w)).arg(qRound(box.bbox.h));
-    if (!box.filter.empty()) parts << QString::fromStdString(box.filter == "DCTDecode" ? "JPEG" : box.filter);
+    if (!box.filter.empty())
+      parts << QString::fromStdString(box.filter == "DCTDecode" ? "JPEG" : box.filter);
   } else {
     parts << tr("텍스트") << tr("%1pt").arg(box.font_size) << tr("%1줄").arg(box.lines);
-    if (!box.text.empty()) parts << QString::fromStdString(box.text).left(60).replace(QLatin1Char('\n'), QLatin1Char(' '));
+    if (!box.text.empty())
+      parts << QString::fromStdString(box.text).left(60).replace(QLatin1Char('\n'),
+                                                                 QLatin1Char(' '));
   }
   statusBar()->showMessage(parts.join(QStringLiteral(" · ")));
   selection_status_shown_ = true;
@@ -1047,24 +1285,29 @@ void MainWindow::on_text_box_selected(bool has, const DocumentView::SelectedText
 namespace {
 // 마크 없는 기존 이미지 id ("#obj<index>") — 편집하면 원본 스트림이 재생성된다 (#57)
 bool has_foreign_object(const std::vector<std::string>& ids) {
-  return std::any_of(ids.begin(), ids.end(), [](const std::string& id) { return id.starts_with("#obj"); });
+  return std::any_of(ids.begin(), ids.end(),
+                     [](const std::string& id) { return id.starts_with("#obj"); });
 }
 }  // namespace
 
-void MainWindow::on_text_move_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta) {
+void MainWindow::on_text_move_requested(int page, const std::vector<std::string>& ids,
+                                        onpdf::Point delta) {
   if (!content_edits_allowed_ || ids.empty()) return;
   if (has_foreign_object(ids)) return explain_locked_object();
   if (!warn_signature_once()) return;
   edit_->run(std::make_shared<edit::MoveObjectsCommand>(page, ids, delta));
 }
 
-void MainWindow::on_text_delete_requested(int, const QString&) { delete_selected_text_box(); }
+void MainWindow::on_text_delete_requested(int, const QString&) {
+  delete_selected_text_box();
+}
 
 // ---------------------------------------------------------------- 이미지 (#49)
 
 void MainWindow::on_image_requested(int page, onpdf::Point pt) {
   if (!content_edits_allowed_) return;
-  const QString path = QFileDialog::getOpenFileName(this, tr("이미지 넣기"), QFileInfo(session_.path()).absolutePath(), image_file_filter());
+  const QString path = QFileDialog::getOpenFileName(
+      this, tr("이미지 넣기"), QFileInfo(session_.path()).absolutePath(), image_file_filter());
   if (path.isEmpty()) return;
   add_image_file(path, page, pt, false);
 }
@@ -1073,16 +1316,21 @@ bool MainWindow::add_image_file(const QString& path, int page, onpdf::Point orig
   if (!content_edits_allowed_ || !view_->has_document()) return false;
   auto imported = import_image_file(path);
   if (!imported) {
-    QMessageBox box(QMessageBox::Warning, tr("이미지"),
-                    tr("이 이미지를 열 수 없습니다: %1\n%2").arg(QFileInfo(path).fileName(), QString::fromStdString(imported.error().message)),
-                    QMessageBox::Ok, this);
+    QMessageBox box(
+        QMessageBox::Warning, tr("이미지"),
+        tr("이 이미지를 열 수 없습니다: %1\n%2")
+            .arg(QFileInfo(path).fileName(), QString::fromStdString(imported.error().message)),
+        QMessageBox::Ok, this);
     box.setObjectName(QStringLiteral("image_open_failed"));
     box.exec();
     return false;
   }
-  const engine::PageSize size = session_.handle().info().page_sizes.at(static_cast<std::size_t>(page));
-  imported->spec.rect = place_image(size, origin, imported->pixel_width, imported->pixel_height, center);
-  pending_image_ = PendingImage{path, page, origin, center, std::holds_alternative<engine::JpegBytes>(imported->spec.source)};
+  const engine::PageSize size =
+      session_.handle().info().page_sizes.at(static_cast<std::size_t>(page));
+  imported->spec.rect =
+      place_image(size, origin, imported->pixel_width, imported->pixel_height, center);
+  pending_image_ = PendingImage{path, page, origin, center,
+                                std::holds_alternative<engine::JpegBytes>(imported->spec.source)};
   return run_add_image(page, std::move(imported->spec));
 }
 
@@ -1090,11 +1338,14 @@ bool MainWindow::add_image(const QImage& image, int page, onpdf::Point origin, b
   if (!content_edits_allowed_ || !view_->has_document()) return false;
   auto imported = import_image(image);
   if (!imported) {
-    show_transient(tr("이 이미지를 넣을 수 없습니다: %1").arg(QString::fromStdString(imported.error().message)));
+    show_transient(tr("이 이미지를 넣을 수 없습니다: %1")
+                       .arg(QString::fromStdString(imported.error().message)));
     return false;
   }
-  const engine::PageSize size = session_.handle().info().page_sizes.at(static_cast<std::size_t>(page));
-  imported->spec.rect = place_image(size, origin, imported->pixel_width, imported->pixel_height, center);
+  const engine::PageSize size =
+      session_.handle().info().page_sizes.at(static_cast<std::size_t>(page));
+  imported->spec.rect =
+      place_image(size, origin, imported->pixel_width, imported->pixel_height, center);
   pending_image_ = PendingImage{QString(), page, origin, center, false};
   return run_add_image(page, std::move(imported->spec));
 }
@@ -1110,10 +1361,12 @@ bool MainWindow::run_add_image(int page, engine::ImageSpec spec) {
   return true;
 }
 
-void MainWindow::on_object_nudge_requested(int page, const std::vector<std::string>& ids, onpdf::Point delta) {
+void MainWindow::on_object_nudge_requested(int page, const std::vector<std::string>& ids,
+                                           onpdf::Point delta) {
   if (!view_->has_document() || !session_.handle().info().permissions.modify_contents) return;
   if (has_foreign_object(ids)) return explain_locked_object();
-  if (pending_nudge_ && (pending_nudge_->page != page || pending_nudge_->ids != ids)) pending_nudge_.reset();
+  if (pending_nudge_ && (pending_nudge_->page != page || pending_nudge_->ids != ids))
+    pending_nudge_.reset();
   if (!pending_nudge_) pending_nudge_ = PendingNudge{page, ids, {0.0, 0.0}};
   pending_nudge_->delta.x += delta.x;
   pending_nudge_->delta.y += delta.y;
@@ -1121,7 +1374,8 @@ void MainWindow::on_object_nudge_requested(int page, const std::vector<std::stri
 }
 
 void MainWindow::flush_pending_nudge() {
-  if (!pending_nudge_ || !content_edits_allowed_ || edit_->busy()) return;  // 끝나면 state_changed 에서 다시
+  if (!pending_nudge_ || !content_edits_allowed_ || edit_->busy())
+    return;  // 끝나면 state_changed 에서 다시
   const PendingNudge nudge = std::move(*pending_nudge_);
   pending_nudge_.reset();
   if (nudge.delta.x == 0.0 && nudge.delta.y == 0.0) return;
@@ -1146,10 +1400,12 @@ void MainWindow::on_form_field_clicked(int page, const engine::FormWidgetInfo& w
       view_->open_form_editor(page, widget);
       break;
     case engine::FieldType::kCheckBox:
-      run_form_command(std::make_shared<edit::SetFormCheckedCommand>(page, widget.ref, !widget.checked));
+      run_form_command(
+          std::make_shared<edit::SetFormCheckedCommand>(page, widget.ref, !widget.checked));
       break;
     case engine::FieldType::kRadio:
-      if (!widget.checked) run_form_command(std::make_shared<edit::SetFormCheckedCommand>(page, widget.ref, true));
+      if (!widget.checked)
+        run_form_command(std::make_shared<edit::SetFormCheckedCommand>(page, widget.ref, true));
       break;
     case engine::FieldType::kComboBox:
     case engine::FieldType::kListBox:
@@ -1165,9 +1421,11 @@ void MainWindow::show_form_choice_menu(int page, const engine::FormWidgetInfo& w
   QMenu menu(this);
   menu.setObjectName(QStringLiteral("form_choice_menu"));
   for (int i = 0; i < static_cast<int>(widget.options.size()); ++i) {
-    QAction* action = menu.addAction(QString::fromStdString(widget.options[static_cast<std::size_t>(i)]));
+    QAction* action =
+        menu.addAction(QString::fromStdString(widget.options[static_cast<std::size_t>(i)]));
     action->setCheckable(true);
-    action->setChecked(std::find(widget.selected.begin(), widget.selected.end(), i) != widget.selected.end());
+    action->setChecked(std::find(widget.selected.begin(), widget.selected.end(), i) !=
+                       widget.selected.end());
     connect(action, &QAction::triggered, this, [this, page, widget, i] {
       std::vector<int> indices{i};
       if (widget.multi_select) {  // 다중 선택: 누른 항목만 켜고 끈다
@@ -1184,22 +1442,26 @@ void MainWindow::show_form_choice_menu(int page, const engine::FormWidgetInfo& w
   if (widget.editable_combo) {
     menu.addSeparator();
     QAction* typed = menu.addAction(tr("직접 입력…"));
-    connect(typed, &QAction::triggered, this, [this, page, widget] { view_->open_form_editor(page, widget); });
+    connect(typed, &QAction::triggered, this,
+            [this, page, widget] { view_->open_form_editor(page, widget); });
   }
   const QRectF rect = view_->page_rect_to_viewport(page, widget.rect);
   menu.exec(view_->viewport()->mapToGlobal(rect.bottomLeft().toPoint()));
 }
 
-bool MainWindow::choose_form_option(int page, const engine::FieldRef& ref, std::vector<int> indices) {
+bool MainWindow::choose_form_option(int page, const engine::FieldRef& ref,
+                                    std::vector<int> indices) {
   if (!form_edits_allowed_ || !view_->has_document()) return false;
   std::sort(indices.begin(), indices.end());
   run_form_command(std::make_shared<edit::SetFormChoiceCommand>(page, ref, std::move(indices)));
   return true;
 }
 
-void MainWindow::on_form_text_committed(int page, const engine::FormWidgetInfo& widget, const QString& text) {
+void MainWindow::on_form_text_committed(int page, const engine::FormWidgetInfo& widget,
+                                        const QString& text) {
   if (!form_edits_allowed_) return;
-  const std::string value = text.normalized(QString::NormalizationForm_C).toStdString();  // 한글은 NFC 로 (#45 와 같다)
+  const std::string value =
+      text.normalized(QString::NormalizationForm_C).toStdString();  // 한글은 NFC 로 (#45 와 같다)
   if (value == widget.value) return;  // 바뀌지 않았으면 Command 를 만들지 않는다
   run_form_command(std::make_shared<edit::SetFormTextCommand>(page, widget.ref, value));
 }
@@ -1233,7 +1495,8 @@ void MainWindow::settle_form_edits() {
   const auto check = [this, &loop] {
     if (pending_form_commands_.empty() && !form_in_flight_) loop.quit();
   };
-  const QMetaObject::Connection connection = connect(edit_, &EditController::state_changed, &loop, check, Qt::QueuedConnection);
+  const QMetaObject::Connection connection =
+      connect(edit_, &EditController::state_changed, &loop, check, Qt::QueuedConnection);
   timeout.start(5000);
   QTimer::singleShot(0, &loop, check);
   loop.exec(QEventLoop::ExcludeUserInputEvents);
@@ -1244,7 +1507,8 @@ bool MainWindow::paste_image() {
   if (!content_edits_allowed_ || !view_->has_document()) return false;
   const QMimeData* mime = QApplication::clipboard()->mimeData();
   const int page = std::max(0, view_->current_page());
-  const engine::PageSize size = session_.handle().info().page_sizes.at(static_cast<std::size_t>(page));
+  const engine::PageSize size =
+      session_.handle().info().page_sizes.at(static_cast<std::size_t>(page));
   const onpdf::Point center{size.width / 2, size.height / 2};
   if (mime != nullptr && mime->hasImage()) {
     const QImage image = qvariant_cast<QImage>(mime->imageData());
@@ -1260,30 +1524,167 @@ bool MainWindow::paste_image() {
   return false;
 }
 
-void MainWindow::on_text_width_requested(int page, const QString& box, double left_x, double width) {
+void MainWindow::on_text_width_requested(int page, const QString& box, double left_x,
+                                         double width) {
   if (!text_edits_allowed_ || text_font_ == nullptr) return;  // 재배치에 글꼴이 필요하다
   auto selected = view_->selected_text_box();
   if (!selected || selected->box != box.toStdString()) return;
   if (!warn_signature_once()) return;
   std::optional<double> origin_x;
   if (std::abs(left_x - selected->bbox.x) >= 0.5) origin_x = left_x;
-  edit_->run(std::make_shared<edit::ReplaceTextBoxCommand>(page, box.toStdString(), text_font_, std::nullopt, std::nullopt,
-                                                           std::nullopt, width, origin_x));
+  edit_->run(std::make_shared<edit::ReplaceTextBoxCommand>(page, box.toStdString(), text_font_,
+                                                           std::nullopt, std::nullopt, std::nullopt,
+                                                           width, origin_x));
 }
 
-void MainWindow::on_object_resize_requested(int page, const QString& id, onpdf::Rect before, onpdf::Rect after) {
+void MainWindow::on_object_resize_requested(int page, const QString& id, onpdf::Rect before,
+                                            onpdf::Rect after) {
   if (!content_edits_allowed_) return;
   if (has_foreign_object({id.toStdString()})) return explain_locked_object();
   if (!warn_signature_once()) return;
   edit_->run(std::make_shared<edit::ResizeObjectCommand>(page, id.toStdString(), before, after));
 }
 
+// ---- 기존 텍스트 줄 (#65) ----
+
+QString MainWindow::line_reason_text(const engine::TextLineInfo& info) const {
+  if (info.reason == "multi-line-object")
+    return tr("이 줄은 다른 줄과 한 객체라 따로 고칠 수 없습니다");
+  if (info.reason == "vertical") return tr("세로·회전 글은 고칠 수 없습니다");
+  if (info.reason == "nested-form") return tr("Form 안의 Form 에 든 글은 고칠 수 없습니다");
+  return tr("이 줄은 고칠 수 없습니다");
+}
+
+void MainWindow::on_text_line_selected(bool has, int, const engine::TextLineInfo& info) {
+  update_edit_actions();
+  update_property_buttons();
+  if (has) ensure_font_catalog();
+  if (!has) {
+    if (selection_status_shown_) show_transient(QString());
+    return;
+  }
+  QString text;
+  if (session_.has_document() && session_.handle().info().signature_count > 0) {
+    text = tr("서명된 문서의 글자는 고칠 수 없습니다");
+  } else if (!info.editable) {
+    text = line_reason_text(info);
+  } else {
+    QStringList parts;
+    parts << tr("줄")
+          << QStringLiteral("%1 %2pt")
+                 .arg(QString::fromStdString(info.font_name))
+                 .arg(info.font_size, 0, 'f', 1);
+    if (info.mixed_fonts) parts << tr("글꼴 섞임");
+    if (!info.font_embedded || info.font_type3) parts << tr("대체 글꼴로 수정");
+    parts << QString::fromStdString(info.text).left(60);
+    text = parts.join(QStringLiteral(" · "));
+  }
+  statusBar()->showMessage(text);
+  selection_status_shown_ = true;
+}
+
+bool MainWindow::run_line_replace(int page, const std::string& line_id, std::optional<QString> text,
+                                  std::optional<double> size, std::optional<engine::Color> color,
+                                  std::shared_ptr<const edit::FontFace> fallback_face) {
+  if (!text_edits_allowed_ || text_font_ == nullptr) return false;
+  if (!warn_signature_once()) return false;
+  std::optional<std::string> utf8;
+  if (text) utf8 = text->toUtf8().toStdString();
+  if (fallback_face == nullptr) fallback_face = text_font_;
+  auto command = std::make_shared<edit::ReplaceTextLineCommand>(page, line_id, utf8, size, color,
+                                                                std::move(fallback_face));
+  pending_line_edit_ = command;
+  if (!edit_->run(command)) {
+    pending_line_edit_.reset();
+    return false;
+  }
+  return true;
+}
+
+void MainWindow::on_text_line_edit_requested(int page, const engine::TextLineInfo& info) {
+  if (!text_edits_allowed_ || text_font_ == nullptr) return;
+  if (session_.handle().info().signature_count > 0) {
+    show_transient(tr("서명된 문서의 글자는 고칠 수 없습니다"));
+    return;
+  }
+  if (!info.editable) {
+    show_transient(line_reason_text(info));
+    return;
+  }
+  for (;;) {
+    AnnotationDialog dialog(tr("줄 수정"), QString::fromStdString(info.text), this);
+    dialog.setObjectName(QStringLiteral("text_input"));
+    if (dialog.exec() != QDialog::Accepted) return;
+    const QString text = dialog.text()
+                             .normalized(QString::NormalizationForm_C)
+                             .trimmed();  // 한 줄: 줄바꿈은 공백으로
+    // (AnnotationDialog 는 여러 줄 입력이지만 줄 수정은 한 줄이다)
+    if (text.isEmpty() || text.toStdString() == info.text) return;
+    auto face = fallback_font_for(info.font_name, text);  // 원본 글꼴이 못 그릴 때 쓸 후보 (#73)
+    const std::u32string missing =
+        face->missing(text.toUtf8().toStdString());  // 대체 글꼴에도 없는 글자는 거절
+    if (missing.empty()) {
+      run_line_replace(page, info.id, text, std::nullopt, std::nullopt, std::move(face));
+      return;
+    }
+    QMessageBox warn(QMessageBox::Warning, tr("줄 수정"),
+                     tr("글꼴에 없는 글자가 있습니다: %1\n다른 글자로 바꿔 주세요.")
+                         .arg(QString::fromStdU32String(missing.substr(0, 10))),
+                     QMessageBox::Ok, this);
+    warn.setObjectName(QStringLiteral("text_missing_glyphs"));
+    warn.exec();
+  }
+}
+
+void MainWindow::on_text_line_delete_requested(int page, const engine::TextLineInfo& info) {
+  if (!content_edits_allowed_) return;
+  if (session_.handle().info().signature_count > 0) {
+    show_transient(tr("서명된 문서의 글자는 고칠 수 없습니다"));
+    return;
+  }
+  if (!info.editable) {
+    show_transient(line_reason_text(info));
+    return;
+  }
+  edit_->run(std::make_shared<edit::RemoveTextLineCommand>(page, info.id));
+}
+
+void MainWindow::announce_line_edit() {
+  if (edit_->busy()) return;
+  auto command = pending_line_edit_.lock();
+  if (!command) return;
+  pending_line_edit_.reset();
+  if (edit_->undo_command() != command) return;  // 실패했다 (on_edit_failed 가 알린다)
+  auto* replace = dynamic_cast<edit::ReplaceTextLineCommand*>(command.get());
+  if (replace == nullptr) return;
+  if (!replace->box().empty()) {  // 고친 줄은 OnPdf 텍스트 상자가 됐다: 선택 도구로 돌아가 그
+                                  // 상자를 고른다 (이미지 추가와 같다)
+    tool_actions_[0]->setChecked(true);
+    view_->set_tool(AnnotationTool::kSelect);
+    view_->select_after_refresh(replace->page(), replace->box());
+  }
+  // 안내는 새 상자의 선택 문구 뒤에 보여야 남는다 (재선택이 상태 표시줄을 덮는다)
+  pending_line_notice_ = replace->used_fallback()
+                             ? tr("원본 글꼴에 없는 글자가 있어 %1 로 넣었습니다")
+                                   .arg(QString::fromStdString(replace->fallback_family()))
+                             : QString();
+  if (replace->box().empty() && !pending_line_notice_.isEmpty())
+    show_transient(std::exchange(pending_line_notice_, QString()));
+}
+
 void MainWindow::explain_locked_object() {
-  // 다른 프로그램이 만든 이미지를 옮기면 PDFium 이 그 쪽 내용 스트림을 통째로 다시 써 글자 모양·색이 바뀔 수 있다 (#57)
-  statusBar()->showMessage(tr("문서에 원래 있던 이미지는 옮기거나 크기를 바꾸거나 지울 수 없습니다 — 쪽 내용이 손상될 수 있습니다"), 6000);
+  // 다른 프로그램이 만든 이미지를 옮기면 PDFium 이 그 쪽 내용 스트림을 통째로 다시 써 글자
+  // 모양·색이 바뀔 수 있다 (#57)
+  statusBar()->showMessage(tr("문서에 원래 있던 이미지는 옮기거나 크기를 바꾸거나 지울 수 없습니다 "
+                              "— 쪽 내용이 손상될 수 있습니다"),
+                           6000);
 }
 
 bool MainWindow::delete_selected_text_box() {
+  if (auto line = view_->selected_line()) {  // 기존 줄 (#65)
+    on_text_line_delete_requested(line->page, line->info);
+    return true;
+  }
   // 텍스트 상자·이미지 공용: 떼어 문서가 보관 (재생성이 아니라 빈 줄·옛 객체 문제가 없다, #49)
   auto selected = view_->selected_object();
   if (!selected || !content_edits_allowed_) return false;
@@ -1292,7 +1693,8 @@ bool MainWindow::delete_selected_text_box() {
     return false;
   }
   if (!warn_signature_once()) return false;
-  if (!edit_->run(std::make_shared<edit::RemoveObjectsCommand>(selected->page, selected->ids))) return false;
+  if (!edit_->run(std::make_shared<edit::RemoveObjectsCommand>(selected->page, selected->ids)))
+    return false;
   view_->clear_text_box_selection();
   return true;
 }
@@ -1304,10 +1706,16 @@ void MainWindow::on_text_edit_requested(int, const DocumentView::SelectedTextBox
     dialog.setObjectName(QStringLiteral("text_input"));
     if (dialog.exec() != QDialog::Accepted) return;
     const QString text = dialog.text().normalized(QString::NormalizationForm_C);
-    if (text.trimmed().isEmpty() || text.toStdString() == box.text) return;  // 빈 내용·같은 내용은 무시 (삭제는 Delete)
-    const std::u32string missing = text_font_->missing(text.toUtf8().toStdString());
+    if (text.trimmed().isEmpty() || text.toStdString() == box.text)
+      return;                                            // 빈 내용·같은 내용은 무시 (삭제는 Delete)
+    auto face = fallback_font_for(box.font_name, text);  // 같은 계열의 대체 글꼴 (#73)
+    const std::u32string missing = face->missing(text.toUtf8().toStdString());
     if (missing.empty()) {
-      replace_selected_text(text, std::nullopt, std::nullopt);
+      if (box.original_font)
+        run_line_replace(box.page, box.box, text, std::nullopt, std::nullopt,
+                         face);  // 원본 글꼴로 고친 줄은 다시 원본 글꼴로 (#65)
+      else
+        replace_selected_text(text, std::nullopt, std::nullopt, face);
       return;
     }
     QMessageBox warn(QMessageBox::Warning, tr("텍스트"),
@@ -1319,17 +1727,24 @@ void MainWindow::on_text_edit_requested(int, const DocumentView::SelectedTextBox
   }
 }
 
-bool MainWindow::replace_selected_text(std::optional<QString> utf8, std::optional<double> size, std::optional<engine::Color> color) {
+bool MainWindow::replace_selected_text(std::optional<QString> utf8, std::optional<double> size,
+                                       std::optional<engine::Color> color,
+                                       std::shared_ptr<const edit::FontFace> face) {
   auto selected = view_->selected_text_box();
   if (!selected || !text_edits_allowed_ || text_font_ == nullptr) return false;
   if (!warn_signature_once()) return false;
   std::optional<std::string> text;
   if (utf8) text = utf8->toUtf8().toStdString();
   if (color) color->a = 255;
-  return edit_->run(std::make_shared<edit::ReplaceTextBoxCommand>(selected->page, selected->box, text_font_, text, size, color));
+  if (face == nullptr)
+    face = fallback_font_for(selected->font_name,
+                             QString::fromStdString(selected->text));  // 같은 글꼴 유지 (#73)
+  return edit_->run(std::make_shared<edit::ReplaceTextBoxCommand>(
+      selected->page, selected->box, std::move(face), text, size, color));
 }
 
-void MainWindow::on_ink_requested(int page, const std::vector<onpdf::Point>& points, onpdf::Rect bbox) {
+void MainWindow::on_ink_requested(int page, const std::vector<onpdf::Point>& points,
+                                  onpdf::Rect bbox) {
   if (!annotation_edits_allowed_ || points.size() < 2) return;
   if (!warn_signature_once()) return;
   engine::AnnotationSpec spec;
@@ -1364,13 +1779,15 @@ void MainWindow::on_annotation_selected(bool has, const engine::AnnotationInfo& 
   update_edit_actions();
   update_property_buttons();
   if (!has) {
-    // 선택 정보만 지운다: "다시 만들었습니다" 같은 안내가 편집 완료 직후의 해제로 사라지지 않게 (리뷰 W1)
+    // 선택 정보만 지운다: "다시 만들었습니다" 같은 안내가 편집 완료 직후의 해제로 사라지지 않게
+    // (리뷰 W1)
     if (selection_status_shown_) show_transient(QString());
     return;
   }
   QStringList parts{kind_name(info.kind)};
   // /BS 주석의 두께는 읽을 수 없어 표시하지 않는다
-  if (has_border_width(info.kind) && !(info.has_bs && !info.has_border)) parts << width_text(info.has_border ? info.border_width : 1.0);
+  if (has_border_width(info.kind) && !(info.has_bs && !info.has_border))
+    parts << width_text(info.has_border ? info.border_width : 1.0);
   if (info.opacity < 0.999f) parts << opacity_text(info.opacity);
   if (!info.author.empty()) parts << QString::fromStdString(info.author);
   if (!info.modified.empty()) parts << short_date(info.modified);
@@ -1381,11 +1798,13 @@ void MainWindow::on_annotation_selected(bool has, const engine::AnnotationInfo& 
 
 bool MainWindow::delete_selected_annotation() {
   auto selected = view_->selected_annotation();
-  if (!selected) return delete_selected_text_box();  // 툴바 "주석 삭제" 는 선택한 텍스트 상자에도 동작한다
+  if (!selected)
+    return delete_selected_text_box();  // 툴바 "주석 삭제" 는 선택한 텍스트 상자에도 동작한다
   if (!delete_annotation_action_->isEnabled()) return false;
   if (!warn_signature_once()) return false;
   const int page = view_->selected_annotation_page();
-  if (!edit_->run(std::make_shared<edit::RemoveAnnotationCommand>(page, selected->id))) return false;
+  if (!edit_->run(std::make_shared<edit::RemoveAnnotationCommand>(page, selected->id)))
+    return false;
   view_->clear_annotation_selection();  // 거절되면 선택을 남긴다
   return true;
 }
@@ -1397,23 +1816,36 @@ void MainWindow::on_annotation_edit_requested(int page, const engine::Annotation
   const QString text = dialog.text();
   if (text.toStdString() == info.contents) return;
   if (!warn_signature_once()) return;
-  edit_->run(std::make_shared<edit::SetAnnotationContentsCommand>(page, info.id, text.toStdString()));
+  edit_->run(
+      std::make_shared<edit::SetAnnotationContentsCommand>(page, info.id, text.toStdString()));
 }
 
 // ---------------------------------------------------------------- 병합·분할
 
 namespace {
 
-QString q_filename(const std::filesystem::path& p) { return QString::fromStdString(onpdf::path_to_utf8(p.filename())); }
+QString q_filename(const std::filesystem::path& p) {
+  return QString::fromStdString(onpdf::path_to_utf8(p.filename()));
+}
 
 QString structure_error_text(const onpdf::Error& e) {
   switch (e.code) {
-    case ErrorCode::kPasswordRequired: return MainWindow::tr("암호가 필요한 문서가 있습니다: %1").arg(QString::fromStdString(e.message));
-    case ErrorCode::kPermissionDenied: return MainWindow::tr("쪽 추출이 허용되지 않은 문서가 있습니다: %1").arg(QString::fromStdString(e.message));
-    case ErrorCode::kNotWritable: return MainWindow::tr("파일에 쓸 수 없습니다. 읽기 전용이거나 다른 프로그램이 사용 중입니다.");
-    case ErrorCode::kFolderNotWritable: return MainWindow::tr("이 폴더에 새 파일을 만들 수 없습니다. 다른 폴더를 고르세요.");
-    case ErrorCode::kSaveVerifyFailed: return MainWindow::tr("만든 파일을 검증하지 못했습니다: %1").arg(QString::fromStdString(e.message));
-    default: return QString::fromStdString(e.message);
+    case ErrorCode::kPasswordRequired:
+      return MainWindow::tr("암호가 필요한 문서가 있습니다: %1")
+          .arg(QString::fromStdString(e.message));
+    case ErrorCode::kPermissionDenied:
+      return MainWindow::tr("쪽 추출이 허용되지 않은 문서가 있습니다: %1")
+          .arg(QString::fromStdString(e.message));
+    case ErrorCode::kNotWritable:
+      return MainWindow::tr(
+          "파일에 쓸 수 없습니다. 읽기 전용이거나 다른 프로그램이 사용 중입니다.");
+    case ErrorCode::kFolderNotWritable:
+      return MainWindow::tr("이 폴더에 새 파일을 만들 수 없습니다. 다른 폴더를 고르세요.");
+    case ErrorCode::kSaveVerifyFailed:
+      return MainWindow::tr("만든 파일을 검증하지 못했습니다: %1")
+          .arg(QString::fromStdString(e.message));
+    default:
+      return QString::fromStdString(e.message);
   }
 }
 
@@ -1424,7 +1856,8 @@ void MainWindow::show_structure_progress(const QString& title) {
   structure_progress_ = new QProgressDialog(title, tr("취소"), 0, 100, this);
   structure_progress_->setObjectName(QStringLiteral("structure_progress"));
   structure_progress_->setWindowTitle(title);
-  structure_progress_->setWindowModality(Qt::NonModal);  // 모달 진행 창은 setValue 마다 이벤트를 재진입 처리한다 (인쇄와 같은 이유)
+  structure_progress_->setWindowModality(
+      Qt::NonModal);  // 모달 진행 창은 setValue 마다 이벤트를 재진입 처리한다 (인쇄와 같은 이유)
   structure_progress_->setMinimumDuration(0);
   structure_progress_->setAutoClose(false);
   structure_progress_->setAutoReset(false);
@@ -1432,13 +1865,16 @@ void MainWindow::show_structure_progress(const QString& title) {
   structure_progress_->setLabelText(tr("%1 (준비 중…)").arg(title));
   structure_progress_->show();
   QProgressDialog* progress = structure_progress_;
-  connect(structure_job_, &StructureJob::progress, progress, [progress, title](int percent) {
-    if (progress->maximum() == 0) {
-      progress->setRange(0, 100);
-      progress->setLabelText(title);
-    }
-    progress->setValue(percent);
-  }, Qt::QueuedConnection);
+  connect(
+      structure_job_, &StructureJob::progress, progress,
+      [progress, title](int percent) {
+        if (progress->maximum() == 0) {
+          progress->setRange(0, 100);
+          progress->setLabelText(title);
+        }
+        progress->setValue(percent);
+      },
+      Qt::QueuedConnection);
   connect(progress, &QProgressDialog::canceled, this, [this] {
     structure_job_->cancel();
     show_transient(tr("작업이 끝나면 결과를 버립니다…"));
@@ -1447,16 +1883,21 @@ void MainWindow::show_structure_progress(const QString& title) {
 
 void MainWindow::on_merge_action() {
   if (!merge_action_->isEnabled()) return;
-  const QString start_dir = session_.has_document() ? QFileInfo(session_.path()).absolutePath() : QDir::homePath();
-  const QStringList files = QFileDialog::getOpenFileNames(this, tr("병합할 PDF (고른 순서대로 합칩니다)"), start_dir,
-                                                          tr("PDF 문서 (*.pdf)"));
+  const QString start_dir =
+      session_.has_document() ? QFileInfo(session_.path()).absolutePath() : QDir::homePath();
+  const QStringList files = QFileDialog::getOpenFileNames(
+      this, tr("병합할 PDF (고른 순서대로 합칩니다)"), start_dir, tr("PDF 문서 (*.pdf)"));
   if (files.isEmpty()) return;
-  // 파일은 작업 스레드에서 읽는다 (큰 파일을 메인에서 열면 UI 가 멈춘다). 암호가 필요하면 결과로 돌아와 묻고 다시 시도한다
+  // 파일은 작업 스레드에서 읽는다 (큰 파일을 메인에서 열면 UI 가 멈춘다). 암호가 필요하면 결과로
+  // 돌아와 묻고 다시 시도한다
   std::vector<engine::StructureInput> inputs;
-  for (const QString& file : files) inputs.push_back({onpdf::path_from_utf8(file.toUtf8().toStdString()), ""});
+  for (const QString& file : files)
+    inputs.push_back({onpdf::path_from_utf8(file.toUtf8().toStdString()), ""});
   const QFileInfo first(files.first());
-  const QString suggested = first.absolutePath() + QLatin1Char('/') + first.completeBaseName() + tr("-병합.pdf");
-  const QString output = QFileDialog::getSaveFileName(this, tr("병합 결과 저장"), suggested, tr("PDF 문서 (*.pdf)"));
+  const QString suggested =
+      first.absolutePath() + QLatin1Char('/') + first.completeBaseName() + tr("-병합.pdf");
+  const QString output =
+      QFileDialog::getSaveFileName(this, tr("병합 결과 저장"), suggested, tr("PDF 문서 (*.pdf)"));
   if (output.isEmpty()) return;
   merge_files(std::move(inputs), output);
 }
@@ -1477,35 +1918,40 @@ bool MainWindow::merge_files(std::vector<engine::StructureInput> inputs, const Q
   pending_merge_inputs_ = inputs;
   pending_merge_output_ = output;
   show_structure_progress(tr("병합 중…"));
-  const bool started = structure_job_->start([inputs = std::move(inputs), out](const engine::ProgressFn& progress) -> StructureJob::Outcome {
-    int expected = 0;
-    for (const auto& in : inputs) {
-      auto n = engine::QpdfTools::page_count(in.path, in.password);
-      if (!n) return std::unexpected(n.error());
-      expected += *n;
-    }
-    engine::SafeWriteHooks hooks;
-    hooks.write = [&](const std::vector<std::filesystem::path>& temps) -> onpdf::Result<void> {
-      auto r = engine::QpdfTools::merge(inputs, temps.front(), progress);
-      if (!r) return std::unexpected(r.error());
-      return {};
-    };
-    hooks.verify = [&](std::size_t, const std::filesystem::path&, const std::filesystem::path& temp) -> onpdf::Result<void> {
-      if (auto c = engine::QpdfTools::check(temp); !c) return std::unexpected(c.error());
-      auto n = engine::QpdfTools::page_count(temp);
-      if (!n) return std::unexpected(n.error());
-      if (*n != expected) return onpdf::make_error(ErrorCode::kSaveVerifyFailed, "merged page count mismatch");
-      return {};
-    };
-    return engine::write_files_safely({out}, hooks);
-  });
+  const bool started =
+      structure_job_->start([inputs = std::move(inputs),
+                             out](const engine::ProgressFn& progress) -> StructureJob::Outcome {
+        int expected = 0;
+        for (const auto& in : inputs) {
+          auto n = engine::QpdfTools::page_count(in.path, in.password);
+          if (!n) return std::unexpected(n.error());
+          expected += *n;
+        }
+        engine::SafeWriteHooks hooks;
+        hooks.write = [&](const std::vector<std::filesystem::path>& temps) -> onpdf::Result<void> {
+          auto r = engine::QpdfTools::merge(inputs, temps.front(), progress);
+          if (!r) return std::unexpected(r.error());
+          return {};
+        };
+        hooks.verify = [&](std::size_t, const std::filesystem::path&,
+                           const std::filesystem::path& temp) -> onpdf::Result<void> {
+          if (auto c = engine::QpdfTools::check(temp); !c) return std::unexpected(c.error());
+          auto n = engine::QpdfTools::page_count(temp);
+          if (!n) return std::unexpected(n.error());
+          if (*n != expected)
+            return onpdf::make_error(ErrorCode::kSaveVerifyFailed, "merged page count mismatch");
+          return {};
+        };
+        return engine::write_files_safely({out}, hooks);
+      });
   update_edit_actions();
   return started;
 }
 
 void MainWindow::on_split_action() {
   if (!split_action_->isEnabled() || !session_.has_document()) return;
-  // 분할은 디스크의 파일을 읽는다: 수정됐으면 먼저 저장할지 묻는다 (저장 안 함이면 디스크 상태로 나눈다)
+  // 분할은 디스크의 파일을 읽는다: 수정됐으면 먼저 저장할지 묻는다 (저장 안 함이면 디스크 상태로
+  // 나눈다)
   if (edit_->is_modified()) {
     maybe_save([this] { prompt_split(); });
     return;
@@ -1524,24 +1970,28 @@ void MainWindow::prompt_split() {
   dialog.setIntRange(1, std::max(1, count));
   dialog.setIntValue(1);
   if (dialog.exec() != QDialog::Accepted) return;
-  const QString dir = QFileDialog::getExistingDirectory(this, tr("분할 파일을 저장할 폴더"), QFileInfo(session_.path()).absolutePath());
+  const QString dir = QFileDialog::getExistingDirectory(this, tr("분할 파일을 저장할 폴더"),
+                                                        QFileInfo(session_.path()).absolutePath());
   if (dir.isEmpty()) return;
   split_document(dialog.intValue(), dir);
 }
 
 bool MainWindow::split_document(int every, const QString& directory) {
-  if (!session_.has_document() || every <= 0 || directory.isEmpty() || structure_job_->active()) return false;
+  if (!session_.has_document() || every <= 0 || directory.isEmpty() || structure_job_->active())
+    return false;
   const int count = session_.handle().info().page_count;
   const auto ranges = onpdf::ranges_every(every, count);
   if (ranges.empty()) return false;
-  const engine::StructureInput input{onpdf::path_from_utf8(session_.path().toUtf8().toStdString()),
-                                     session_.password().toStdString()};  // 암호 문서도 나눌 수 있게 (리뷰 W2)
+  const engine::StructureInput input{
+      onpdf::path_from_utf8(session_.path().toUtf8().toStdString()),
+      session_.password().toStdString()};  // 암호 문서도 나눌 수 있게 (리뷰 W2)
   const std::string stem = QFileInfo(session_.path()).completeBaseName().toUtf8().toStdString();
   const auto dir = onpdf::path_from_utf8(directory.toUtf8().toStdString());
   std::vector<std::filesystem::path> outs;
   for (std::size_t i = 0; i < ranges.size(); ++i) {
-    outs.push_back(dir / onpdf::path_from_utf8(onpdf::output_name(stem + "-%d.pdf", static_cast<int>(i) + 1,
-                                                                   static_cast<int>(ranges.size()), ranges[i], count)));
+    outs.push_back(dir / onpdf::path_from_utf8(onpdf::output_name(
+                             stem + "-%d.pdf", static_cast<int>(i) + 1,
+                             static_cast<int>(ranges.size()), ranges[i], count)));
   }
   int existing = 0;
   for (const auto& p : outs) {
@@ -1549,7 +1999,8 @@ bool MainWindow::split_document(int every, const QString& directory) {
     if (std::filesystem::exists(p, ec)) ++existing;
   }
   if (existing > 0) {  // 폴더 선택 창은 덮어쓰기를 묻지 않으므로 여기서 한 번 묻는다 (리뷰 W3)
-    QMessageBox box(QMessageBox::Question, tr("분할"), tr("같은 이름의 파일 %1개를 덮어씁니다. 계속할까요?").arg(existing),
+    QMessageBox box(QMessageBox::Question, tr("분할"),
+                    tr("같은 이름의 파일 %1개를 덮어씁니다. 계속할까요?").arg(existing),
                     QMessageBox::NoButton, this);
     box.setObjectName(QStringLiteral("split_overwrite"));
     QPushButton* go = box.addButton(tr("덮어쓰기"), QMessageBox::AcceptRole);
@@ -1562,23 +2013,27 @@ bool MainWindow::split_document(int every, const QString& directory) {
   structure_outputs_ = outs;
   structure_folder_ = directory;
   show_structure_progress(tr("분할 중…"));
-  const bool started = structure_job_->start([input, ranges, outs](const engine::ProgressFn& progress) -> StructureJob::Outcome {
-    engine::SafeWriteHooks hooks;
-    hooks.write = [&](const std::vector<std::filesystem::path>& temps) -> onpdf::Result<void> {
-      for (std::size_t i = 0; i < temps.size(); ++i) {
-        if (auto r = engine::QpdfTools::extract(input, ranges[i], temps[i]); !r) return std::unexpected(r.error());
-        progress(static_cast<int>((i + 1) * 100 / temps.size()));
-      }
-      return {};
-    };
-    hooks.verify = [&](std::size_t i, const std::filesystem::path&, const std::filesystem::path& temp) -> onpdf::Result<void> {
-      auto n = engine::QpdfTools::page_count(temp);
-      if (!n) return std::unexpected(n.error());
-      if (*n != ranges[i].last - ranges[i].first + 1) return onpdf::make_error(ErrorCode::kSaveVerifyFailed, "split page count mismatch");
-      return {};
-    };
-    return engine::write_files_safely(outs, hooks);
-  });
+  const bool started = structure_job_->start(
+      [input, ranges, outs](const engine::ProgressFn& progress) -> StructureJob::Outcome {
+        engine::SafeWriteHooks hooks;
+        hooks.write = [&](const std::vector<std::filesystem::path>& temps) -> onpdf::Result<void> {
+          for (std::size_t i = 0; i < temps.size(); ++i) {
+            if (auto r = engine::QpdfTools::extract(input, ranges[i], temps[i]); !r)
+              return std::unexpected(r.error());
+            progress(static_cast<int>((i + 1) * 100 / temps.size()));
+          }
+          return {};
+        };
+        hooks.verify = [&](std::size_t i, const std::filesystem::path&,
+                           const std::filesystem::path& temp) -> onpdf::Result<void> {
+          auto n = engine::QpdfTools::page_count(temp);
+          if (!n) return std::unexpected(n.error());
+          if (*n != ranges[i].last - ranges[i].first + 1)
+            return onpdf::make_error(ErrorCode::kSaveVerifyFailed, "split page count mismatch");
+          return {};
+        };
+        return engine::write_files_safely(outs, hooks);
+      });
   update_edit_actions();
   return started;
 }
@@ -1596,14 +2051,17 @@ void MainWindow::on_structure_finished(bool cancelled) {
   update_edit_actions();
   if (cancelled) {
     merge_password_attempts_ = 0;
-    // qpdf 작업은 중단할 수 없어 끝까지 돈다. 결과 파일은 지우지 않는다 — 사용자가 덮어쓰기로 고른 기존 파일이나
-    // 이전 분할 결과를 지워 버릴 수 있기 때문 (리뷰 C2). 성공했으면 알리기만, 실패했으면 원래 아무것도 없다
-    show_transient(outcome ? tr("취소하기 전에 작업이 끝나 파일이 만들어졌습니다") : tr("취소했습니다"));
+    // qpdf 작업은 중단할 수 없어 끝까지 돈다. 결과 파일은 지우지 않는다 — 사용자가 덮어쓰기로 고른
+    // 기존 파일이나 이전 분할 결과를 지워 버릴 수 있기 때문 (리뷰 C2). 성공했으면 알리기만,
+    // 실패했으면 원래 아무것도 없다
+    show_transient(outcome ? tr("취소하기 전에 작업이 끝나 파일이 만들어졌습니다")
+                           : tr("취소했습니다"));
     return;
   }
-  if (!outcome && kind == StructureKind::kMerge && outcome.error().code == ErrorCode::kPasswordRequired &&
-      merge_password_attempts_ < 5) {
-    // 어느 입력인지는 메시지 앞의 경로로 찾는다 ("<파일>: ..."). 묻고 같은 병합을 다시 시도한다 (리뷰 I4·W1)
+  if (!outcome && kind == StructureKind::kMerge &&
+      outcome.error().code == ErrorCode::kPasswordRequired && merge_password_attempts_ < 5) {
+    // 어느 입력인지는 메시지 앞의 경로로 찾는다 ("<파일>: ..."). 묻고 같은 병합을 다시 시도한다
+    // (리뷰 I4·W1)
     const std::string& message = outcome.error().message;
     for (auto& input : pending_merge_inputs_) {
       const std::string path = onpdf::path_to_utf8(input.path);
@@ -1611,7 +2069,8 @@ void MainWindow::on_structure_finished(bool cancelled) {
       QInputDialog dialog(this);
       dialog.setObjectName(QStringLiteral("merge_password"));
       dialog.setWindowTitle(tr("암호"));
-      dialog.setLabelText(tr("%1 은(는) 암호로 보호되어 있습니다. 암호를 입력하세요.").arg(q_filename(input.path)));
+      dialog.setLabelText(
+          tr("%1 은(는) 암호로 보호되어 있습니다. 암호를 입력하세요.").arg(q_filename(input.path)));
       dialog.setTextEchoMode(QLineEdit::Password);
       if (dialog.exec() != QDialog::Accepted || dialog.textValue().isEmpty()) {
         show_transient(tr("병합을 취소했습니다"));
@@ -1625,8 +2084,11 @@ void MainWindow::on_structure_finished(bool cancelled) {
   }
   merge_password_attempts_ = 0;
   if (!outcome) {
-    QMessageBox box(QMessageBox::Warning, kind == StructureKind::kMerge ? tr("병합하지 못했습니다") : tr("분할하지 못했습니다"),
-                    tr("%1\n\n만들어진 파일은 없습니다.").arg(structure_error_text(outcome.error())), QMessageBox::Ok, this);
+    QMessageBox box(
+        QMessageBox::Warning,
+        kind == StructureKind::kMerge ? tr("병합하지 못했습니다") : tr("분할하지 못했습니다"),
+        tr("%1\n\n만들어진 파일은 없습니다.").arg(structure_error_text(outcome.error())),
+        QMessageBox::Ok, this);
     box.setObjectName(QStringLiteral("structure_failed"));
     box.exec();
     return;
@@ -1636,31 +2098,39 @@ void MainWindow::on_structure_finished(bool cancelled) {
     open_file(QString::fromStdString(onpdf::path_to_utf8(outputs.front())));
     return;
   }
-  QMessageBox box(QMessageBox::Information, tr("분할"), tr("%1개 파일을 저장했습니다.").arg(outcome->size()), QMessageBox::NoButton, this);
+  QMessageBox box(QMessageBox::Information, tr("분할"),
+                  tr("%1개 파일을 저장했습니다.").arg(outcome->size()), QMessageBox::NoButton,
+                  this);
   box.setObjectName(QStringLiteral("split_done"));
   QPushButton* open_folder = box.addButton(tr("폴더 열기"), QMessageBox::ActionRole);
   box.addButton(tr("확인"), QMessageBox::AcceptRole);
   box.exec();
-  if (box.clickedButton() == open_folder) QDesktopServices::openUrl(QUrl::fromLocalFile(structure_folder_));
+  if (box.clickedButton() == open_folder)
+    QDesktopServices::openUrl(QUrl::fromLocalFile(structure_folder_));
 }
 
-void MainWindow::on_thumbnail_context_menu(const QPoint& global_pos, const std::vector<int>& pages) {
+void MainWindow::on_thumbnail_context_menu(const QPoint& global_pos,
+                                           const std::vector<int>& pages) {
   if (pages.empty() || !view_->has_document()) return;
   const bool enabled = delete_pages_action_->isEnabled();
   QMenu menu(this);
   menu.setObjectName(QStringLiteral("thumbnail_menu"));
   QAction* del = menu.addAction(tr("쪽 삭제"), this, [this, pages] { delete_pages(pages); });
-  QAction* cw = menu.addAction(tr("오른쪽으로 회전"), this, [this, pages] { rotate_pages(pages, 1); });
-  QAction* ccw = menu.addAction(tr("왼쪽으로 회전"), this, [this, pages] { rotate_pages(pages, 3); });
+  QAction* cw =
+      menu.addAction(tr("오른쪽으로 회전"), this, [this, pages] { rotate_pages(pages, 1); });
+  QAction* ccw =
+      menu.addAction(tr("왼쪽으로 회전"), this, [this, pages] { rotate_pages(pages, 3); });
   menu.addSeparator();
   const int before = pages.front();
   const int after = pages.back() + 1;
   QAction* ins_before = menu.addAction(tr("파일에서 쪽 삽입 (앞에)..."), this, [this, before] {
-    const QString path = QFileDialog::getOpenFileName(this, tr("쪽을 가져올 PDF"), QString(), tr("PDF 문서 (*.pdf)"));
+    const QString path = QFileDialog::getOpenFileName(this, tr("쪽을 가져올 PDF"), QString(),
+                                                      tr("PDF 문서 (*.pdf)"));
     if (!path.isEmpty()) insert_pages_from(path, before);
   });
   QAction* ins_after = menu.addAction(tr("파일에서 쪽 삽입 (뒤에)..."), this, [this, after] {
-    const QString path = QFileDialog::getOpenFileName(this, tr("쪽을 가져올 PDF"), QString(), tr("PDF 문서 (*.pdf)"));
+    const QString path = QFileDialog::getOpenFileName(this, tr("쪽을 가져올 PDF"), QString(),
+                                                      tr("PDF 문서 (*.pdf)"));
     if (!path.isEmpty()) insert_pages_from(path, after);
   });
   for (QAction* action : {del, cw, ccw, ins_before, ins_after}) action->setEnabled(enabled);
@@ -1670,15 +2140,19 @@ void MainWindow::on_thumbnail_context_menu(const QPoint& global_pos, const std::
 void MainWindow::on_document_changed(const onpdf::engine::ChangeSet& change) {
   pending_insert_.reset();
   if (change.structural) {
-    // 쪽 수·순서가 바뀌었다: 뷰·썸네일을 새 쪽 목록으로 다시 세우고(현재 쪽은 새 범위로 클램프), 쪽 번호·목차를 갱신한다
+    // 쪽 수·순서가 바뀌었다: 뷰·썸네일을 새 쪽 목록으로 다시 세우고(현재 쪽은 새 범위로 클램프), 쪽
+    // 번호·목차를 갱신한다
     const int n = session_.handle().info().page_count;
-    page_spin_->setRange(1, std::max(1, n));  // 뷰 재구성이 current_page_changed 로 값을 넣기 전에 범위를 넓힌다
+    page_spin_->setRange(
+        1, std::max(1, n));  // 뷰 재구성이 current_page_changed 로 값을 넣기 전에 범위를 넓힌다
     page_total_label_->setText(tr("/ %1 쪽").arg(n));
-    view_->rebuild_pages(change.focus_page >= 0 ? change.focus_page : std::max(0, view_->current_page()));
+    view_->rebuild_pages(change.focus_page >= 0 ? change.focus_page
+                                                : std::max(0, view_->current_page()));
     thumbnail_panel_->reset_pages(std::max(0, view_->current_page()));
-    thumbnail_panel_->select_pages(change.selected_pages);  // 옮긴·넣은·되살린 쪽을 다시 선택해 연속 조작이 이어진다
+    thumbnail_panel_->select_pages(
+        change.selected_pages);    // 옮긴·넣은·되살린 쪽을 다시 선택해 연속 조작이 이어진다
     print_prefs_applied_ = false;  // 인쇄 기본값의 쪽 범위는 이전 쪽 수 기준이었다
-    load_outline(false);          // 목차 항목의 쪽 번호가 밀렸다 (탭은 바꾸지 않는다)
+    load_outline(false);           // 목차 항목의 쪽 번호가 밀렸다 (탭은 바꾸지 않는다)
   } else {
     view_->invalidate_pages(change.pages, !change.new_sizes.empty());
     thumbnail_panel_->invalidate_pages(change.pages);
@@ -1713,11 +2187,13 @@ void MainWindow::on_save_as() {
   if (!path.isEmpty()) start_save(path, [] {});
 }
 
-bool MainWindow::save_to(const QString& path) { return start_save(path, [] {}); }
+bool MainWindow::save_to(const QString& path) {
+  return start_save(path, [] {});
+}
 
 bool MainWindow::start_save(const QString& path, std::function<void()> then) {
   if (!session_.has_document() || path.isEmpty()) return false;
-  settle_form_edits();  // 입력 중인 칸까지 저장한다 (#51)
+  settle_form_edits();             // 입력 중인 칸까지 저장한다 (#51)
   if (saving_ || edit_->busy()) {  // 몇 ms 의 창이지만 조용히 멈추지 않는다 (리뷰 I1)
     show_transient(tr("지금은 저장할 수 없습니다. 잠시 후 다시 시도하세요"));
     return false;
@@ -1730,34 +2206,42 @@ bool MainWindow::start_save(const QString& path, std::function<void()> then) {
   QPointer<MainWindow> self(this);
   const int generation = document_generation_;  // 문서를 열 때마다 증가
   session_.handle().save(
-      onpdf::path_from_utf8(std::string(utf8.constData(), static_cast<std::size_t>(utf8.size()))), {},
+      onpdf::path_from_utf8(std::string(utf8.constData(), static_cast<std::size_t>(utf8.size()))),
+      {},
       // 워커 스레드: 메인으로 넘기기만
-      [dispatcher, self, path, generation, then = std::move(then)](onpdf::Result<engine::SaveResult> result) {
+      [dispatcher, self, path, generation,
+       then = std::move(then)](onpdf::Result<engine::SaveResult> result) {
         auto shared = std::make_shared<onpdf::Result<engine::SaveResult>>(std::move(result));
         dispatcher->post_to(self, [path, generation, then, shared](MainWindow* window) {
           window->saving_ = false;
-          QTimer::singleShot(0, window, [window] { window->flush_form_commands(); });  // 저장 중 쌓인 폼 입력 (#51)
+          QTimer::singleShot(0, window, [window] {
+            window->flush_form_commands();
+          });                                                      // 저장 중 쌓인 폼 입력 (#51)
           if (generation != window->document_generation_) return;  // 다른 문서로 바뀌었다
           if (!*shared) {
             window->update_edit_actions();
             QString reason = QString::fromStdString(shared->error().message);
             if (shared->error().code == ErrorCode::kNotWritable) {
-              reason = window->tr("파일에 쓸 수 없습니다. 읽기 전용이거나 다른 프로그램이 사용 중입니다.\n"
-                                  "다른 이름으로 저장하세요.");
+              reason = window->tr(
+                  "파일에 쓸 수 없습니다. 읽기 전용이거나 다른 프로그램이 사용 중입니다.\n"
+                  "다른 이름으로 저장하세요.");
             } else if (shared->error().code == ErrorCode::kFolderNotWritable) {
-              reason = window->tr("이 폴더에 새 파일을 만들 수 없습니다.\n"
-                                  "다른 폴더에 다른 이름으로 저장하세요.");
+              reason = window->tr(
+                  "이 폴더에 새 파일을 만들 수 없습니다.\n"
+                  "다른 폴더에 다른 이름으로 저장하세요.");
             }
             QMessageBox box(QMessageBox::Warning, window->tr("저장하지 못했습니다"),
-                            window->tr("%1\n\n원본 파일은 바뀌지 않았습니다.").arg(reason), QMessageBox::Ok, window);
+                            window->tr("%1\n\n원본 파일은 바뀌지 않았습니다.").arg(reason),
+                            QMessageBox::Ok, window);
             box.setObjectName(QStringLiteral("save_failed"));
             box.exec();
             return;
           }
           window->session_.set_path(path);
           window->edit_->mark_saved();  // state_changed → 제목·동작 갱신
-          window->show_transient((*shared)->incremental ? window->tr("저장했습니다 (서명 보존을 위해 증분 저장)")
-                                                       : window->tr("저장했습니다"));
+          window->show_transient((*shared)->incremental
+                                     ? window->tr("저장했습니다 (서명 보존을 위해 증분 저장)")
+                                     : window->tr("저장했습니다"));
           then();
         });
       });
@@ -1771,8 +2255,8 @@ void MainWindow::maybe_save(std::function<void()> then) {
     return;
   }
   QMessageBox box(QMessageBox::Warning, tr("저장하지 않은 변경"),
-                  tr("%1 의 변경 내용을 저장할까요?").arg(QFileInfo(session_.path()).fileName()), QMessageBox::NoButton,
-                  this);
+                  tr("%1 의 변경 내용을 저장할까요?").arg(QFileInfo(session_.path()).fileName()),
+                  QMessageBox::NoButton, this);
   box.setObjectName(QStringLiteral("save_changes_question"));
   box.setInformativeText(tr("저장하지 않으면 변경 내용이 사라집니다."));
   QPushButton* save = box.addButton(tr("저장"), QMessageBox::AcceptRole);
@@ -1790,7 +2274,8 @@ void MainWindow::maybe_save(std::function<void()> then) {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
-  if (structure_job_ != nullptr && structure_job_->active()) {  // 병합·분할이 끝나기 전에는 닫지 않는다 (임시 파일 정리를 위해)
+  if (structure_job_ != nullptr &&
+      structure_job_->active()) {  // 병합·분할이 끝나기 전에는 닫지 않는다 (임시 파일 정리를 위해)
     show_transient(tr("병합·분할이 끝난 뒤 닫을 수 있습니다"));
     event->ignore();
     return;
@@ -1814,11 +2299,13 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 // ---------------------------------------------------------------- 인쇄
 
 void MainWindow::update_print_action() {
-  const bool has_pages = session_.has_document() && session_.handle().valid() && session_.handle().info().page_count > 0;
+  const bool has_pages = session_.has_document() && session_.handle().valid() &&
+                         session_.handle().info().page_count > 0;
   const bool allowed = has_pages && session_.handle().info().print.allowed;
   const bool busy = print_job_ && print_job_->active();
   print_action_->setEnabled(allowed && !busy);
-  const QString tip = has_pages && !allowed ? tr("이 문서는 인쇄가 허용되지 않습니다") : tr("문서를 인쇄한다");
+  const QString tip =
+      has_pages && !allowed ? tr("이 문서는 인쇄가 허용되지 않습니다") : tr("문서를 인쇄한다");
   print_action_->setStatusTip(tip);
   print_action_->setToolTip(tip);
   update_edit_actions();  // 인쇄 중에는 편집을 막는다
@@ -1855,7 +2342,8 @@ bool MainWindow::print_with(QPrinter& printer) {
     show_transient(tr("이 문서는 인쇄가 허용되지 않습니다"));
     return false;
   }
-  PrintJob::Request request = make_print_request(printer, handle.info(), std::max(0, view_->current_page()));
+  PrintJob::Request request =
+      make_print_request(printer, handle.info(), std::max(0, view_->current_page()));
   if (request.steps.empty()) {
     show_transient(tr("인쇄할 쪽이 없습니다"));
     return false;
@@ -1866,8 +2354,9 @@ bool MainWindow::print_with(QPrinter& printer) {
   delete print_progress_;
   print_progress_ = new QProgressDialog(tr("인쇄 중…"), tr("취소"), 0, job->total_sheets(), this);
   print_progress_->setWindowTitle(tr("인쇄"));
-  // 비모달: 모달 진행 대화상자는 setValue 마다 이벤트를 안에서 처리해 인쇄 처리에 재진입을 일으키고,
-  // macOS 에서는 시트 애니메이션이 메인 스레드를 수백 ms 붙잡는다. 문서 교체·창 닫기는 인쇄를 취소한다
+  // 비모달: 모달 진행 대화상자는 setValue 마다 이벤트를 안에서 처리해 인쇄 처리에 재진입을
+  // 일으키고, macOS 에서는 시트 애니메이션이 메인 스레드를 수백 ms 붙잡는다. 문서 교체·창 닫기는
+  // 인쇄를 취소한다
   print_progress_->setWindowModality(Qt::NonModal);
   print_progress_->setMinimumDuration(300);
   print_progress_->setAutoClose(false);
@@ -1878,8 +2367,9 @@ bool MainWindow::print_with(QPrinter& printer) {
   print_progress_->setBar(bar);
   QProgressDialog* progress = print_progress_;
   // 다음 이벤트 턴에 갱신: 그리기 처리 시간에 UI 갱신이 섞이지 않게
-  connect(job, &PrintJob::progress, progress, [progress](int done, int) { progress->setValue(done); },
-          Qt::QueuedConnection);
+  connect(
+      job, &PrintJob::progress, progress, [progress](int done, int) { progress->setValue(done); },
+      Qt::QueuedConnection);
   connect(progress, &QProgressDialog::canceled, this, &MainWindow::cancel_print);
   connect(job, &PrintJob::finished, this, &MainWindow::on_print_finished);
   const bool started = job->start();
@@ -1889,7 +2379,8 @@ bool MainWindow::print_with(QPrinter& printer) {
 
 bool MainWindow::confirm_cancel_print_for(const QString& path) {
   QMessageBox box(QMessageBox::Question, tr("인쇄 중입니다"),
-                  tr("문서를 인쇄하고 있습니다. 인쇄를 취소하고 %1 을(를) 열까요?").arg(QFileInfo(path).fileName()),
+                  tr("문서를 인쇄하고 있습니다. 인쇄를 취소하고 %1 을(를) 열까요?")
+                      .arg(QFileInfo(path).fileName()),
                   QMessageBox::NoButton, this);
   box.setObjectName(QStringLiteral("print_busy_question"));
   QPushButton* cancel_and_open = box.addButton(tr("인쇄 취소하고 열기"), QMessageBox::AcceptRole);
@@ -1904,7 +2395,8 @@ bool MainWindow::confirm_cancel_print_for(const QString& path) {
 void MainWindow::discard_print_job() {
   if (!print_job_) return;
   const bool was_active = print_job_->active();
-  print_job_.reset();  // 소멸자가 신호 없이 취소 → on_print_finished 가 오지 않으므로 진행 창은 여기서 닫는다
+  print_job_.reset();  // 소멸자가 신호 없이 취소 → on_print_finished 가 오지 않으므로 진행 창은
+                       // 여기서 닫는다
   if (print_progress_ != nullptr) {
     print_progress_->hide();
     print_progress_->deleteLater();
@@ -1931,8 +2423,9 @@ void MainWindow::on_print_finished(PrintJob::Outcome outcome) {
       if (job != nullptr && !job->failed_pages().empty()) {
         QStringList pages;
         for (int page : job->failed_pages()) pages << QString::number(page + 1);
-        QMessageBox::warning(this, tr("일부 쪽을 인쇄하지 못했습니다"),
-                             tr("다음 쪽은 빈 쪽으로 인쇄되었습니다: %1").arg(pages.join(QStringLiteral(", "))));
+        QMessageBox::warning(
+            this, tr("일부 쪽을 인쇄하지 못했습니다"),
+            tr("다음 쪽은 빈 쪽으로 인쇄되었습니다: %1").arg(pages.join(QStringLiteral(", "))));
       }
       break;
     }
@@ -1969,11 +2462,12 @@ void MainWindow::load_outline(bool switch_tab) {
             window->show_transient(window->tr("목차를 읽지 못했습니다"));
           }
           window->outline_panel_->set_outline(outline);
-          // 문서를 열 때: 목차가 있으면 목차 탭, 없으면 썸네일 탭. 편집 뒤 재로드는 탭을 그대로 둔다
+          // 문서를 열 때: 목차가 있으면 목차 탭, 없으면 썸네일 탭. 편집 뒤 재로드는 탭을 그대로
+          // 둔다
           if (switch_tab) {
-            window->sidebar_->setCurrentWidget(outline && !outline->empty()
-                                                   ? static_cast<QWidget*>(window->outline_panel_)
-                                                   : static_cast<QWidget*>(window->thumbnail_panel_));
+            window->sidebar_->setCurrentWidget(
+                outline && !outline->empty() ? static_cast<QWidget*>(window->outline_panel_)
+                                             : static_cast<QWidget*>(window->thumbnail_panel_));
           }
           window->update_outline_highlight();
         });
@@ -2022,8 +2516,11 @@ void MainWindow::navigate_to(const onpdf::view::Link& target) {
 }
 
 void MainWindow::update_outline_highlight() {
-  if (!view_->has_document() || !sidebar_->isVisible() || sidebar_->currentWidget() != outline_panel_) return;
-  if (auto pos = view_->reading_position()) outline_panel_->highlight_for(pos->first, pos->second.y);
+  if (!view_->has_document() || !sidebar_->isVisible() ||
+      sidebar_->currentWidget() != outline_panel_)
+    return;
+  if (auto pos = view_->reading_position())
+    outline_panel_->highlight_for(pos->first, pos->second.y);
 }
 
 // ---------------------------------------------------------------- 검색
@@ -2045,9 +2542,12 @@ void MainWindow::reset_search() {
         return handle.search_page(
             page, query, options, engine::Priority::kLow,
             // 워커 스레드: 메인으로 넘기기만
-            [dispatcher, self, on_done = std::move(on_done)](onpdf::Result<view::PageSearchResult> result) {
-              auto shared = std::make_shared<onpdf::Result<view::PageSearchResult>>(std::move(result));
-              dispatcher->post_to(self, [on_done, shared](MainWindow*) { on_done(std::move(*shared)); });
+            [dispatcher, self,
+             on_done = std::move(on_done)](onpdf::Result<view::PageSearchResult> result) {
+              auto shared =
+                  std::make_shared<onpdf::Result<view::PageSearchResult>>(std::move(result));
+              dispatcher->post_to(self,
+                                  [on_done, shared](MainWindow*) { on_done(std::move(*shared)); });
             });
       });
   search_->on_changed = [this] {
@@ -2077,7 +2577,8 @@ void MainWindow::open_find() {
   if (view_->has_selection() && sel.start().page == sel.end().page &&
       view_->text_index(sel.start().page) != nullptr) {
     const QString selected = view_->selected_text();
-    if (!selected.contains(QLatin1Char('\n')) && selected.size() <= 100) initial = selected.trimmed();
+    if (!selected.contains(QLatin1Char('\n')) && selected.size() <= 100)
+      initial = selected.trimmed();
   }
   search_bar_->open_with(initial);
   // 다시 열었는데 입력이 그대로라 textChanged 가 오지 않는 경우: 비활성 세션이면 바로 검색
@@ -2132,8 +2633,8 @@ void MainWindow::update_search_status() {
     search_bar_->set_status(0, 0, false, false, false);
     return;
   }
-  search_bar_->set_status(search_->current_ordinal(), search_->total(), search_->searching(), search_->truncated(),
-                          search_->no_text());
+  search_bar_->set_status(search_->current_ordinal(), search_->total(), search_->searching(),
+                          search_->truncated(), search_->no_text());
 }
 
 void MainWindow::on_password_required(const QString& path) {
@@ -2187,7 +2688,9 @@ void MainWindow::on_copy() {
                            : tr("%1자 복사됨").arg(count));
 }
 
-void MainWindow::on_select_all() { view_->select_all_on_current_page(); }
+void MainWindow::on_select_all() {
+  view_->select_all_on_current_page();
+}
 
 void MainWindow::on_link_activated(const onpdf::view::Link& link) {
   if (link.kind == onpdf::view::LinkKind::kPage) {
@@ -2196,16 +2699,19 @@ void MainWindow::on_link_activated(const onpdf::view::Link& link) {
   }
   const QString uri = QString::fromUtf8(link.uri.data(), static_cast<qsizetype>(link.uri.size()));
   const QUrl url(uri);
-  const bool well_formed = url.isValid() && (url.scheme() == QStringLiteral("mailto") ? !url.path().isEmpty()
-                                                                                       : !url.host().isEmpty());
+  const bool well_formed =
+      url.isValid() &&
+      (url.scheme() == QStringLiteral("mailto") ? !url.path().isEmpty() : !url.host().isEmpty());
   if (!onpdf::view::is_safe_uri(link.uri) || !well_formed) {
     show_transient(tr("차단된 링크: %1").arg(uri.left(80)));
     return;
   }
   const QString shown = uri.size() > 200 ? uri.left(200) + QStringLiteral("…") : uri;
-  const auto answer = QMessageBox::question(this, tr("외부 링크 열기"), tr("외부 링크를 엽니다:\n%1").arg(shown),
-                                            QMessageBox::Open | QMessageBox::Cancel, QMessageBox::Cancel);
-  if (answer == QMessageBox::Open && !QDesktopServices::openUrl(url)) show_transient(tr("링크를 열지 못했습니다"));
+  const auto answer =
+      QMessageBox::question(this, tr("외부 링크 열기"), tr("외부 링크를 엽니다:\n%1").arg(shown),
+                            QMessageBox::Open | QMessageBox::Cancel, QMessageBox::Cancel);
+  if (answer == QMessageBox::Open && !QDesktopServices::openUrl(url))
+    show_transient(tr("링크를 열지 못했습니다"));
 }
 
 void MainWindow::on_link_hovered(const QString& target) {
@@ -2222,7 +2728,9 @@ void MainWindow::on_current_page_changed(int page) {
   refresh_status();
 }
 
-void MainWindow::on_zoom_changed(double) { refresh_status(); }
+void MainWindow::on_zoom_changed(double) {
+  refresh_status();
+}
 
 void MainWindow::refresh_status() {
   if (!session_.has_document() || !view_->has_document()) return;
@@ -2235,7 +2743,9 @@ void MainWindow::refresh_status() {
                           .arg(sched.avg_render_ms, 0, 'f', 1));
 }
 
-void MainWindow::set_document_status(const QString& text) { status_label_->setText(text); }
+void MainWindow::set_document_status(const QString& text) {
+  status_label_->setText(text);
+}
 
 void MainWindow::show_transient(const QString& text) {
   statusBar()->showMessage(text, 5000);
@@ -2265,8 +2775,8 @@ void MainWindow::dropEvent(QDropEvent* event) {
     return;
   }
   event->acceptProposedAction();
-  // 열기는 다음 이벤트 턴에: open_file 은 인쇄 중이면 모달 확인을 띄우는데, drop 처리 안에서 중첩 이벤트 루프를
-  // 돌리면 끌기 원본(macOS Finder·Windows OLE)이 drop 완료를 기다리며 멈춘다 (#27)
+  // 열기는 다음 이벤트 턴에: open_file 은 인쇄 중이면 모달 확인을 띄우는데, drop 처리 안에서 중첩
+  // 이벤트 루프를 돌리면 끌기 원본(macOS Finder·Windows OLE)이 drop 완료를 기다리며 멈춘다 (#27)
   QTimer::singleShot(0, this, [this, path] { open_file(path); });
 }
 

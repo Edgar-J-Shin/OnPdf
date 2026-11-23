@@ -419,6 +419,9 @@ TEST_F(DocumentViewTest, SelectionChangeRepaintsOnlySelectionArea) {
   const view::TextRange line0 = view_.text_index(0)->lines[0].chars;
   drag(char_left(0, line0.start), char_right(0, line0.start + 2));
   QApplication::processEvents();
+  // 늦게 오는 타일·미리보기가 스파이 중에 전체를 다시 그리지 않게 렌더가 가라앉을 때까지 기다린다 (Windows CI 에서 간헐 실패)
+  ASSERT_TRUE(spin_until([&] { return view_.pending_visible_tiles() == 0; }));
+  spin_until([] { return false; }, 300);
 
   struct PaintSpy : QObject {
     QRect bounds;

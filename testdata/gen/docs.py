@@ -794,3 +794,190 @@ def make_transparency() -> bytes:
     root = g.catalog(w, pages)
     info = g.info_dict(w, "Transparency")
     return w.write(root=root, info=info, file_id=g.file_id_for("transparency.pdf"))
+
+# ----------------------------------------------------------------- 기존 텍스트 줄 수정 (#65)
+
+
+def make_text_lines_basic(*, encrypt: g.Encryption | None = None, file_id_name: str = "text-lines-basic.pdf") -> bytes:
+    """줄 단위 수정 회귀용: 평범한 줄, 자간·어간(Tc/Tw) 줄, 굵게 섞인 줄, 같은 BT 에서 Td 없이 이어지는 두 Tj(밀림),
+    지울 줄, 공백만의 객체 뒤의 줄(순번), 보존 확인용 도형."""
+    w = PdfWriter()
+    pages = w.reserve()
+    helv = g.simple_font(w)
+    bold = g.simple_font(w, base="Helvetica-Bold")
+    c = w.stream(b"", content(
+        "BT /F1 14 Tf 72 700 Td (The quick brown fox jumps over the lazy dog) Tj ET",
+        "BT /F1 12 Tf 0.5 Tc 2 Tw 72 670 Td (Spaced words with char and word spacing) Tj ET",
+        "BT /F2 12 Tf 72 640 Td (Bold start) Tj ET",
+        "BT /F1 12 Tf 140 640 Td (then regular end of the mixed line) Tj ET",
+        "BT /F1 12 Tf 72 610 Td (Shifted one ) Tj (Shifted two) Tj ET",
+        "BT /F1 12 Tf 72 580 Td (Delete me entirely) Tj ET",
+        "BT /F1 12 Tf 72 550 Td (Hello world line) Tj ET",
+        "BT /F1 12 Tf 72 520 Td [(Array) -500 (show line)] TJ ET",
+        "BT /F1 12 Tf 14 TL 72 500 Td (Quote first) Tj (Quote second) ' 1 0.2 (Double quote third) \" ET",
+        # 공백만의 객체(Quartz·Word 가 줄마다 수십 개): 추출 글은 비지만 PDFium 객체·qpdf 표시 연산자 모두에 든다 (#75 순번)
+        "BT /F1 12 Tf 72 445 Td ( ) Tj ET",
+        "BT /F1 12 Tf 80 445 Td (      ) Tj ET",
+        "BT /F1 12 Tf 150 445 Td (After spaces line) Tj ET",
+        "0 0 1 rg 72 360 200 80 re f",
+        "1 0 0 RG 3 w 300 360 m 500 440 l S",
+    ), compress=False)
+    p = g.page(w, pages, g.LETTER, c, b"<< /Font << /F1 %d 0 R /F2 %d 0 R >> >>" % (helv, bold))
+    g.pages_tree(w, pages, [p])
+    root = g.catalog(w, pages)
+    info = w.reserve()
+    if encrypt is not None:
+        w.encryptor = encrypt
+        encrypt.prepare(g.file_id_for(file_id_name))
+        w.set(info, b"<< /Title " + w.enc_text(info, "Text lines (encrypted)") + b" /Producer " + w.enc_text(info, "onpdf pdfgen")
+              + b" /CreationDate " + w.enc_text(info, "D:20260101000000Z") + b" >>")
+    else:
+        g.info_dict(w, "Text lines for line editing", num=info)
+    return w.write(root=root, info=info, file_id=g.file_id_for(file_id_name), encrypt=encrypt)
+
+
+def make_text_lines_kern() -> bytes:
+    """줄 폭 맞춤(#77): TJ 로 넓힌 줄, Tc 자간 줄, 끝 공백 줄, 음수 방향(좁힘) 커닝 줄, 보통 줄, 큰 자간 줄(한계),
+    배열 문자열 하나인 TJ 줄(qpdf 치환 단위 테스트)."""
+    w = PdfWriter()
+    pages = w.reserve()
+    helv = g.simple_font(w)
+    c = w.stream(b"", content(
+        # Tc 는 그래픽 상태라 BT/ET 를 넘어 남는다 → q/Q 로 줄마다 격리
+        "q BT /F1 12 Tf 72 700 Td [(Kerned) -500 (wide) -500 (gaps) -500 (here)] TJ ET Q",
+        "q BT /F1 12 Tf 2 Tc 72 670 Td (Char spaced line here) Tj ET Q",
+        "q BT /F1 12 Tf 72 640 Td (Trailing spaces line          ) Tj ET Q",
+        "q BT /F1 12 Tf 72 610 Td [(Ti) 80 (ght) 80 (ly) 80 ( kerned) 80 ( line)] TJ ET Q",
+        "q BT /F1 12 Tf 72 580 Td (Plain line without spacing) Tj ET Q",
+        "q BT /F1 12 Tf 20 Tc 72 550 Td (Huge spacing) Tj ET Q",
+        "q BT /F1 12 Tf 72 520 Td [(Single array string)] TJ ET Q",
+    ), compress=False)
+    p = g.page(w, pages, g.LETTER, c, b"<< /Font << /F1 %d 0 R >> >>" % helv)
+    g.pages_tree(w, pages, [p])
+    root = g.catalog(w, pages)
+    info = w.reserve()
+    g.info_dict(w, "Text lines with kerning", num=info)
+    return w.write(root=root, info=info, file_id=g.file_id_for("text-lines-kern.pdf"))
+
+
+def make_text_lines_split() -> bytes:
+    """줄 폭·수술(#81): /Contents 배열이 피연산자와 연산자 사이에서 나뉜다 (Word·LiveCycle 식). 1쪽 3 스트림:
+    A 는 `(Split operands line)` 로 끝나고 B 가 `Tj ET` 로 시작, B 는 `[(Arr) -200 (ay split)]` 로 끝나고 C 가 `TJ ET` 로 시작."""
+    w = PdfWriter()
+    pages = w.reserve()
+    helv = g.simple_font(w)
+    s1 = w.stream(b"", content("BT /F1 12 Tf 72 700 Td (Split operands line)"), compress=False)
+    s2 = w.stream(b"", content("Tj ET", "BT /F1 12 Tf 72 670 Td [(Arr) -200 (ay split)]"), compress=False)
+    s3 = w.stream(b"", content("TJ ET", "BT /F1 12 Tf 72 640 Td (Whole line here) Tj ET", "0 0 1 rg 72 500 100 40 re f"),
+                  compress=False)
+    p = w.add(b"<< /Type /Page /Parent %d 0 R /MediaBox [0 0 612 792] /Contents [%d 0 R %d 0 R %d 0 R] "
+              b"/Resources << /Font << /F1 %d 0 R >> >> >>" % (pages, s1, s2, s3, helv))
+    g.pages_tree(w, pages, [p])
+    root = g.catalog(w, pages)
+    info = w.reserve()
+    g.info_dict(w, "Text lines split across content streams", num=info)
+    return w.write(root=root, info=info, file_id=g.file_id_for("text-lines-split.pdf"))
+
+
+def make_text_lines_basic_enc() -> bytes:
+    return make_text_lines_basic(encrypt=g.Encryption("user", "owner"), file_id_name="text-lines-basic-enc.pdf")
+
+
+def make_text_lines_form() -> bytes:
+    """Form XObject 안의 줄(1단계 — 편집 가능)과 Form 안 Form 의 줄(2단계 — 불가), 쪽 직속 줄, 이미지 하나."""
+    w = PdfWriter()
+    pages = w.reserve()
+    helv = g.simple_font(w)
+    nested = w.stream(b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 %d 0 R >> >>" % helv,
+                      content("BT /F1 12 Tf 72 560 Td (Nested form line stays) Tj ET"))
+    form = w.stream(b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] "
+                    b"/Resources << /Font << /F1 %d 0 R >> /XObject << /Fm2 %d 0 R >> >>" % (helv, nested),
+                    content("BT /F1 12 Tf 72 640 Td (Inside form first line) Tj ET",
+                            "BT /F1 12 Tf 72 620 Td (Inside form second line) Tj ET",
+                            "/Fm2 Do"))
+    # 2×2 회색 이미지 (보존 확인)
+    image = w.stream(b"/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8",
+                     bytes([40, 200, 200, 40]))
+    c = w.stream(b"", content(
+        "BT /F1 14 Tf 72 700 Td (Page level line above the form) Tj ET",
+        "/Fm1 Do",
+        "q 100 0 0 60 400 500 cm /Im1 Do Q",
+        "BT /F1 12 Tf 72 480 Td (Page level line below the form) Tj ET",
+    ), compress=False)
+    p = g.page(w, pages, g.LETTER, c,
+               b"<< /Font << /F1 %d 0 R >> /XObject << /Fm1 %d 0 R /Im1 %d 0 R >> >>" % (helv, form, image))
+    # 2쪽: /Contents 배열이 BT 안에서 나뉜다 (스트림 경계를 넘는 밀림 검사) — 앞 스트림의 Tj 를 지우면 뒤 스트림의 Tj 가 밀린다
+    s1 = w.stream(b"", content("BT /F1 12 Tf 72 700 Td (Split one) Tj"), compress=False)
+    s2 = w.stream(b"", content("(Split two) Tj ET", "BT /F1 12 Tf 72 670 Td (Second page plain line) Tj ET"), compress=False)
+    p2 = w.add(b"<< /Type /Page /Parent %d 0 R /MediaBox [0 0 612 792] /Contents [%d 0 R %d 0 R] "
+               b"/Resources << /Font << /F1 %d 0 R >> >> >>" % (pages, s1, s2, helv))
+    # 3·4쪽: 같은 Form 을 두 쪽이 그린다 (직접 /Resources) — 그 안의 줄은 공유 Form 이라 고칠 수 없다
+    shared = w.stream(b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 %d 0 R >> >>" % helv,
+                      content("BT /F1 12 Tf 72 700 Td (Shared form line on two pages) Tj ET"))
+    shared_c = w.stream(b"", content("/FmS Do"), compress=False)
+    shared_res = b"<< /Font << /F1 %d 0 R >> /XObject << /FmS %d 0 R >> >>" % (helv, shared)
+    p3 = g.page(w, pages, g.LETTER, shared_c, shared_res)
+    p4 = g.page(w, pages, g.LETTER, shared_c, shared_res)
+    g.pages_tree(w, pages, [p, p2, p3, p4])
+    root = g.catalog(w, pages)
+    info = g.info_dict(w, "Text lines inside form XObjects")
+    return w.write(root=root, info=info, file_id=g.file_id_for("text-lines-form.pdf"))
+
+
+def make_text_lines_type3() -> bytes:
+    """Type3 글꼴 줄(ToUnicode 있음 — 원본 글꼴 재사용 불가 → 대체 글꼴)과 임베딩 CID 한글 줄(서브셋 밖 글자는 대체)."""
+    meta = _load_font_meta()
+    w = PdfWriter()
+    pages = w.reserve()
+    helv = g.simple_font(w)
+    g1 = w.stream(b"", content("600 0 0 0 500 700 d1", "50 0 400 700 re f"))
+    g2 = w.stream(b"", content("600 0 0 0 500 700 d1", "50 0 400 350 re f"))
+    t3_tounicode = w.stream(b"", (
+        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
+        "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
+        "/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n"
+        "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n"
+        "2 beginbfchar\n<41> <0041>\n<42> <0042>\nendbfchar\n"
+        "endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n").encode("latin-1"))
+    t3 = w.add(b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 600 700] /FontMatrix [0.001 0 0 0.001 0 0] "
+               b"/CharProcs << /g1 %d 0 R /g2 %d 0 R >> /Encoding << /Type /Encoding /Differences [65 /g1 /g2] >> "
+               b"/FirstChar 65 /LastChar 66 /Widths [600 600] /Resources << >> /ToUnicode %d 0 R >>" % (g1, g2, t3_tounicode))
+    # 한글 CID 서브셋 글꼴 (korean-embedded 와 같은 조립)
+    text = "한글 텍스트 줄"
+    hexs, used = _cid_text(meta, text)
+    ttf = FONT_TTF.read_bytes()
+    font_file = w.stream(b"/Length1 %d" % len(ttf), ttf)
+    gid_width = {v["gid"]: v["width"] for v in meta["glyphs"].values()}
+    widths = b" ".join(b"%d [%d]" % (gid, gid_width[gid]) for gid in sorted(used))
+    bbox = b" ".join(b"%d" % v for v in meta["bbox"])
+    font_name = b"ABCDEF+" + meta["family"].encode()
+    descriptor = w.add(
+        b"<< /Type /FontDescriptor /FontName /%s /Flags 4 /FontBBox [%s] /ItalicAngle 0 /Ascent %d "
+        b"/Descent %d /CapHeight %d /StemV 80 /FontFile2 %d 0 R >>"
+        % (font_name, bbox, meta["ascent"], meta["descent"], meta["cap_height"], font_file))
+    cid_font = w.add(
+        b"<< /Type /Font /Subtype /CIDFontType2 /BaseFont /%s "
+        b"/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
+        b"/FontDescriptor %d 0 R /DW 1000 /W [%s] /CIDToGIDMap /Identity >>" % (font_name, descriptor, widths))
+    gid_char = sorted((v["gid"], ch) for ch, v in meta["glyphs"].items() if v["gid"] in used)
+    bfchars = "\n".join("<%04X> <%s>" % (gid, ch.encode("utf-16-be").hex().upper()) for gid, ch in gid_char)
+    tounicode = w.stream(b"", (
+        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
+        "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
+        "/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n"
+        "1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n"
+        f"{len(gid_char)} beginbfchar\n{bfchars}\nendbfchar\n"
+        "endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n").encode("latin-1"))
+    type0 = w.add(b"<< /Type /Font /Subtype /Type0 /BaseFont /%s /Encoding /Identity-H /DescendantFonts [%d 0 R] "
+                  b"/ToUnicode %d 0 R >>" % (font_name, cid_font, tounicode))
+    c = w.stream(b"", content(
+        _label(72, 740, 12, "Type3 line below, Korean CID line further down"),
+        "BT /T3 24 Tf 72 690 Td (ABAB) Tj ET",
+        f"BT /F0 18 Tf 72 640 Td {hexs} Tj ET",
+        "BT /F1 12 Tf 3 Tr 72 600 Td (Invisible OCR layer text) Tj ET",
+    ), compress=False)
+    p = g.page(w, pages, g.LETTER, c, b"<< /Font << /F1 %d 0 R /T3 %d 0 R /F0 %d 0 R >> >>" % (helv, t3, type0))
+    g.pages_tree(w, pages, [p])
+    root = g.catalog(w, pages)
+    info = g.info_dict(w, "Type3 and Korean CID lines")
+    return w.write(root=root, info=info, file_id=g.file_id_for("text-lines-type3.pdf"))

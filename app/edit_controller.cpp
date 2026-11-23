@@ -70,6 +70,8 @@ void EditController::finish(Op op, std::shared_ptr<edit::Command> command, int g
   busy_ = false;
   if (!result) {
     if (op == Op::kExecute) discard_on_worker({std::move(command)});  // 스택에 오르지 않으므로 스냅샷을 해제한다
+    // 취소가 실패하면 그 아래 항목도 되돌릴 수 없다 (예: 줄 수정의 상태 토큰이 메모리 상한으로 폐기됨, #65) → 기록을 비운다
+    if (op == Op::kUndo) stack_.invalidate();
     resync_after_failure();
     emit state_changed();
     emit failed(result.error().code, QString::fromStdString(result.error().message));

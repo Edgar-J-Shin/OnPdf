@@ -47,6 +47,11 @@
 | `pdfium-trailer_unterminated.pdf` | invalid |  | 0 | pdfium | BSD-3-Clause | 손상: trailer 미종료 |
 | `pdfium-bug_481363.pdf` | ok |  | 1 | pdfium | BSD-3-Clause | 실제 버그 리포트 손상 파일 |
 | `not_a_pdf.txt` | invalid |  | 0 | gen | Apache-2.0 | PDF 가 아닌 파일 |
+| `text-lines-basic.pdf` | ok |  | 1 | gen | Apache-2.0 | 기존 줄 수정(#65): 평범한 줄, Tc/Tw 줄, 굵게 섞인 줄, 같은 BT 의 두 Tj(밀림), TJ·'·" 연산자, 지울 줄, 도형 |
+| `text-lines-basic-enc.pdf` | password | user `user` / owner `owner` | 1 | gen | Apache-2.0 | text-lines-basic 의 RC4 암호본 — 암호 유지 수술 |
+| `text-lines-form.pdf` | ok |  | 4 | gen | Apache-2.0 | Form XObject 1단계 줄(수정 가능)·2단계 줄(불가), 쪽 직속 줄, 이미지; 2쪽은 BT 안에서 나뉜 /Contents 배열(밀림); 3·4쪽은 공유 Form(불가) |
+| `text-lines-type3.pdf` | ok |  | 1 | gen | Apache-2.0 | Type3 줄(대체 글꼴)·임베딩 CID 한글 줄(원본 글꼴 재사용)·보이지 않는 3 Tr 줄(불가) |
+| `text-lines-kern.pdf` | ok |  | 1 | gen | Apache-2.0 | 줄 폭 맞춤(#77): TJ 넓힘·Tc 자간·끝 공백·좁힘 커닝·보통·큰 자간(한계)·배열 문자열 하나 TJ 줄 |
 <!-- manifest:end -->
 
 ## 출처·라이선스
@@ -54,6 +59,9 @@
 - `gen+qpdf` = `simple.pdf` 를 qpdf 로 AES-256 암호화 (출력에 임의 IV 가 들어가 결정적이지 않으므로 `--check` 대상에서 제외)
 - `pdfium` = PDFium `testing/resources` (chromium/8152), BSD-3-Clause — `licenses/PDFium-LICENSE.txt`
 - `fonts/NotoSansKR-subset.ttf` = Noto Sans KR 의 wght 400 서브셋(family 이름 변경), SIL OFL 1.1 — `licenses/OFL.txt`
+- `fonts/NotoSansCJKkr-subset.otf` = Noto Sans CJK KR(OTF, CID-keyed CFF)의 같은 글자 서브셋 — CFF 저장 후처리·charset 테스트(#73), SIL OFL 1.1
+- `fonts/NotoSansKR-subset.ttc` = 위 TTF 서브셋 2벌(면 1 family `NotoSansKR-subset-Face1`) — TTC 면 선택 테스트(#73)
+- `fonts/SourceSans3-subset.otf` = Adobe Source Sans 3(OTF, 비CID CFF)의 라틴 서브셋 — charset 을 손대지 않는 변환 경로 테스트(#73 리뷰 W4), SIL OFL 1.1
 
 ## 갱신 절차
 ```bash

@@ -42,10 +42,14 @@ onpdf_add_test(onpdf_unit_tests
   unit/annotation_test.cpp
   unit/annotation_commands_test.cpp
   unit/font_face_test.cpp
+  unit/font_catalog_test.cpp
+  unit/cff_charset_test.cpp
   unit/text_layout_test.cpp
   unit/add_text_command_test.cpp
   unit/text_object_test.cpp
   unit/text_box_commands_test.cpp
+  unit/text_line_test.cpp
+  unit/text_line_commands_test.cpp
   unit/page_object_test.cpp
   unit/form_test.cpp
   unit/object_commands_test.cpp
@@ -57,6 +61,7 @@ onpdf_add_test(onpdf_unit_tests
 )
 target_compile_definitions(onpdf_unit_tests PRIVATE ONPDF_TEST_GLOBAL_PDFIUM=1)
 target_link_libraries(onpdf_unit_tests PRIVATE onpdf::edit)
+target_include_directories(onpdf_unit_tests PRIVATE ${CMAKE_SOURCE_DIR}/core/src/engine)  # cff_charset·fnv 내부 헤더 (#73)
 
 onpdf_add_test(onpdf_render_tests
   render/render_regression_test.cpp
@@ -92,6 +97,7 @@ if(ONPDF_BUILD_APP)
     app/annotation_test.cpp
     app/merge_split_test.cpp
     app/text_tool_test.cpp
+    app/text_line_tool_test.cpp
     app/image_tool_test.cpp
     app/form_tool_test.cpp
   )
@@ -135,4 +141,20 @@ if(ONPDF_BUILD_SPIKES)
   target_compile_definitions(onpdf_spike_font_cleanup PRIVATE ONPDF_TESTDATA_DIR="${ONPDF_TESTDATA_DIR}" ONPDF_TEST_GLOBAL_PDFIUM=1)
   onpdf_set_warnings(onpdf_spike_font_cleanup)
   onpdf_set_runtime_rpath(onpdf_spike_font_cleanup)
+
+  # Spike (#71): CFF 후처리·TTC 면 선택·시스템 글꼴 탐색 — HarfBuzz·qpdf 헤더 직접
+  find_package(harfbuzz CONFIG REQUIRED)
+  add_executable(onpdf_spike_font_subst spike/font_subst_spike.cpp)
+  target_include_directories(onpdf_spike_font_subst PRIVATE ${_spike_qpdf_inc})
+  target_link_libraries(onpdf_spike_font_subst PRIVATE onpdf::core onpdf::edit harfbuzz::harfbuzz-subset harfbuzz::harfbuzz GTest::gtest GTest::gtest_main)
+  target_compile_definitions(onpdf_spike_font_subst PRIVATE ONPDF_TESTDATA_DIR="${ONPDF_TESTDATA_DIR}" ONPDF_TEST_GLOBAL_PDFIUM=1)
+  onpdf_set_warnings(onpdf_spike_font_subst)
+  onpdf_set_runtime_rpath(onpdf_spike_font_subst)
+
+  # Spike (#75): 코퍼스 줄 수정 측정 — 제품 파이프라인(core+edit)만
+  add_executable(onpdf_spike_line_edit_measure spike/line_edit_measure_spike.cpp)
+  target_link_libraries(onpdf_spike_line_edit_measure PRIVATE onpdf::core onpdf::edit)
+  target_compile_definitions(onpdf_spike_line_edit_measure PRIVATE ONPDF_TESTDATA_DIR="${ONPDF_TESTDATA_DIR}")
+  onpdf_set_warnings(onpdf_spike_line_edit_measure)
+  onpdf_set_runtime_rpath(onpdf_spike_line_edit_measure)
 endif()
