@@ -5,8 +5,8 @@
 
 #include "onpdf/core/engine/document_handle.h"
 #include "onpdf/core/view/tile_source.h"
-#include "ui_dispatcher.h"
 
+#include "ui_dispatcher.h"
 #include <QObject>
 #include <QPointer>
 

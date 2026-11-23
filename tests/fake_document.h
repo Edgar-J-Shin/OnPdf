@@ -1,7 +1,7 @@
 #pragma once
 
-// edit/ Command 단위 테스트용 가짜 EditableDocument. PDFium 없이 쪽 크기·회전·순서(label)·스냅샷을 흉내 낸다.
-// label 은 쪽의 정체성이다: 삭제·이동·삽입 뒤 순서를 라벨 열로 확인한다
+// edit/ Command 단위 테스트용 가짜 EditableDocument. PDFium 없이 쪽 크기·회전·순서(label)·스냅샷을
+// 흉내 낸다. label 은 쪽의 정체성이다: 삭제·이동·삽입 뒤 순서를 라벨 열로 확인한다
 
 #include "onpdf/core/engine/editable_document.h"
 #include "onpdf/core/platform/path.h"
@@ -31,7 +31,8 @@ struct FakeFile {
 class FakeDocument final : public engine::EditableDocument {
  public:
   explicit FakeDocument(std::vector<engine::PageSize> sizes) {
-    for (std::size_t i = 0; i < sizes.size(); ++i) pages_.push_back({sizes[i], 0, static_cast<int>(i)});
+    for (std::size_t i = 0; i < sizes.size(); ++i)
+      pages_.push_back({sizes[i], 0, static_cast<int>(i)});
   }
 
   // ---- 테스트 보조 ----
@@ -45,13 +46,15 @@ class FakeDocument final : public engine::EditableDocument {
     for (const auto& p : pages_) out.push_back(p.rotation);
     return out;
   }
-  void add_file(const std::filesystem::path& path, FakeFile file) { files_[path_to_utf8(path)] = std::move(file); }
+  void add_file(const std::filesystem::path& path, FakeFile file) {
+    files_[path_to_utf8(path)] = std::move(file);
+  }
   [[nodiscard]] int snapshot_count() const noexcept { return static_cast<int>(snapshots_.size()); }
   int move_calls = 0;  // move_pages 호출 수 (apply_order 효율 확인용)
   // ---- 주석 (가짜: 쪽 포인트 == 사용자 좌표로 둔다) ----
   struct FakeAnnot {
     engine::AnnotationSnapshot snap;
-    onpdf::Rect rect;  // 쪽 포인트
+    onpdf::Rect rect;     // 쪽 포인트
     bool has_ap = false;  // 렌더로 생긴 AP (색 변경·스냅샷이 지운다)
   };
   int fail_add_on_page = -1;  // 이 쪽에 add_annotation 을 하면 실패 (보상 삭제 테스트)
@@ -73,12 +76,19 @@ class FakeDocument final : public engine::EditableDocument {
     return it == texts_.end() ? kEmpty : it->second;
   }
   [[nodiscard]] int font_count() const noexcept { return static_cast<int>(font_keys_.size()); }
-  [[nodiscard]] Result<engine::TextObjectsResult> add_text_objects(int page, const engine::TextObjectsSpec& spec) override {
+  [[nodiscard]] Result<engine::TextObjectsResult> add_text_objects(
+      int page, const engine::TextObjectsSpec& spec) override {
     if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
-    if (page == fail_add_text_on_page) return make_error(ErrorCode::kInvalidState, "injected failure");
-    if (fail_next_add_text > 0) { --fail_next_add_text; return make_error(ErrorCode::kInvalidState, "injected add failure"); }
-    if (spec.lines.empty() || spec.font.key.empty()) return make_error(ErrorCode::kInvalidArgument, "spec");
-    if (!spec.ids.empty() && spec.ids.size() != spec.lines.size()) return make_error(ErrorCode::kInvalidArgument, "ids");
+    if (page == fail_add_text_on_page)
+      return make_error(ErrorCode::kInvalidState, "injected failure");
+    if (fail_next_add_text > 0) {
+      --fail_next_add_text;
+      return make_error(ErrorCode::kInvalidState, "injected add failure");
+    }
+    if (spec.lines.empty() || spec.font.key.empty())
+      return make_error(ErrorCode::kInvalidArgument, "spec");
+    if (!spec.ids.empty() && spec.ids.size() != spec.lines.size())
+      return make_error(ErrorCode::kInvalidArgument, "ids");
     font_keys_[spec.font.key] = spec.font.ttf.size();
     engine::TextObjectsResult result;
     result.box = spec.box.empty() ? "fake-box-" + std::to_string(next_text_++) : spec.box;
@@ -96,19 +106,29 @@ class FakeDocument final : public engine::EditableDocument {
     }
     return result;
   }
-  [[nodiscard]] Result<void> move_page_objects(int page, const std::vector<std::string>& ids, onpdf::Point delta) override {
+  [[nodiscard]] Result<void> move_page_objects(int page, const std::vector<std::string>& ids,
+                                               onpdf::Point delta) override {
     auto& list = texts_[page];
     auto& images = images_[page];
     for (const auto& id : ids) {
-      const bool text = std::any_of(list.begin(), list.end(), [&](const FakeTextObject& t) { return t.id == id; });
-      const bool image = std::any_of(images.begin(), images.end(), [&](const FakeImage& i) { return i.id == id; });
-      if (!text && !image) return make_error(ErrorCode::kInvalidArgument, "page object not found: " + id);
+      const bool text = std::any_of(list.begin(), list.end(),
+                                    [&](const FakeTextObject& t) { return t.id == id; });
+      const bool image =
+          std::any_of(images.begin(), images.end(), [&](const FakeImage& i) { return i.id == id; });
+      if (!text && !image)
+        return make_error(ErrorCode::kInvalidArgument, "page object not found: " + id);
     }
     for (auto& t : list) {
-      if (std::find(ids.begin(), ids.end(), t.id) != ids.end()) { t.line.origin.x += delta.x; t.line.origin.y += delta.y; }
+      if (std::find(ids.begin(), ids.end(), t.id) != ids.end()) {
+        t.line.origin.x += delta.x;
+        t.line.origin.y += delta.y;
+      }
     }
     for (auto& i : images) {
-      if (std::find(ids.begin(), ids.end(), i.id) != ids.end()) { i.rect.x += delta.x; i.rect.y += delta.y; }
+      if (std::find(ids.begin(), ids.end(), i.id) != ids.end()) {
+        i.rect.x += delta.x;
+        i.rect.y += delta.y;
+      }
     }
     return {};
   }
@@ -138,10 +158,15 @@ class FakeDocument final : public engine::EditableDocument {
     images_[page].push_back(image);
     renumber_foreign(page);
   }
-  [[nodiscard]] Result<std::string> add_image_object(int page, const engine::ImageSpec& spec) override {
+  [[nodiscard]] Result<std::string> add_image_object(int page,
+                                                     const engine::ImageSpec& spec) override {
     if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
-    if (fail_add_image > 0) { --fail_add_image; return make_error(ErrorCode::kInvalidState, "injected image failure"); }
-    if (!(spec.rect.w > 0) || !(spec.rect.h > 0)) return make_error(ErrorCode::kInvalidArgument, "rect");
+    if (fail_add_image > 0) {
+      --fail_add_image;
+      return make_error(ErrorCode::kInvalidState, "injected image failure");
+    }
+    if (!(spec.rect.w > 0) || !(spec.rect.h > 0))
+      return make_error(ErrorCode::kInvalidArgument, "rect");
     FakeImage image;
     image.id = spec.id.empty() ? "fake-image-" + std::to_string(next_text_++) : spec.id;
     image.rect = spec.rect;
@@ -199,21 +224,28 @@ class FakeDocument final : public engine::EditableDocument {
     }
     return make_error(ErrorCode::kInvalidArgument, "image not found");
   }
-  [[nodiscard]] Result<void> set_object_rect(int page, std::string_view id, onpdf::Rect rect) override {
+  [[nodiscard]] Result<void> set_object_rect(int page, std::string_view id,
+                                             onpdf::Rect rect) override {
     if (!(rect.w > 0) || !(rect.h > 0)) return make_error(ErrorCode::kInvalidArgument, "rect");
     for (auto& i : images_[page]) {
-      if (i.id == id) { i.rect = rect; return {}; }
+      if (i.id == id) {
+        i.rect = rect;
+        return {};
+      }
     }
     return make_error(ErrorCode::kInvalidArgument, "image not found");
   }
-  [[nodiscard]] Result<engine::DetachedId> detach_objects(int page, const std::vector<std::string>& ids) override {
+  [[nodiscard]] Result<engine::DetachedId> detach_objects(
+      int page, const std::vector<std::string>& ids) override {
     FakeDetached d;
     d.page = page;
     auto& texts = texts_[page];
     auto& images = images_[page];
     for (const auto& id : ids) {
-      const bool found = std::any_of(texts.begin(), texts.end(), [&](const FakeTextObject& t) { return t.id == id; }) ||
-                         std::any_of(images.begin(), images.end(), [&](const FakeImage& i) { return i.id == id; });
+      const bool found =
+          std::any_of(texts.begin(), texts.end(),
+                      [&](const FakeTextObject& t) { return t.id == id; }) ||
+          std::any_of(images.begin(), images.end(), [&](const FakeImage& i) { return i.id == id; });
       if (!found) return make_error(ErrorCode::kInvalidArgument, "page object not found: " + id);
     }
     for (std::size_t k = 0; k < texts.size();) {
@@ -241,21 +273,28 @@ class FakeDocument final : public engine::EditableDocument {
     if (it == detached_.end()) return make_error(ErrorCode::kInvalidArgument, "unknown detached");
     auto& texts = texts_[it->second.page];
     auto& images = images_[it->second.page];
-    for (auto& [index, t] : it->second.texts) texts.insert(texts.begin() + static_cast<std::ptrdiff_t>(std::min(index, texts.size())), t);
-    for (auto& [index, i] : it->second.images) images.insert(images.begin() + static_cast<std::ptrdiff_t>(std::min(index, images.size())), i);
+    for (auto& [index, t] : it->second.texts)
+      texts.insert(texts.begin() + static_cast<std::ptrdiff_t>(std::min(index, texts.size())), t);
+    for (auto& [index, i] : it->second.images)
+      images.insert(images.begin() + static_cast<std::ptrdiff_t>(std::min(index, images.size())),
+                    i);
     detached_.erase(it);
     return {};
   }
   void drop_detached(engine::DetachedId id) noexcept override { detached_.erase(id); }
-  [[nodiscard]] Result<void> remove_text_objects(int page, const std::vector<std::string>& ids) override {
+  [[nodiscard]] Result<void> remove_text_objects(int page,
+                                                 const std::vector<std::string>& ids) override {
     auto& list = texts_[page];
     for (const auto& id : ids) {
-      if (std::none_of(list.begin(), list.end(), [&](const FakeTextObject& t) { return t.id == id; })) {
+      if (std::none_of(list.begin(), list.end(),
+                       [&](const FakeTextObject& t) { return t.id == id; })) {
         return make_error(ErrorCode::kInvalidArgument, "text object not found: " + id);
       }
     }
     for (const auto& id : ids) {
-      list.erase(std::remove_if(list.begin(), list.end(), [&](const FakeTextObject& t) { return t.id == id; }), list.end());
+      list.erase(std::remove_if(list.begin(), list.end(),
+                                [&](const FakeTextObject& t) { return t.id == id; }),
+                 list.end());
     }
     return {};
   }
@@ -272,7 +311,8 @@ class FakeDocument final : public engine::EditableDocument {
       info.font_size = t.line.font_size;
       info.color = t.line.color;
       info.baseline_origin = t.line.origin;
-      info.bbox = {t.line.origin.x, t.line.origin.y - t.line.font_size, 100.0, t.line.font_size * 1.2};
+      info.bbox = {t.line.origin.x, t.line.origin.y - t.line.font_size, 100.0,
+                   t.line.font_size * 1.2};
       out.push_back(std::move(info));
     }
     return out;
@@ -285,7 +325,8 @@ class FakeDocument final : public engine::EditableDocument {
     bool covers = true;  // 원본 글꼴이 새 글자를 그릴 수 있다
     double size = 12.0;
   };
-  void add_line(int page, std::string id, std::string text, bool covers = true, bool editable = true) {
+  void add_line(int page, std::string id, std::string text, bool covers = true,
+                bool editable = true) {
     lines_[page].push_back(FakeLine{std::move(id), std::move(text), editable, covers, 12.0});
   }
   [[nodiscard]] const std::vector<FakeLine>& lines_on(int page) const {
@@ -293,7 +334,9 @@ class FakeDocument final : public engine::EditableDocument {
     const auto it = lines_.find(page);
     return it == lines_.end() ? kEmpty : it->second;
   }
-  [[nodiscard]] int document_state_count() const noexcept { return static_cast<int>(states_.size()); }
+  [[nodiscard]] int document_state_count() const noexcept {
+    return static_cast<int>(states_.size());
+  }
   bool fail_next_line_edit = false;
   [[nodiscard]] Result<std::vector<engine::TextLineInfo>> text_lines(int page) const override {
     if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
@@ -314,19 +357,23 @@ class FakeDocument final : public engine::EditableDocument {
     }
     return out;
   }
-  [[nodiscard]] Result<bool> line_font_covers(int page, std::string_view line_id, std::string_view) const override {
+  [[nodiscard]] Result<bool> line_font_covers(int page, std::string_view line_id,
+                                              std::string_view) const override {
     if (line_id.starts_with("onpdf-box-") || line_id.rfind("fake-box-", 0) == 0) {
-      for (const auto& t : text_objects_on(page)) if (t.box == line_id) return t.font_key == "original";
+      for (const auto& t : text_objects_on(page))
+        if (t.box == line_id) return t.font_key == "original";
       return make_error(ErrorCode::kInvalidArgument, "line not found");
     }
-    for (const auto& l : lines_on(page)) if (l.id == line_id) return l.covers;
+    for (const auto& l : lines_on(page))
+      if (l.id == line_id) return l.covers;
     return make_error(ErrorCode::kInvalidArgument, "line not found");
   }
-  [[nodiscard]] Result<engine::LineEditResult> remove_text_line(int page, std::string_view line_id) override {
+  [[nodiscard]] Result<engine::LineEditResult> remove_text_line(int page,
+                                                                std::string_view line_id) override {
     return edit_fake_line(page, line_id, nullptr);
   }
-  [[nodiscard]] Result<engine::LineEditResult> replace_text_line(int page, std::string_view line_id,
-                                                                 const engine::LineReplacement& r) override {
+  [[nodiscard]] Result<engine::LineEditResult> replace_text_line(
+      int page, std::string_view line_id, const engine::LineReplacement& r) override {
     return edit_fake_line(page, line_id, &r);
   }
   [[nodiscard]] Result<void> restore_document_state(engine::DocumentStateId id) override {
@@ -340,12 +387,15 @@ class FakeDocument final : public engine::EditableDocument {
   void drop_document_state(engine::DocumentStateId id) noexcept override { states_.erase(id); }
 
   // ---- 폼 (#51): 쪽별 위젯. 같은 이름의 위젯은 값을 공유한다 ----
-  void add_widget(int page, engine::FormWidgetInfo info) { widgets_[page].push_back(std::move(info)); }
+  void add_widget(int page, engine::FormWidgetInfo info) {
+    widgets_[page].push_back(std::move(info));
+  }
   bool fail_form = false;
   [[nodiscard]] const engine::FormWidgetInfo* widget(int page, const engine::FieldRef& ref) const {
     const auto it = widgets_.find(page);
     if (it == widgets_.end()) return nullptr;
-    for (const auto& w : it->second) if (w.ref == ref) return &w;
+    for (const auto& w : it->second)
+      if (w.ref == ref) return &w;
     return nullptr;
   }
   [[nodiscard]] Result<std::vector<engine::FormWidgetInfo>> form_widgets(int page) const override {
@@ -353,23 +403,29 @@ class FakeDocument final : public engine::EditableDocument {
     const auto it = widgets_.find(page);
     return it == widgets_.end() ? std::vector<engine::FormWidgetInfo>{} : it->second;
   }
-  [[nodiscard]] Result<std::vector<int>> set_form_text(int page, const engine::FieldRef& ref, std::string_view utf8) override {
+  [[nodiscard]] Result<std::vector<int>> set_form_text(int page, const engine::FieldRef& ref,
+                                                       std::string_view utf8) override {
     auto target = mutable_widget(page, ref);
     if (!target) return std::unexpected(target.error());
-    if ((*target)->type != engine::FieldType::kText && !(*target)->editable_combo) return make_error(ErrorCode::kInvalidArgument, "not text");
+    if ((*target)->type != engine::FieldType::kText && !(*target)->editable_combo)
+      return make_error(ErrorCode::kInvalidArgument, "not text");
     std::string value(utf8);
-    if ((*target)->max_len > 0 && value.size() > static_cast<std::size_t>((*target)->max_len)) value.resize(static_cast<std::size_t>((*target)->max_len));
+    if ((*target)->max_len > 0 && value.size() > static_cast<std::size_t>((*target)->max_len))
+      value.resize(static_cast<std::size_t>((*target)->max_len));
     return for_field(ref.name, [&](engine::FormWidgetInfo& w) {
       w.value = value;
       w.selected.clear();
-      for (std::size_t i = 0; i < w.options.size(); ++i) if (w.options[i] == value) w.selected.push_back(static_cast<int>(i));
+      for (std::size_t i = 0; i < w.options.size(); ++i)
+        if (w.options[i] == value) w.selected.push_back(static_cast<int>(i));
     });
   }
-  [[nodiscard]] Result<std::vector<int>> set_form_checked(int page, const engine::FieldRef& ref, bool checked) override {
+  [[nodiscard]] Result<std::vector<int>> set_form_checked(int page, const engine::FieldRef& ref,
+                                                          bool checked) override {
     auto target = mutable_widget(page, ref);
     if (!target) return std::unexpected(target.error());
     const engine::FieldType type = (*target)->type;
-    if (type == engine::FieldType::kRadio && !checked && (*target)->checked) return make_error(ErrorCode::kUnsupported, "radio clear");
+    if (type == engine::FieldType::kRadio && !checked && (*target)->checked)
+      return make_error(ErrorCode::kUnsupported, "radio clear");
     const std::string on = (*target)->export_value;
     return for_field(ref.name, [&](engine::FormWidgetInfo& w) {
       if (type == engine::FieldType::kRadio) {
@@ -380,21 +436,29 @@ class FakeDocument final : public engine::EditableDocument {
       w.value = checked ? on : (type == engine::FieldType::kRadio ? w.value : "Off");
     });
   }
-  [[nodiscard]] Result<std::vector<int>> set_form_selection(int page, const engine::FieldRef& ref, const std::vector<int>& indices) override {
+  [[nodiscard]] Result<std::vector<int>> set_form_selection(
+      int page, const engine::FieldRef& ref, const std::vector<int>& indices) override {
     auto target = mutable_widget(page, ref);
     if (!target) return std::unexpected(target.error());
-    for (int i : indices) if (i < 0 || i >= static_cast<int>((*target)->options.size())) return make_error(ErrorCode::kInvalidArgument, "index");
+    for (int i : indices)
+      if (i < 0 || i >= static_cast<int>((*target)->options.size()))
+        return make_error(ErrorCode::kInvalidArgument, "index");
     return for_field(ref.name, [&](engine::FormWidgetInfo& w) {
       w.selected = indices;
-      w.value = indices.empty() ? std::string() : w.options[static_cast<std::size_t>(indices.front())];
+      w.value =
+          indices.empty() ? std::string() : w.options[static_cast<std::size_t>(indices.front())];
     });
   }
 
-  [[nodiscard]] int annotation_count(int page) const { const auto it = annots_.find(page); return it == annots_.end() ? 0 : static_cast<int>(it->second.size()); }
+  [[nodiscard]] int annotation_count(int page) const {
+    const auto it = annots_.find(page);
+    return it == annots_.end() ? 0 : static_cast<int>(it->second.size());
+  }
   [[nodiscard]] const FakeAnnot* annotation(int page, std::string_view id) const {
     const auto it = annots_.find(page);
     if (it == annots_.end()) return nullptr;
-    for (const auto& a : it->second) if (a.snap.id == id) return &a;
+    for (const auto& a : it->second)
+      if (a.snap.id == id) return &a;
     return nullptr;
   }
 
@@ -416,7 +480,8 @@ class FakeDocument final : public engine::EditableDocument {
   }
   [[nodiscard]] Result<void> delete_pages(const std::vector<int>& pages) override {
     if (auto ok = check_list(pages, page_count()); !ok) return ok;
-    if (static_cast<int>(pages.size()) >= page_count()) return make_error(ErrorCode::kInvalidArgument, "all");
+    if (static_cast<int>(pages.size()) >= page_count())
+      return make_error(ErrorCode::kInvalidArgument, "all");
     for (auto it = pages.rbegin(); it != pages.rend(); ++it) pages_.erase(pages_.begin() + *it);
     return {};
   }
@@ -425,19 +490,22 @@ class FakeDocument final : public engine::EditableDocument {
     std::vector<int> sorted = pages;
     std::sort(sorted.begin(), sorted.end());
     if (auto ok = check_list(sorted, count); !ok) return ok;
-    if (dest < 0 || dest > count - static_cast<int>(pages.size())) return make_error(ErrorCode::kInvalidArgument, "dest");
+    if (dest < 0 || dest > count - static_cast<int>(pages.size()))
+      return make_error(ErrorCode::kInvalidArgument, "dest");
     ++move_calls;
     std::vector<FakePage> block;
     for (int p : pages) block.push_back(pages_[static_cast<std::size_t>(p)]);
     std::vector<FakePage> remaining;
     for (int i = 0; i < count; ++i) {
-      if (std::find(pages.begin(), pages.end(), i) == pages.end()) remaining.push_back(pages_[static_cast<std::size_t>(i)]);
+      if (std::find(pages.begin(), pages.end(), i) == pages.end())
+        remaining.push_back(pages_[static_cast<std::size_t>(i)]);
     }
     remaining.insert(remaining.begin() + dest, block.begin(), block.end());
     pages_ = std::move(remaining);
     return {};
   }
-  [[nodiscard]] Result<engine::SnapshotId> copy_pages_to_snapshot(const std::vector<int>& pages) override {
+  [[nodiscard]] Result<engine::SnapshotId> copy_pages_to_snapshot(
+      const std::vector<int>& pages) override {
     if (auto ok = check_list(pages, page_count()); !ok) return std::unexpected(ok.error());
     FakeFile snap;
     for (int p : pages) snap.pages.push_back(pages_[static_cast<std::size_t>(p)]);
@@ -448,7 +516,8 @@ class FakeDocument final : public engine::EditableDocument {
                                                          std::string_view password) override {
     const auto it = files_.find(path_to_utf8(file));
     if (it == files_.end()) return make_error(ErrorCode::kFileNotFound, "no such fake file");
-    if (it->second.password != password) return make_error(ErrorCode::kPasswordRequired, "password");
+    if (it->second.password != password)
+      return make_error(ErrorCode::kPasswordRequired, "password");
     snapshots_[next_] = it->second;
     return next_++;
   }
@@ -460,7 +529,8 @@ class FakeDocument final : public engine::EditableDocument {
     info.permissions.extract = it->second.extract;
     return info;
   }
-  [[nodiscard]] Result<void> insert_from_snapshot(engine::SnapshotId id, const std::vector<int>& src_pages,
+  [[nodiscard]] Result<void> insert_from_snapshot(engine::SnapshotId id,
+                                                  const std::vector<int>& src_pages,
                                                   int at) override {
     const auto it = snapshots_.find(id);
     if (it == snapshots_.end()) return make_error(ErrorCode::kInvalidArgument, "snapshot");
@@ -470,7 +540,8 @@ class FakeDocument final : public engine::EditableDocument {
       block = it->second.pages;
     } else {
       for (int p : src_pages) {
-        if (p < 0 || p >= static_cast<int>(it->second.pages.size())) return make_error(ErrorCode::kInvalidArgument, "src");
+        if (p < 0 || p >= static_cast<int>(it->second.pages.size()))
+          return make_error(ErrorCode::kInvalidArgument, "src");
         block.push_back(it->second.pages[static_cast<std::size_t>(p)]);
       }
     }
@@ -495,7 +566,8 @@ class FakeDocument final : public engine::EditableDocument {
       info.contents = a.snap.contents;
       info.author = a.snap.author;
       info.flags = a.snap.flags;
-      info.editable = a.snap.kind != engine::AnnotationKind::kLink && a.snap.kind != engine::AnnotationKind::kOther;
+      info.editable = a.snap.kind != engine::AnnotationKind::kLink &&
+                      a.snap.kind != engine::AnnotationKind::kOther;
       info.border_width = a.snap.border_width;
       info.has_border = a.snap.has_border;
       info.opacity = a.snap.color.a / 255.0f;
@@ -504,7 +576,8 @@ class FakeDocument final : public engine::EditableDocument {
     }
     return out;
   }
-  [[nodiscard]] Result<std::string> add_annotation(int page, const engine::AnnotationSpec& spec) override {
+  [[nodiscard]] Result<std::string> add_annotation(int page,
+                                                   const engine::AnnotationSpec& spec) override {
     if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
     if (page == fail_add_on_page) return make_error(ErrorCode::kInvalidState, "injected failure");
     FakeAnnot a;
@@ -517,19 +590,27 @@ class FakeDocument final : public engine::EditableDocument {
     a.snap.author = spec.author;
     a.snap.has_border = spec.border_width > 0;
     a.snap.border_width = static_cast<float>(spec.border_width);
-    if (spec.interior) { a.snap.interior = *spec.interior; a.snap.has_interior = true; }
+    if (spec.interior) {
+      a.snap.interior = *spec.interior;
+      a.snap.has_interior = true;
+    }
     a.rect = spec.rect;
     for (const auto& q : spec.quads) {
-      if (a.rect.empty()) { a.rect = q; continue; }
+      if (a.rect.empty()) {
+        a.rect = q;
+        continue;
+      }
       const double x0 = std::min(a.rect.x, q.x), y0 = std::min(a.rect.y, q.y);
-      const double x1 = std::max(a.rect.right(), q.right()), y1 = std::max(a.rect.bottom(), q.bottom());
+      const double x1 = std::max(a.rect.right(), q.right()),
+                   y1 = std::max(a.rect.bottom(), q.bottom());
       a.rect = {x0, y0, x1 - x0, y1 - y0};
     }
     a.snap.rect = {a.rect.x, a.rect.y, a.rect.right(), a.rect.bottom()};
     annots_[page].push_back(std::move(a));
     return annots_[page].back().snap.id;
   }
-  [[nodiscard]] Result<engine::AnnotationSnapshot> snapshot_annotation(int page, std::string_view id) override {
+  [[nodiscard]] Result<engine::AnnotationSnapshot> snapshot_annotation(
+      int page, std::string_view id) override {
     FakeAnnot* a = find_mutable(page, id);
     if (a == nullptr) return make_error(ErrorCode::kInvalidArgument, "annotation not found");
     if (a->snap.id.empty()) a->snap.id = "fake-" + std::to_string(next_nm_++);
@@ -546,32 +627,40 @@ class FakeDocument final : public engine::EditableDocument {
     }
     return make_error(ErrorCode::kInvalidArgument, "annotation not found");
   }
-  [[nodiscard]] Result<void> restore_annotation(int page, const engine::AnnotationSnapshot& snap) override {
+  [[nodiscard]] Result<void> restore_annotation(int page,
+                                                const engine::AnnotationSnapshot& snap) override {
     if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
-    if (fail_restores > 0) { --fail_restores; return make_error(ErrorCode::kInvalidState, "injected restore failure"); }
+    if (fail_restores > 0) {
+      --fail_restores;
+      return make_error(ErrorCode::kInvalidState, "injected restore failure");
+    }
     FakeAnnot a;
     a.snap = snap;
     a.rect = {snap.rect[0], snap.rect[1], snap.rect[2] - snap.rect[0], snap.rect[3] - snap.rect[1]};
     annots_[page].push_back(std::move(a));
     return {};
   }
-  [[nodiscard]] Result<void> set_annotation_color(int page, std::string_view id, engine::Color color) override {
+  [[nodiscard]] Result<void> set_annotation_color(int page, std::string_view id,
+                                                  engine::Color color) override {
     FakeAnnot* a = find_mutable(page, id);
     if (a == nullptr) return make_error(ErrorCode::kInvalidArgument, "annotation not found");
     a->has_ap = false;
     a->snap.color = color;
     return {};
   }
-  [[nodiscard]] Result<void> set_annotation_contents(int page, std::string_view id, std::string_view utf8) override {
+  [[nodiscard]] Result<void> set_annotation_contents(int page, std::string_view id,
+                                                     std::string_view utf8) override {
     FakeAnnot* a = find_mutable(page, id);
     if (a == nullptr) return make_error(ErrorCode::kInvalidArgument, "annotation not found");
     a->snap.contents = std::string(utf8);
     return {};
   }
-  [[nodiscard]] Result<void> set_annotation_border_width(int page, std::string_view id, double width) override {
+  [[nodiscard]] Result<void> set_annotation_border_width(int page, std::string_view id,
+                                                         double width) override {
     FakeAnnot* a = find_mutable(page, id);
     if (a == nullptr) return make_error(ErrorCode::kInvalidArgument, "annotation not found");
-    if (a->snap.has_bs) return make_error(ErrorCode::kInvalidArgument, "border width is fixed by /BS");
+    if (a->snap.has_bs)
+      return make_error(ErrorCode::kInvalidArgument, "border width is fixed by /BS");
     if (!(width > 0)) return make_error(ErrorCode::kInvalidArgument, "width");
     a->has_ap = false;
     a->snap.border_width = static_cast<float>(width);
@@ -580,7 +669,11 @@ class FakeDocument final : public engine::EditableDocument {
   }
   // 테스트용: 다른 프로그램이 /BS /W 로 만든 주석을 흉내 낸다 (/Border 는 없음)
   void set_bs(int page, std::string_view id) {
-    if (FakeAnnot* a = find_mutable(page, id)) { a->snap.has_bs = true; a->snap.has_border = false; a->snap.border_width = 0; }
+    if (FakeAnnot* a = find_mutable(page, id)) {
+      a->snap.has_bs = true;
+      a->snap.has_border = false;
+      a->snap.border_width = 0;
+    }
   }
   // 테스트용: 렌더를 흉내 내 AP 를 만든다 (색 변경이 AP 를 지우는지 확인)
   void fake_render(int page) {
@@ -618,14 +711,17 @@ class FakeDocument final : public engine::EditableDocument {
   FakeAnnot* find_mutable(int page, std::string_view id) {
     auto it = annots_.find(page);
     if (it == annots_.end()) return nullptr;
-    for (std::size_t i = 0; i < it->second.size(); ++i) if (matches(it->second[i], static_cast<int>(i), id)) return &it->second[i];
+    for (std::size_t i = 0; i < it->second.size(); ++i)
+      if (matches(it->second[i], static_cast<int>(i), id)) return &it->second[i];
     return nullptr;
   }
   static Result<void> check_list(const std::vector<int>& pages, int count) {
     if (pages.empty()) return make_error(ErrorCode::kInvalidArgument, "empty");
     for (std::size_t i = 0; i < pages.size(); ++i) {
-      if (pages[i] < 0 || pages[i] >= count) return make_error(ErrorCode::kInvalidArgument, "range");
-      if (i > 0 && pages[i] <= pages[i - 1]) return make_error(ErrorCode::kInvalidArgument, "order");
+      if (pages[i] < 0 || pages[i] >= count)
+        return make_error(ErrorCode::kInvalidArgument, "range");
+      if (i > 0 && pages[i] <= pages[i - 1])
+        return make_error(ErrorCode::kInvalidArgument, "order");
     }
     return {};
   }
@@ -661,7 +757,8 @@ class FakeDocument final : public engine::EditableDocument {
   };
   std::map<engine::DocumentStateId, FakeState> states_;
   engine::DocumentStateId next_state_ = 1;
-  Result<engine::LineEditResult> edit_fake_line(int page, std::string_view line_id, const engine::LineReplacement* r) {
+  Result<engine::LineEditResult> edit_fake_line(int page, std::string_view line_id,
+                                                const engine::LineReplacement* r) {
     if (!valid(page)) return make_error(ErrorCode::kPageNotFound, "page");
     if (fail_next_line_edit) {
       fail_next_line_edit = false;
@@ -673,18 +770,23 @@ class FakeDocument final : public engine::EditableDocument {
     if (!covers) return std::unexpected(covers.error());
     if (!onpdf_box) {
       auto& lines = lines_[page];
-      auto it = std::find_if(lines.begin(), lines.end(), [&](const FakeLine& l) { return l.id == line_id; });
+      auto it = std::find_if(lines.begin(), lines.end(),
+                             [&](const FakeLine& l) { return l.id == line_id; });
       if (it == lines.end()) return make_error(ErrorCode::kInvalidArgument, "line not found");
       if (!it->editable) return make_error(ErrorCode::kUnsupported, "fake");
-      if (r != nullptr && !*covers && !r->fallback) return make_error(ErrorCode::kInvalidArgument, "original font cannot draw the text");
+      if (r != nullptr && !*covers && !r->fallback)
+        return make_error(ErrorCode::kInvalidArgument, "original font cannot draw the text");
       result.before = next_state_++;
       states_[result.before] = FakeState{texts_, lines_, images_};
       lines.erase(it);
     } else {
       auto& texts = texts_[page];
-      const bool any = std::any_of(texts.begin(), texts.end(), [&](const FakeTextObject& t) { return t.box == line_id; });
+      const bool any = std::any_of(texts.begin(), texts.end(),
+                                   [&](const FakeTextObject& t) { return t.box == line_id; });
       if (!any) return make_error(ErrorCode::kInvalidArgument, "text box not found");
-      texts.erase(std::remove_if(texts.begin(), texts.end(), [&](const FakeTextObject& t) { return t.box == line_id; }), texts.end());
+      texts.erase(std::remove_if(texts.begin(), texts.end(),
+                                 [&](const FakeTextObject& t) { return t.box == line_id; }),
+                  texts.end());
     }
     if (r != nullptr) {
       FakeTextObject t;

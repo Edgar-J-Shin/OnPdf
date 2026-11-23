@@ -6,14 +6,16 @@
 
 namespace onpdf::edit {
 
-DeletePagesCommand::DeletePagesCommand(std::vector<int> pages) : pages_(normalize_pages(std::move(pages))) {}
+DeletePagesCommand::DeletePagesCommand(std::vector<int> pages)
+    : pages_(normalize_pages(std::move(pages))) {}
 
 Result<engine::ChangeSet> DeletePagesCommand::execute(engine::EditableDocument& doc) {
   if (pages_.empty()) return make_error(ErrorCode::kInvalidArgument, "delete: no pages");
   if (static_cast<int>(pages_.size()) >= doc.page_count()) {
     return make_error(ErrorCode::kInvalidArgument, "cannot delete all pages");
   }
-  // 다시 실행이면 이전 스냅샷을 버리고 지금 상태로 새로 뜬다 (그 사이 다른 편집이 이 쪽들을 바꿨을 수 있다)
+  // 다시 실행이면 이전 스냅샷을 버리고 지금 상태로 새로 뜬다 (그 사이 다른 편집이 이 쪽들을 바꿨을
+  // 수 있다)
   if (snapshot_ != 0) doc.drop_snapshot(snapshot_);
   snapshot_ = 0;
   auto snapshot = doc.copy_pages_to_snapshot(pages_);

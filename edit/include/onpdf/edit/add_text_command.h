@@ -17,12 +17,13 @@ namespace onpdf::edit {
 
 struct TextBoxSpec {
   int page = 0;
-  Point origin;                 // 상자 왼쪽 위 (쪽 포인트)
-  double size = 24.0;           // pt
+  Point origin;        // 상자 왼쪽 위 (쪽 포인트)
+  double size = 24.0;  // pt
   engine::Color color{0, 0, 0, 255};
-  std::string utf8;             // 여러 줄은 '\n'
-  double width = 0.0;           // 상자 폭 (pt). 0 이면 줄바꿈 없음 (#49)
-  double letter_spacing = 0.0;  // 원 줄 자간(pt) — 기존 줄을 고친 상자의 재수정이 마크 ls 를 이어 간다 (#77)
+  std::string utf8;    // 여러 줄은 '\n'
+  double width = 0.0;  // 상자 폭 (pt). 0 이면 줄바꿈 없음 (#49)
+  double letter_spacing =
+      0.0;  // 원 줄 자간(pt) — 기존 줄을 고친 상자의 재수정이 마크 ls 를 이어 간다 (#77)
   std::shared_ptr<const FontFace> face;
 };
 

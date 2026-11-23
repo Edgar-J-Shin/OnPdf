@@ -1,15 +1,13 @@
-// 폼 채우기 (#51, offscreen): 텍스트 칸 오버레이(확정·취소·Tab), 체크·라디오, 선택지 메뉴, 읽기 전용, 권한, 저장 전 확정
+// 폼 채우기 (#51, offscreen): 텍스트 칸 오버레이(확정·취소·Tab), 체크·라디오, 선택지 메뉴, 읽기
+// 전용, 권한, 저장 전 확정
+#include "onpdf/core/engine/pdfium_worker.h"
+#include "onpdf/core/platform/path.h"
+
+#include "../test_support.h"
 #include "document_view.h"
 #include "form_field_editor.h"
 #include "main_window.h"
-#include "onpdf/core/engine/pdfium_worker.h"
-#include "onpdf/core/platform/path.h"
 #include "ui_dispatcher.h"
-
-#include "../test_support.h"
-
-#include <gtest/gtest.h>
-
 #include <QAction>
 #include <QApplication>
 #include <QElapsedTimer>
@@ -20,8 +18,8 @@
 #include <QPlainTextEdit>
 #include <QStatusBar>
 #include <QTimer>
-
 #include <filesystem>
+#include <gtest/gtest.h>
 
 namespace onpdf::app {
 namespace {
@@ -69,7 +67,8 @@ class FormToolTest : public ::testing::Test {
   bool open_path(const std::filesystem::path& path) {
     const QString file = QString::fromStdString(onpdf::path_to_utf8(path.filename()));
     window_.open_file(QString::fromStdString(onpdf::path_to_utf8(path)));
-    return spin_until([&] { return window_.windowTitle().contains(file) && view()->has_document(); });
+    return spin_until(
+        [&] { return window_.windowTitle().contains(file) && view()->has_document(); });
   }
   std::filesystem::path open_copy(const char* name) {
     const auto copy = dir_ / name;
@@ -80,7 +79,8 @@ class FormToolTest : public ::testing::Test {
   bool idle() { return !window_.edit_controller()->busy() && !window_.saving(); }
   std::optional<engine::FormWidgetInfo> field(int page, const std::string& name, int control = 0) {
     if (const auto* list = view()->form_widgets(page)) {
-      for (const auto& w : *list) if (w.ref.name == name && w.ref.nth == control) return w;
+      for (const auto& w : *list)
+        if (w.ref.name == name && w.ref.nth == control) return w;
     }
     return std::nullopt;
   }
@@ -102,11 +102,12 @@ class FormToolTest : public ::testing::Test {
     return view()->page_rect_to_viewport(page, w ? w->rect : onpdf::Rect{}).center();
   }
   void click(QPointF at) {
-    QMouseEvent press(QEvent::MouseButtonPress, at, view()->viewport()->mapToGlobal(at.toPoint()), Qt::LeftButton,
-                      Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent press(QEvent::MouseButtonPress, at, view()->viewport()->mapToGlobal(at.toPoint()),
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(view()->viewport(), &press);
-    QMouseEvent release(QEvent::MouseButtonRelease, at, view()->viewport()->mapToGlobal(at.toPoint()), Qt::LeftButton,
-                        Qt::NoButton, Qt::NoModifier);
+    QMouseEvent release(QEvent::MouseButtonRelease, at,
+                        view()->viewport()->mapToGlobal(at.toPoint()), Qt::LeftButton, Qt::NoButton,
+                        Qt::NoModifier);
     QApplication::sendEvent(view()->viewport(), &release);
   }
   void settle_clicks() {  // 연속 클릭 판정(두 번 클릭)을 피한다
@@ -124,7 +125,9 @@ class FormToolTest : public ::testing::Test {
     QKeyEvent ev(QEvent::KeyPress, k, mods);
     QApplication::sendEvent(target, &ev);
   }
-  bool wait_widgets() { return spin_until([&] { return field(0, "name").has_value(); }); }
+  bool wait_widgets() {
+    return spin_until([&] { return field(0, "name").has_value(); });
+  }
 
   ScopedTempDir dir_;
   UiDispatcher dispatcher_;
@@ -157,7 +160,8 @@ TEST_F(FormToolTest, TextFieldOverlayCommitsAndUndoes) {
   settle_clicks();
   EXPECT_TRUE(idle());
   EXPECT_EQ(field(0, "name")->value, "Hong");
-  EXPECT_FALSE(window_.edit_controller()->can_undo() && window_.undo_action()->text().contains(QStringLiteral("폼 입력")) &&
+  EXPECT_FALSE(window_.edit_controller()->can_undo() &&
+               window_.undo_action()->text().contains(QStringLiteral("폼 입력")) &&
                field(0, "name")->value != "Hong");
 }
 
@@ -169,17 +173,25 @@ TEST_F(FormToolTest, TabMovesThroughTextFieldsAndSkipsReadOnly) {
   key(editor_input(), Qt::Key_Tab);
   ASSERT_TRUE(spin_until([&] { return view()->form_editor() != nullptr; }));
   EXPECT_EQ(view()->form_editor()->widget().ref.name, "address");
-  ASSERT_NE(view()->form_editor()->findChild<QPlainTextEdit*>(QStringLiteral("form_text_multi")), nullptr) << "여러 줄";
+  ASSERT_NE(view()->form_editor()->findChild<QPlainTextEdit*>(QStringLiteral("form_text_multi")),
+            nullptr)
+      << "여러 줄";
   key(editor_input(), Qt::Key_Return);  // 여러 줄: Enter 는 줄바꿈, 확정하지 않는다
   EXPECT_NE(view()->form_editor(), nullptr);
   view()->form_editor()->set_text(QStringLiteral("Seoul\nGangnam"));
   key(editor_input(), Qt::Key_Tab);
-  ASSERT_TRUE(spin_until([&] { return view()->form_editor() != nullptr && view()->form_editor()->widget().ref.name != "address"; }));
+  ASSERT_TRUE(spin_until([&] {
+    return view()->form_editor() != nullptr &&
+           view()->form_editor()->widget().ref.name != "address";
+  }));
   EXPECT_EQ(view()->form_editor()->widget().ref.name, "zip") << "읽기 전용 empid 를 건너뛴다";
   EXPECT_EQ(qobject_cast<QLineEdit*>(editor_input())->maxLength(), 5);
   view()->form_editor()->set_text(QStringLiteral("06236"));
   key(editor_input(), Qt::Key_Backtab, Qt::ShiftModifier);
-  ASSERT_TRUE(spin_until([&] { return view()->form_editor() != nullptr && view()->form_editor()->widget().ref.name == "address"; }));
+  ASSERT_TRUE(spin_until([&] {
+    return view()->form_editor() != nullptr &&
+           view()->form_editor()->widget().ref.name == "address";
+  }));
   view()->cancel_form_editor();
   ASSERT_TRUE(wait_value(0, "address", "Seoul\nGangnam")) << field(0, "address")->value;
   ASSERT_TRUE(wait_value(0, "zip", "06236"));
@@ -220,9 +232,15 @@ TEST_F(FormToolTest, ChoiceMenuAndDirectEntry) {
   click(center_of(0, "city"));
   ASSERT_TRUE(wait_value(0, "city", "Daegu"));
   ASSERT_TRUE(window_.choose_form_option(0, {"subjects", 0}, {0, 3}));
-  ASSERT_TRUE(spin_until([&] { const auto w = field(0, "subjects"); return idle() && w && w->selected == std::vector<int>{0, 3}; }));
+  ASSERT_TRUE(spin_until([&] {
+    const auto w = field(0, "subjects");
+    return idle() && w && w->selected == std::vector<int>{0, 3};
+  }));
   ASSERT_TRUE(window_.edit_controller()->undo());
-  ASSERT_TRUE(spin_until([&] { const auto w = field(0, "subjects"); return idle() && w && w->selected.empty(); }));
+  ASSERT_TRUE(spin_until([&] {
+    const auto w = field(0, "subjects");
+    return idle() && w && w->selected.empty();
+  }));
   // 편집 가능 콤보: 메뉴의 "직접 입력…" → 오버레이
   settle_clicks();
   when_popup("form_choice_menu", [](QMenu* menu) {

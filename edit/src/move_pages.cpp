@@ -22,7 +22,8 @@ Result<engine::ChangeSet> MovePagesCommand::execute(engine::EditableDocument& do
 Result<engine::ChangeSet> MovePagesCommand::undo(engine::EditableDocument& doc) {
   if (order_.empty()) return make_error(ErrorCode::kInvalidState, "undo before execute");
   // 자리 old 에는 지금 order_ 에서 old 가 있는 위치(inverse[old])의 쪽이 와야 한다
-  if (auto restored = apply_order(doc, invert_order(order_)); !restored) return std::unexpected(restored.error());
+  if (auto restored = apply_order(doc, invert_order(order_)); !restored)
+    return std::unexpected(restored.error());
   return structural_change(doc, pages_.front(), pages_);
 }
 

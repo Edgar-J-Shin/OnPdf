@@ -19,9 +19,9 @@
 namespace onpdf::edit {
 
 struct ShapedGlyph {
-  std::uint32_t gid = 0;  // 원본 폰트의 글리프 ID
-  std::u32string text;  // 그 글리프를 만든 입력 글자들 (클러스터 전체: NFD 한글·결합 문자·합자도
-                        // ToUnicode 에 그대로)
+  std::uint32_t gid = 0;   // 원본 폰트의 글리프 ID
+  std::u32string text;     // 그 글리프를 만든 입력 글자들 (클러스터 전체: NFD 한글·결합 문자·합자도
+                           // ToUnicode 에 그대로)
   double x_advance = 0.0;  // pt
 };
 

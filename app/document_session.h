@@ -5,12 +5,11 @@
 
 #include "onpdf/core/engine/document_handle.h"
 #include "onpdf/core/engine/pdfium_worker.h"
-#include "ui_dispatcher.h"
 
+#include "ui_dispatcher.h"
 #include <QImage>
 #include <QObject>
 #include <QString>
-
 #include <cstdint>
 
 namespace onpdf::app {
@@ -34,7 +33,9 @@ class DocumentSession : public QObject {
   [[nodiscard]] const engine::DocumentHandle& handle() const noexcept { return handle_; }
   [[nodiscard]] const engine::DocumentInfo& info() const { return handle_.info(); }
   [[nodiscard]] QString path() const { return path_; }
-  [[nodiscard]] QString password() const { return password_; }  // 열 때 쓴 암호 (분할 등 디스크 파일을 다시 읽는 작업용)
+  [[nodiscard]] QString password() const {
+    return password_;
+  }  // 열 때 쓴 암호 (분할 등 디스크 파일을 다시 읽는 작업용)
 
  signals:
   void opened(const QString& path, int page_count);

@@ -1,21 +1,21 @@
-// Spike (#49 설계 프로브): 이미지 객체 — 투명도(SetBitmap 알파 → SMask?), JPEG 원본 삽입, 기존 이미지 행렬 변경·마크 부여 뒤
-// GenerateContent 가 쪽의 다른 내용을 바꾸지 않는가, RemoveObject → InsertObjectAtIndex 왕복. 제품 코드 아님.
+// Spike (#49 설계 프로브): 이미지 객체 — 투명도(SetBitmap 알파 → SMask?), JPEG 원본 삽입, 기존
+// 이미지 행렬 변경·마크 부여 뒤 GenerateContent 가 쪽의 다른 내용을 바꾸지 않는가, RemoveObject →
+// InsertObjectAtIndex 왕복. 제품 코드 아님.
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/image/png_io.h"
 #include "onpdf/core/platform/path.h"
 
-#include "../test_support.h"
-
 #include <fpdf_edit.h>
 #include <fpdf_save.h>
 #include <fpdfview.h>
-#include <gtest/gtest.h>
 
+#include "../test_support.h"
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <gtest/gtest.h>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -55,7 +55,8 @@ struct MemoryAccess {
   explicit MemoryAccess(std::vector<std::uint8_t> bytes) : data(std::move(bytes)) {
     access.m_FileLen = static_cast<unsigned long>(data.size());
     access.m_Param = this;
-    access.m_GetBlock = [](void* param, unsigned long pos, unsigned char* buf, unsigned long size) -> int {
+    access.m_GetBlock = [](void* param, unsigned long pos, unsigned char* buf,
+                           unsigned long size) -> int {
       auto* self = static_cast<MemoryAccess*>(param);
       if (pos + size > self->data.size()) return 0;
       std::memcpy(buf, self->data.data() + pos, size);
@@ -75,14 +76,17 @@ double fraction(const Bitmap& b, int x0, int y0, int x1, int y1, bool (*pred)(in
   int hit = 0, total = 0;
   for (int y = y0; y < y1; ++y)
     for (int x = x0; x < x1; ++x) {
-      const auto* p = b.pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(b.stride) + static_cast<std::size_t>(x) * 4;
+      const auto* p = b.pixels.data() +
+                      static_cast<std::size_t>(y) * static_cast<std::size_t>(b.stride) +
+                      static_cast<std::size_t>(x) * 4;
       ++total;
       hit += pred(p[2], p[1], p[0]) ? 1 : 0;
     }
   return total ? static_cast<double>(hit) / total : 0;
 }
 
-// A. 투명 PNG(BGRA) → SetBitmap → 투명 부분으로 아래 내용(파란 사각형)이 보이는가, 저장에 /SMask 가 있는가
+// A. 투명 PNG(BGRA) → SetBitmap → 투명 부분으로 아래 내용(파란 사각형)이 보이는가, 저장에 /SMask 가
+// 있는가
 TEST(ImageSpike, BgraBitmapAlphaBecomesSmask) {
   if (probe_dir().empty()) GTEST_SKIP();
   auto png = image::read_png(probe_dir() / "alpha.png");  // BGRA
@@ -90,7 +94,8 @@ TEST(ImageSpike, BgraBitmapAlphaBecomesSmask) {
   const std::string in = onpdf::path_to_utf8(testdata("simple.pdf"));
   FPDF_DOCUMENT doc = FPDF_LoadDocument(in.c_str(), nullptr);
   FPDF_PAGE page = FPDF_LoadPage(doc, 0);
-  FPDF_BITMAP bmp = FPDFBitmap_CreateEx(png->width, png->height, FPDFBitmap_BGRA, png->pixels.data(), png->stride);
+  FPDF_BITMAP bmp = FPDFBitmap_CreateEx(png->width, png->height, FPDFBitmap_BGRA,
+                                        png->pixels.data(), png->stride);
   ASSERT_NE(bmp, nullptr);
   FPDF_PAGEOBJECT img = FPDFPageObj_NewImageObj(doc);
   ASSERT_TRUE(FPDFImageObj_SetBitmap(&page, 1, img, bmp));
@@ -112,12 +117,16 @@ TEST(ImageSpike, BgraBitmapAlphaBecomesSmask) {
   auto r = reopened->render_page(0, o);
   ASSERT_TRUE(r);
   (void)image::write_png(*r, out_dir() / "img-alpha.png");
-  // 이미지 오른쪽 아래(투명) 영역 = 쪽 포인트 x 180..260, y (792-480-150+150*(16/48))..  → 아래쪽 2/3, 오른쪽 절반
+  // 이미지 오른쪽 아래(투명) 영역 = 쪽 포인트 x 180..260, y (792-480-150+150*(16/48))..  → 아래쪽
+  // 2/3, 오른쪽 절반
   const int x0 = 72 + 110, x1 = 72 + 190;
   const int y0 = 792 - 480 - 90, y1 = 792 - 500;  // 파란 사각형(쪽 포인트 y 172..292) 안쪽만
-  const double blue = fraction(*r, x0, y0, x1, y1, [](int R, int G, int B) { return B > 200 && R < 60 && G < 60; });
-  const double red = fraction(*r, 72 + 10, y0, 72 + 90, y1, [](int R, int G, int B) { return R > 200 && G < 60 && B < 60; });
-  std::cout << "[img] transparent area shows underlying blue: " << blue << ", opaque red: " << red << "\n";
+  const double blue =
+      fraction(*r, x0, y0, x1, y1, [](int R, int G, int B) { return B > 200 && R < 60 && G < 60; });
+  const double red = fraction(*r, 72 + 10, y0, 72 + 90, y1,
+                              [](int R, int G, int B) { return R > 200 && G < 60 && B < 60; });
+  std::cout << "[img] transparent area shows underlying blue: " << blue << ", opaque red: " << red
+            << "\n";
   EXPECT_GT(red, 0.9);
   EXPECT_GT(blue, 0.9) << "알파가 SMask 로 들어가 투명 부분에 아래 내용이 보여야 한다";
   EXPECT_TRUE(QpdfTools::check(out_dir() / "img-alpha.pdf"));
@@ -144,14 +153,15 @@ TEST(ImageSpike, JpegInlineKeepsDct) {
   const std::string bytes = save(doc, "img-jpeg.pdf");
   FPDF_ClosePage(page);
   FPDF_CloseDocument(doc);
-  std::cout << "[img] /DCTDecode: " << (bytes.find("/DCTDecode") != std::string::npos) << " size=" << bytes.size()
-            << " (jpeg " << jpeg.size() << ")\n";
+  std::cout << "[img] /DCTDecode: " << (bytes.find("/DCTDecode") != std::string::npos)
+            << " size=" << bytes.size() << " (jpeg " << jpeg.size() << ")\n";
   EXPECT_NE(bytes.find("/DCTDecode"), std::string::npos);
   EXPECT_EQ(pw, 80u);
   EXPECT_TRUE(QpdfTools::check(out_dir() / "img-jpeg.pdf"));
 }
 
-// C. 기존(다른 프로그램) 이미지: testdata 의 모든 PDF 에서 쪽 직속 이미지 객체에 마크를 붙이고 행렬을 1pt 옮겼다 되돌린 뒤
+// C. 기존(다른 프로그램) 이미지: testdata 의 모든 PDF 에서 쪽 직속 이미지 객체에 마크를 붙이고
+// 행렬을 1pt 옮겼다 되돌린 뒤
 //    GenerateContent → 저장 → 렌더가 원본과 같은가 (콘텐츠 스트림 재작성 위험 측정)
 TEST(ImageSpike, ExistingImagesSurviveMarkAndMatrixRoundTrip) {
   int files = 0, images = 0, changed_pages = 0;
@@ -206,12 +216,14 @@ TEST(ImageSpike, ExistingImagesSurviveMarkAndMatrixRoundTrip) {
       ASSERT_TRUE(a && b);
       int diff = 0;
       for (std::size_t k = 0; k < a->pixels.size(); ++k) diff += a->pixels[k] != b->pixels[k];
-      std::cout << "[img] " << entry.path().filename().string() << " p" << p << " pixels differ: " << diff << "\n";
+      std::cout << "[img] " << entry.path().filename().string() << " p" << p
+                << " pixels differ: " << diff << "\n";
       if (diff) ++changed_pages;
     }
     EXPECT_TRUE(QpdfTools::check(out_dir() / name)) << name;
   }
-  std::cout << "[img] files=" << files << " images=" << images << " changed_pages=" << changed_pages << "\n";
+  std::cout << "[img] files=" << files << " images=" << images << " changed_pages=" << changed_pages
+            << "\n";
   EXPECT_EQ(changed_pages, 0);
 }
 
@@ -242,7 +254,8 @@ TEST(ImageSpike, DetachReattachKeepsZOrderAndRender) {
   ASSERT_TRUE(reopened);
   auto after = reopened->render_page(0, o);
   int diff = 0;
-  for (std::size_t k = 0; k < before->pixels.size(); ++k) diff += before->pixels[k] != after->pixels[k];
+  for (std::size_t k = 0; k < before->pixels.size(); ++k)
+    diff += before->pixels[k] != after->pixels[k];
   std::cout << "[img] detach/reattach pixel diff: " << diff << "\n";
   EXPECT_EQ(diff, 0);
 }

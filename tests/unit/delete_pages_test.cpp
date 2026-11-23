@@ -1,11 +1,10 @@
-#include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/edit/delete_pages.h"
+
+#include "onpdf/core/engine/pdfium_document.h"
 
 #include "../fake_document.h"
 #include "../test_support.h"
-
 #include <gtest/gtest.h>
-
 #include <vector>
 
 namespace onpdf::edit {
@@ -24,7 +23,8 @@ std::vector<PageSize> sizes_of(const engine::EditableDocument& doc) {
 bool same_sizes(const std::vector<PageSize>& a, const std::vector<PageSize>& b) {
   if (a.size() != b.size()) return false;
   for (std::size_t i = 0; i < a.size(); ++i) {
-    if (std::abs(a[i].width - b[i].width) > 0.01 || std::abs(a[i].height - b[i].height) > 0.01) return false;
+    if (std::abs(a[i].width - b[i].width) > 0.01 || std::abs(a[i].height - b[i].height) > 0.01)
+      return false;
   }
   return true;
 }
@@ -44,7 +44,8 @@ TEST(DeletePagesCommand, ExecuteUndoRedoOnFake) {
   ASSERT_TRUE(cmd.undo(doc));
   EXPECT_EQ(doc.labels(), (std::vector<int>{0, 1, 2, 3, 4}));
   EXPECT_EQ(doc.rotations(), (std::vector<int>{0, 0, 0, 1, 0}));
-  EXPECT_DOUBLE_EQ(doc.page_size(3)->width, 4);  // 회전된 사본: 폭=높이 (4,4 라 같다) — 라벨로 정체성 확인
+  EXPECT_DOUBLE_EQ(doc.page_size(3)->width,
+                   4);  // 회전된 사본: 폭=높이 (4,4 라 같다) — 라벨로 정체성 확인
 
   ASSERT_TRUE(cmd.execute(doc));  // 다시 실행: 스냅샷을 새로 뜬다 (이전 것은 해제)
   EXPECT_EQ(doc.labels(), (std::vector<int>{0, 2, 4}));

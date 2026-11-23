@@ -2,8 +2,8 @@
 
 #include "onpdf/core/engine/render_types.h"
 #include "onpdf/core/platform/path.h"
-#include "qt_image.h"
 
+#include "qt_image.h"
 #include <chrono>
 #include <memory>
 #include <string>

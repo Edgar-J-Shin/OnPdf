@@ -42,7 +42,8 @@ void TileCache::put(const TileKey& key, std::shared_ptr<const Bitmap> bitmap) {
   evict_to(max_bytes_);
 }
 
-std::vector<std::pair<TileKey, std::shared_ptr<const Bitmap>>> TileCache::tiles_for_page(int page) const {
+std::vector<std::pair<TileKey, std::shared_ptr<const Bitmap>>> TileCache::tiles_for_page(
+    int page) const {
   std::vector<std::pair<TileKey, std::shared_ptr<const Bitmap>>> out;
   for (const auto& [key, entry] : map_) {
     if (key.page == page) out.emplace_back(key, entry.bitmap);

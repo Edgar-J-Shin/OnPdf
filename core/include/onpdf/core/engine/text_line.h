@@ -30,7 +30,7 @@ struct TextLineInfo {
   bool editable = true;      // false 면 reason
   std::string reason;        // "nested-form" | "multi-line-object" | "vertical" | "no-objects"
   int object_count = 0;
-  double text_width = 0.0;  // 잉크 폭(앞뒤 공백 제외, 쪽 포인트) (#77)
+  double text_width = 0.0;      // 잉크 폭(앞뒤 공백 제외, 쪽 포인트) (#77)
   double letter_spacing = 0.0;  // 원 줄의 글자당 추가 간격(pt) = (잉크 폭 − 같은 글꼴 자연
                                 // 폭)/(글자 수−1). 수정 때 TJ 커닝으로 보존 (#77)
 };

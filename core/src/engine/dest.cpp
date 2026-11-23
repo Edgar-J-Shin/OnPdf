@@ -21,7 +21,8 @@ Point PageSpace::to_pt(double x, double y) const {
 }
 
 Rect PageSpace::to_rect(double left, double right, double bottom, double top) const {
-  const Point p[4] = {to_pt(left, bottom), to_pt(right, bottom), to_pt(left, top), to_pt(right, top)};
+  const Point p[4] = {to_pt(left, bottom), to_pt(right, bottom), to_pt(left, top),
+                      to_pt(right, top)};
   double x0 = p[0].x, y0 = p[0].y, x1 = p[0].x, y1 = p[0].y;
   for (const auto& q : p) {
     x0 = std::min(x0, q.x);
@@ -34,8 +35,11 @@ Rect PageSpace::to_rect(double left, double right, double bottom, double top) co
 
 Point PageSpace::to_user(Point pt) const {
   double ux = 0.0, uy = 0.0;
-  const auto dev = [](double v) { return static_cast<int>(std::lround(std::clamp(v * 1000.0, -2.0e9, 2.0e9))); };
-  if (!FPDF_DeviceToPage(page, 0, 0, w1000, h1000, 0, dev(pt.x), dev(pt.y), &ux, &uy)) return {0.0, 0.0};
+  const auto dev = [](double v) {
+    return static_cast<int>(std::lround(std::clamp(v * 1000.0, -2.0e9, 2.0e9)));
+  };
+  if (!FPDF_DeviceToPage(page, 0, 0, w1000, h1000, 0, dev(pt.x), dev(pt.y), &ux, &uy))
+    return {0.0, 0.0};
   return {ux, uy};
 }
 
@@ -53,19 +57,25 @@ std::array<double, 4> PageSpace::user_rect_of(const Rect& r) const {
 }
 
 std::array<double, 6> PageSpace::user_matrix_at(Point origin_pt) const {
-  // 기저 벡터는 1000pt 떨어진 점으로 재 1/1000 로 나눈다: to_user 의 0.001pt 양자화가 1.001 같은 행렬을 만들지 않게 (리뷰 I1)
+  // 기저 벡터는 1000pt 떨어진 점으로 재 1/1000 로 나눈다: to_user 의 0.001pt 양자화가 1.001 같은
+  // 행렬을 만들지 않게 (리뷰 I1)
   constexpr double kSpan = 1000.0;
   const Point e = to_user(origin_pt);
   const Point right = to_user({origin_pt.x + kSpan, origin_pt.y});
   const Point up = to_user({origin_pt.x, origin_pt.y - kSpan});
   const auto snap = [](double v) { return std::abs(v) < 1e-9 ? 0.0 : v; };
-  return {snap((right.x - e.x) / kSpan), snap((right.y - e.y) / kSpan), snap((up.x - e.x) / kSpan), snap((up.y - e.y) / kSpan), e.x, e.y};
+  return {snap((right.x - e.x) / kSpan),
+          snap((right.y - e.y) / kSpan),
+          snap((up.x - e.x) / kSpan),
+          snap((up.y - e.y) / kSpan),
+          e.x,
+          e.y};
 }
 
 std::array<float, 8> PageSpace::quad_of(const Rect& r) const {
   const auto u = user_rect_of(r);
-  const auto l = static_cast<float>(u[0]), b = static_cast<float>(u[1]), rt = static_cast<float>(u[2]),
-             t = static_cast<float>(u[3]);
+  const auto l = static_cast<float>(u[0]), b = static_cast<float>(u[1]),
+             rt = static_cast<float>(u[2]), t = static_cast<float>(u[3]);
   return {l, t, rt, t, l, b, rt, b};
 }
 

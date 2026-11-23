@@ -21,12 +21,41 @@ bool is_safe_uri(std::string_view uri) noexcept {
 
 bool is_word_separator(char32_t code) noexcept {
   switch (code) {
-    case U' ': case U'\t': case U'\r': case U'\n': case 0x00A0: case 0x3000:
-    case U',': case U'.': case U';': case U':': case U'!': case U'?':
-    case U'(': case U')': case U'[': case U']': case U'{': case U'}':
-    case U'"': case U'\'': case U'/': case U'\\': case U'<': case U'>':
-    case U'-': case 0x2014: case 0x2013: case 0x00B7: case 0x2022:
-    case 0x201C: case 0x201D: case 0x2018: case 0x2019: case 0x3001: case 0x3002:
+    case U' ':
+    case U'\t':
+    case U'\r':
+    case U'\n':
+    case 0x00A0:
+    case 0x3000:
+    case U',':
+    case U'.':
+    case U';':
+    case U':':
+    case U'!':
+    case U'?':
+    case U'(':
+    case U')':
+    case U'[':
+    case U']':
+    case U'{':
+    case U'}':
+    case U'"':
+    case U'\'':
+    case U'/':
+    case U'\\':
+    case U'<':
+    case U'>':
+    case U'-':
+    case 0x2014:
+    case 0x2013:
+    case 0x00B7:
+    case 0x2022:
+    case 0x201C:
+    case 0x201D:
+    case 0x2018:
+    case 0x2019:
+    case 0x3001:
+    case 0x3002:
       return true;
     default:
       return false;
@@ -54,7 +83,9 @@ void append_utf8(std::string& out, char32_t code) {
 
 namespace {
 
-Rect expanded(const Rect& r, double by) { return {r.x - by, r.y - by, r.w + 2 * by, r.h + 2 * by}; }
+Rect expanded(const Rect& r, double by) {
+  return {r.x - by, r.y - by, r.w + 2 * by, r.h + 2 * by};
+}
 
 double distance_to_range(double v, double lo, double hi) {
   if (v < lo) return lo - v;
@@ -86,7 +117,8 @@ int PageTextIndex::nearest_position(Point pt) const {
     const bool vertical_hit = pt.y >= line.box.y && pt.y < line.box.bottom();
     const double dist = vertical_hit ? distance_to_range(pt.x, line.box.x, line.box.right())
                                      : distance_to_range(pt.y, line.box.y, line.box.bottom());
-    if ((vertical_hit && !best_vertical_hit) || (vertical_hit == best_vertical_hit && dist < best_dist)) {
+    if ((vertical_hit && !best_vertical_hit) ||
+        (vertical_hit == best_vertical_hit && dist < best_dist)) {
       best = &line;
       best_dist = dist;
       best_vertical_hit = vertical_hit;
@@ -96,7 +128,9 @@ int PageTextIndex::nearest_position(Point pt) const {
   // 2. 줄 안에서 가장 가까운 글자 경계. 세로로 긴 줄(회전 쪽·회전 Tm)은 y 축으로 판정하고,
   //    읽기 방향(첫 글자 → 마지막 글자 중심이 증가/감소)에 따라 "앞/뒤" 를 뒤집는다
   const bool vertical = best->box.h > best->box.w;
-  auto center_of = [&](const TextChar& c) { return vertical ? c.box.y + c.box.h / 2.0 : c.box.x + c.box.w / 2.0; };
+  auto center_of = [&](const TextChar& c) {
+    return vertical ? c.box.y + c.box.h / 2.0 : c.box.x + c.box.w / 2.0;
+  };
   const double along = vertical ? pt.y : pt.x;
   const TextChar* first_boxed = nullptr;
   const TextChar* last_boxed = nullptr;
@@ -107,7 +141,8 @@ int PageTextIndex::nearest_position(Point pt) const {
     last_boxed = &c;
   }
   if (first_boxed == nullptr) return best->chars.start;
-  const bool forward = center_of(*last_boxed) >= center_of(*first_boxed);  // 좌표 증가 방향 = 읽기 방향
+  const bool forward =
+      center_of(*last_boxed) >= center_of(*first_boxed);  // 좌표 증가 방향 = 읽기 방향
   const double line_lo = vertical ? best->box.y : best->box.x;
   const double line_hi = vertical ? best->box.bottom() : best->box.right();
   if (along <= line_lo) return forward ? best->chars.start : best->chars.end;
@@ -130,8 +165,9 @@ int PageTextIndex::nearest_position(Point pt) const {
 
 int PageTextIndex::line_of(int ch) const {
   if (ch < 0 || ch >= char_count()) return -1;
-  auto it = std::upper_bound(lines.begin(), lines.end(), ch,
-                             [](int value, const TextLine& line) { return value < line.chars.start; });
+  auto it = std::upper_bound(lines.begin(), lines.end(), ch, [](int value, const TextLine& line) {
+    return value < line.chars.start;
+  });
   if (it == lines.begin()) return -1;
   --it;
   const int idx = static_cast<int>(it - lines.begin());
@@ -171,7 +207,8 @@ std::vector<Rect> PageTextIndex::selection_rects(TextRange range) const {
         any = true;
       } else {
         const double x0 = std::min(acc.x, c.box.x), y0 = std::min(acc.y, c.box.y);
-        const double x1 = std::max(acc.right(), c.box.right()), y1 = std::max(acc.bottom(), c.box.bottom());
+        const double x1 = std::max(acc.right(), c.box.right()),
+                     y1 = std::max(acc.bottom(), c.box.bottom());
         acc = {x0, y0, x1 - x0, y1 - y0};
       }
     }

@@ -4,11 +4,9 @@
 #include "onpdf/core/engine/pdfium_worker.h"
 
 #include "../test_support.h"
-
-#include <gtest/gtest.h>
-
 #include <chrono>
 #include <future>
+#include <gtest/gtest.h>
 #include <latch>
 #include <memory>
 #include <stdexcept>
@@ -166,11 +164,11 @@ TEST_F(DocumentHandleTest, OpenWithCallbackRunsOnWorkerThread) {
   std::promise<bool> on_worker;
   auto f = on_worker.get_future();
   DocumentHandle received;
-  TaskHandle handle = DocumentHandle::open(
-      worker_, testdata("simple.pdf"), "", Priority::kHigh, [&](Result<DocumentHandle> r) {
-        if (r) received = *r;
-        on_worker.set_value(worker_.is_worker_thread());
-      });
+  TaskHandle handle = DocumentHandle::open(worker_, testdata("simple.pdf"), "", Priority::kHigh,
+                                           [&](Result<DocumentHandle> r) {
+                                             if (r) received = *r;
+                                             on_worker.set_value(worker_.is_worker_thread());
+                                           });
   EXPECT_TRUE(handle.valid());
   EXPECT_TRUE(get_or_fail(f));
   EXPECT_TRUE(received.valid());
@@ -256,7 +254,7 @@ TEST_F(DocumentHandleTest, LastHandleDestructorUnregisters) {
     DocumentHandle doc = open_simple();
     DocumentHandle copy = doc;
     id = doc.id();
-    doc = DocumentHandle{};        // 복사본이 남아 있으므로 아직 등록 상태
+    doc = DocumentHandle{};  // 복사본이 남아 있으므로 아직 등록 상태
     EXPECT_TRUE(is_registered(id));
     EXPECT_TRUE(copy.valid());
   }

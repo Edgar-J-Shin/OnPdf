@@ -7,7 +7,8 @@
 
 namespace onpdf::app {
 
-AnnotationDialog::AnnotationDialog(const QString& title, const QString& text, QWidget* parent) : QDialog(parent) {
+AnnotationDialog::AnnotationDialog(const QString& title, const QString& text, QWidget* parent)
+    : QDialog(parent) {
   setObjectName(QStringLiteral("note_editor"));
   setWindowTitle(title);
   setModal(true);
@@ -32,6 +33,8 @@ AnnotationDialog::AnnotationDialog(const QString& title, const QString& text, QW
   edit_->setFocus();
 }
 
-QString AnnotationDialog::text() const { return edit_->toPlainText(); }
+QString AnnotationDialog::text() const {
+  return edit_->toPlainText();
+}
 
 }  // namespace onpdf::app

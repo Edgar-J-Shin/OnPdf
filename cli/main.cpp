@@ -6,8 +6,8 @@
 #include "onpdf/core/engine/pdfium_library.h"
 #include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/engine/save.h"
-#include "onpdf/core/page_ranges.h"
 #include "onpdf/core/image/png_io.h"
+#include "onpdf/core/page_ranges.h"
 #include "onpdf/core/platform/path.h"
 #include "onpdf/core/view/tile.h"
 #include "onpdf/core/view/tile_source.h"
@@ -30,15 +30,19 @@ int usage() {
   std::fputs(
       "usage:\n"
       "  onpdf_cli info   <in.pdf> [--password PW]\n"
-      "  onpdf_cli render <in.pdf> <out.png> [--page N] [--scale S] [--rotate R] [--print] [--password PW]\n"
+      "  onpdf_cli render <in.pdf> <out.png> [--page N] [--scale S] [--rotate R] [--print] "
+      "[--password PW]\n"
       "  onpdf_cli tiles  <in.pdf> <out-dir> [--page N] [--scale S] [--password PW]\n"
-      "  onpdf_cli text   <in.pdf> [--page N] [--password PW]   (chars/lines/links + extracted text)\n"
+      "  onpdf_cli text   <in.pdf> [--page N] [--password PW]   (chars/lines/links + extracted "
+      "text)\n"
       "                   (writes 512px tile PNGs, stitched.png and full.png)\n"
       "  onpdf_cli search <in.pdf> <query> [--case] [--word] [--password PW]\n"
       "  onpdf_cli outline <in.pdf> [--password PW]\n"
       "  onpdf_cli merge  <out.pdf> <in.pdf>... [--password PW]      (첫 파일의 목차·폼 유지)\n"
-      "  onpdf_cli split  <in.pdf> <out-dir> (--every N | --ranges \"1-3,5\" | --each) [--pattern NAME-%d.pdf] [--password PW]\n"
-      "  onpdf_cli check  <in.pdf> [--password PW]                   (qpdf 구조 검사, 경고는 출력하고 0)\n",
+      "  onpdf_cli split  <in.pdf> <out-dir> (--every N | --ranges \"1-3,5\" | --each) [--pattern "
+      "NAME-%d.pdf] [--password PW]\n"
+      "  onpdf_cli check  <in.pdf> [--password PW]                   (qpdf 구조 검사, 경고는 "
+      "출력하고 0)\n",
       stderr);
   return 2;
 }
@@ -142,14 +146,22 @@ int cmd_info(const Args& args) {
   }
   const char* duplex = "-";
   switch (print->duplex) {
-    case onpdf::view::Duplex::kSimplex: duplex = "simplex"; break;
-    case onpdf::view::Duplex::kFlipShortEdge: duplex = "short-edge"; break;
-    case onpdf::view::Duplex::kFlipLongEdge: duplex = "long-edge"; break;
-    case onpdf::view::Duplex::kUndefined: break;
+    case onpdf::view::Duplex::kSimplex:
+      duplex = "simplex";
+      break;
+    case onpdf::view::Duplex::kFlipShortEdge:
+      duplex = "short-edge";
+      break;
+    case onpdf::view::Duplex::kFlipLongEdge:
+      duplex = "long-edge";
+      break;
+    case onpdf::view::Duplex::kUndefined:
+      break;
   }
   std::printf("print: %s · scaling %s · copies %d · ranges %s · duplex %s\n",
               !print->allowed ? "denied" : (print->high_quality ? "allowed" : "low-res only"),
-              print->no_scaling ? "none" : "default", print->copies, ranges.empty() ? "all" : ranges.c_str(), duplex);
+              print->no_scaling ? "none" : "default", print->copies,
+              ranges.empty() ? "all" : ranges.c_str(), duplex);
   return 0;
 }
 
@@ -192,7 +204,8 @@ int cmd_tiles(const Args& args) {
   stitched.width = static_cast<int>(px.w);
   stitched.height = static_cast<int>(px.h);
   stitched.stride = stitched.width * 4;
-  stitched.pixels.assign(static_cast<std::size_t>(stitched.stride) * static_cast<std::size_t>(stitched.height), 255);
+  stitched.pixels.assign(
+      static_cast<std::size_t>(stitched.stride) * static_cast<std::size_t>(stitched.height), 255);
 
   onpdf::view::SyncTileSource source(*doc);
   int count = 0;
@@ -209,11 +222,13 @@ int cmd_tiles(const Args& args) {
                        const onpdf::Rect rect = onpdf::view::tile_rect_px(key, *size);
                        for (int y = 0; y < r->height; ++y) {
                          std::memcpy(stitched.pixels.data() +
-                                         static_cast<std::size_t>(static_cast<int>(rect.y) + y) * static_cast<std::size_t>(stitched.stride) +
+                                         static_cast<std::size_t>(static_cast<int>(rect.y) + y) *
+                                             static_cast<std::size_t>(stitched.stride) +
                                          static_cast<std::size_t>(rect.x) * 4,
                                      r->row(y), static_cast<std::size_t>(r->width) * 4);
                        }
-                       const auto name = "tile-" + std::to_string(tx) + "-" + std::to_string(ty) + ".png";
+                       const auto name =
+                           "tile-" + std::to_string(tx) + "-" + std::to_string(ty) + ".png";
                        if (!onpdf::image::write_png(*r, out_dir / name)) ++failed;
                        ++count;
                      });
@@ -226,8 +241,8 @@ int cmd_tiles(const Args& args) {
   full_opts.scale = static_cast<float>(onpdf::view::dequantize_scale(scale_q));
   auto full = doc->render_region(args.page, full_opts, onpdf::Rect{0, 0, px.w, px.h});
   if (full) (void)onpdf::image::write_png(*full, out_dir / "full.png");
-  std::printf("page %d @%.3f: %d tiles (%d failed) -> %s\n", args.page, onpdf::view::dequantize_scale(scale_q),
-              count, failed, args.positional[1].c_str());
+  std::printf("page %d @%.3f: %d tiles (%d failed) -> %s\n", args.page,
+              onpdf::view::dequantize_scale(scale_q), count, failed, args.positional[1].c_str());
   return failed == 0 ? 0 : 1;
 }
 
@@ -237,8 +252,8 @@ int cmd_text(const Args& args) {
   if (!doc) return fail(doc.error());
   auto index = doc->load_text(args.page);
   if (!index) return fail(index.error());
-  std::printf("page %d: chars=%d lines=%zu links=%zu\n", args.page, index->char_count(), index->lines.size(),
-              index->links.size());
+  std::printf("page %d: chars=%d lines=%zu links=%zu\n", args.page, index->char_count(),
+              index->lines.size(), index->links.size());
   auto printable = [](const std::string& raw) {  // 터미널 이스케이프 주입 방지
     std::string out;
     for (char ch : raw) {
@@ -311,8 +326,9 @@ int cmd_outline(const Args& args) {
   for (const auto& item : outline->items) {
     std::string target = "-";
     if (item.target) {
-      target = item.target->kind == onpdf::view::LinkKind::kPage ? "p." + std::to_string(item.target->page + 1)
-                                                                 : "uri";
+      target = item.target->kind == onpdf::view::LinkKind::kPage
+                   ? "p." + std::to_string(item.target->page + 1)
+                   : "uri";
     }
     std::printf("%*s%s%s [%s]\n", item.depth * 2, "", item.open ? "" : "+ ",
                 item.title.empty() ? "(untitled)" : item.title.c_str(), target.c_str());
@@ -350,17 +366,20 @@ int cmd_merge(const Args& args) {
     report = std::move(*r);
     return {};
   };
-  hooks.verify = [&](std::size_t, const std::filesystem::path&, const std::filesystem::path& temp) -> onpdf::Result<void> {
+  hooks.verify = [&](std::size_t, const std::filesystem::path&,
+                     const std::filesystem::path& temp) -> onpdf::Result<void> {
     if (auto c = QpdfTools::check(temp); !c) return std::unexpected(c.error());
     auto n = QpdfTools::page_count(temp);
     if (!n) return std::unexpected(n.error());
-    if (*n != expected) return onpdf::make_error(onpdf::ErrorCode::kSaveVerifyFailed, "merged page count mismatch");
+    if (*n != expected)
+      return onpdf::make_error(onpdf::ErrorCode::kSaveVerifyFailed, "merged page count mismatch");
     return {};
   };
   auto saved = onpdf::engine::write_files_safely({out}, hooks);
   if (!saved) return fail(saved.error());
   print_warnings(report);
-  std::printf("merged %zu files, %d pages -> %s\n", inputs.size(), expected, onpdf::path_to_utf8(out).c_str());
+  std::printf("merged %zu files, %d pages -> %s\n", inputs.size(), expected,
+              onpdf::path_to_utf8(out).c_str());
   return 0;
 }
 
@@ -391,7 +410,8 @@ int cmd_split(const Args& args) {
   std::vector<std::filesystem::path> outs;
   for (std::size_t i = 0; i < ranges.size(); ++i) {
     outs.push_back(dir / onpdf::path_from_utf8(onpdf::output_name(pattern, static_cast<int>(i) + 1,
-                                                                   static_cast<int>(ranges.size()), ranges[i], *count)));
+                                                                  static_cast<int>(ranges.size()),
+                                                                  ranges[i], *count)));
   }
   std::vector<std::string> warnings;
   onpdf::engine::SafeWriteHooks hooks;
@@ -403,7 +423,8 @@ int cmd_split(const Args& args) {
     }
     return {};
   };
-  hooks.verify = [&](std::size_t i, const std::filesystem::path&, const std::filesystem::path& temp) -> onpdf::Result<void> {
+  hooks.verify = [&](std::size_t i, const std::filesystem::path&,
+                     const std::filesystem::path& temp) -> onpdf::Result<void> {
     auto n = QpdfTools::page_count(temp);
     if (!n) return std::unexpected(n.error());
     if (*n != ranges[i].last - ranges[i].first + 1) {
@@ -415,7 +436,8 @@ int cmd_split(const Args& args) {
   if (!saved) return fail(saved.error());
   for (const auto& w : warnings) std::fprintf(stderr, "warning: %s\n", w.c_str());
   for (std::size_t i = 0; i < outs.size(); ++i) {
-    std::printf("%s  pages %s\n", onpdf::path_to_utf8(outs[i]).c_str(), onpdf::range_text(ranges[i]).c_str());
+    std::printf("%s  pages %s\n", onpdf::path_to_utf8(outs[i]).c_str(),
+                onpdf::range_text(ranges[i]).c_str());
   }
   std::printf("%zu files\n", outs.size());
   return 0;
@@ -423,7 +445,8 @@ int cmd_split(const Args& args) {
 
 int cmd_check(const Args& args) {
   if (args.positional.size() != 1) return usage();
-  auto report = onpdf::engine::QpdfTools::check(onpdf::path_from_utf8(args.positional[0]), args.password);
+  auto report =
+      onpdf::engine::QpdfTools::check(onpdf::path_from_utf8(args.positional[0]), args.password);
   if (!report) return fail(report.error());
   print_warnings(*report);
   std::printf("ok (%zu warnings)\n", report->warnings.size());
@@ -452,10 +475,13 @@ int run(int argc, char** argv) {
 int wmain(int argc, wchar_t** argv) {
   std::vector<std::string> utf8;
   std::vector<char*> ptrs;
-  for (int i = 0; i < argc; ++i) utf8.push_back(onpdf::path_to_utf8(std::filesystem::path(argv[i])));
+  for (int i = 0; i < argc; ++i)
+    utf8.push_back(onpdf::path_to_utf8(std::filesystem::path(argv[i])));
   for (auto& s : utf8) ptrs.push_back(s.data());
   return run(argc, ptrs.data());
 }
 #else
-int main(int argc, char** argv) { return run(argc, argv); }
+int main(int argc, char** argv) {
+  return run(argc, argv);
+}
 #endif

@@ -1,9 +1,9 @@
 #include "onpdf/core/engine/qpdf_tools.h"
 
+#include "onpdf/core/fnv.h"
 #include "onpdf/core/platform/path.h"
 
 #include "cff_charset.h"
-#include "onpdf/core/fnv.h"
 #include <qpdf/Constants.h>
 #include <qpdf/qpdf-c.h>
 #include <qpdf/qpdfjob-c.h>
@@ -504,8 +504,9 @@ bool sets_text_line(const std::string& n) {
 
 // data 에서 ordinals(비어 있지 않은 표시 연산자 순번)의 연산자만 지운 바이트. 지운 자리는 공백,
 // '→T*, "→Tw Tc T*. 쪽 콘텐츠가 여러 스트림이면 이어 붙인 바이트에서 한 번에 센다 (#81)
-// 바이트 범위 치환 목록. 쪽 콘텐츠가 여러 스트림이면 이어 붙인 바이트에서 연산자를 세고(PDFium 과 같은 규칙 — Word·LiveCycle 은
-// 피연산자와 연산자 사이에서 스트림을 나눈다, #81) 치환은 스트림마다 그 범위 조각에 적용한다
+// 바이트 범위 치환 목록. 쪽 콘텐츠가 여러 스트림이면 이어 붙인 바이트에서 연산자를 세고(PDFium 과
+// 같은 규칙 — Word·LiveCycle 은 피연산자와 연산자 사이에서 스트림을 나눈다, #81) 치환은 스트림마다
+// 그 범위 조각에 적용한다
 struct ContentEdit {
   std::size_t start = 0;
   std::size_t end = 0;
@@ -517,9 +518,10 @@ struct RewriteResult {
   bool dangling = false;
 };
 
-// data[from, to) 에 치환을 적용한 결과. 범위가 조각을 넘어가면 조각 안 부분만 지우고 text 는 끝나는 조각에만 넣는다
-std::string apply_edits(const std::string& data, const std::vector<ContentEdit>& edits, std::size_t from, std::size_t to,
-                        bool* changed) {
+// data[from, to) 에 치환을 적용한 결과. 범위가 조각을 넘어가면 조각 안 부분만 지우고 text 는 끝나는
+// 조각에만 넣는다
+std::string apply_edits(const std::string& data, const std::vector<ContentEdit>& edits,
+                        std::size_t from, std::size_t to, bool* changed) {
   std::string out;
   std::size_t pos = from;
   for (const ContentEdit& e : edits) {
@@ -535,8 +537,10 @@ std::string apply_edits(const std::string& data, const std::vector<ContentEdit>&
 }
 // fit 대상 연산자를 `[<c1> k <c2> … <cn>] TJ` 로 (PDFium 생성기 형태 `[<hex>] TJ` 만). 형태가
 // 다르면 nullopt
-// fit 대상 표시 연산자(Tj/TJ)를 `<cs> Tc <원래 피연산자와 연산자> 0 Tc` 로. 피연산자 바이트는 그대로 둔다
-std::optional<std::string> fitted_operands(const ContentOp& op, std::string_view op_bytes, const ShowOpFit& fit) {
+// fit 대상 표시 연산자(Tj/TJ)를 `<cs> Tc <원래 피연산자와 연산자> 0 Tc` 로. 피연산자 바이트는
+// 그대로 둔다
+std::optional<std::string> fitted_operands(const ContentOp& op, std::string_view op_bytes,
+                                           const ShowOpFit& fit) {
   if ((op.name != "TJ" && op.name != "Tj") || op.operands.empty()) return std::nullopt;
   // 숫자는 로캘과 무관하게 (snprintf 는 LC_NUMERIC 을 따라 "1,50" 이 될 수 있다 — 리뷰 W1)
   const std::string number = QPDFObjectHandle::newReal(fit.char_space, 3).unparse();
@@ -582,7 +586,8 @@ RewriteResult rewrite_content(QPDF& owner, const std::string& data, const std::s
                                     [&](const ShowOpFit& f) { return f.ordinal == ordinal_of[i]; });
       if (fit == fits.end()) continue;
       const auto replaced = fitted_operands(
-          c.ops[i], std::string_view(data).substr(c.ops[i].start, c.ops[i].end - c.ops[i].start), *fit);
+          c.ops[i], std::string_view(data).substr(c.ops[i].start, c.ops[i].end - c.ops[i].start),
+          *fit);
       if (!replaced) continue;  // 예상 형태가 아니면 자간만 건너뛴다 (수정은 성공)
       r.edits.push_back({c.ops[i].start, c.ops[i].end, *replaced});
       if (fitted != nullptr) ++*fitted;
@@ -647,8 +652,9 @@ Result<SurgeryReport> QpdfTools::remove_text_show_ops(const std::vector<std::uin
     for (const auto& f : ops.fits) {
       if (f.container < 0) page_fits.push_back(f);
     }
-    // 스트림을 개행으로 이어 붙여 한 번에 파싱한다(규격: 배열 스트림은 사이에 공백이 있는 것처럼 읽는다). 치환은 스트림마다
-    // 자기 범위 조각에만 적용해 파일에는 스트림이 그대로 남는다 — 합쳐 쓰면 PDFium 이 뒤 편집에서 원본까지 다시 쓴다
+    // 스트림을 개행으로 이어 붙여 한 번에 파싱한다(규격: 배열 스트림은 사이에 공백이 있는 것처럼
+    // 읽는다). 치환은 스트림마다 자기 범위 조각에만 적용해 파일에는 스트림이 그대로 남는다 — 합쳐
+    // 쓰면 PDFium 이 뒤 편집에서 원본까지 다시 쓴다
     std::string joined;
     std::vector<std::pair<std::size_t, std::size_t>> segments;  // 스트림 k 의 [from, to)
     for (QPDFObjectHandle& stream : streams) {
@@ -657,13 +663,16 @@ Result<SurgeryReport> QpdfTools::remove_text_show_ops(const std::vector<std::uin
       segments.emplace_back(joined.size(), joined.size() + data.size());
       joined += data;
     }
-    RewriteResult r = rewrite_content(q, joined, ops.page_ordinals, 0, report.needs_displacement, &do_names, page_fits,
-                                      &report.fitted);
-    if (r.dangling) return make_error(ErrorCode::kUnsupported, "content stream ends inside an operator");
+    RewriteResult r = rewrite_content(q, joined, ops.page_ordinals, 0, report.needs_displacement,
+                                      &do_names, page_fits, &report.fitted);
+    if (r.dangling)
+      return make_error(ErrorCode::kUnsupported, "content stream ends inside an operator");
     for (std::size_t k = 0; k < streams.size(); ++k) {
       bool changed = false;
-      const std::string out = apply_edits(joined, r.edits, segments[k].first, segments[k].second, &changed);
-      if (changed) streams[k].replaceStreamData(out, QPDFObjectHandle::newNull(), QPDFObjectHandle::newNull());
+      const std::string out =
+          apply_edits(joined, r.edits, segments[k].first, segments[k].second, &changed);
+      if (changed)
+        streams[k].replaceStreamData(out, QPDFObjectHandle::newNull(), QPDFObjectHandle::newNull());
     }
     report.page_show_ops = r.show_ops;
     if (!ops.form_ordinals.empty()) {
@@ -711,12 +720,15 @@ Result<SurgeryReport> QpdfTools::remove_text_show_ops(const std::vector<std::uin
         }
         if (users > 1 || drawn_here > 1) ++report.shared_forms;
         const std::string form_data = stream_bytes(form);
-        RewriteResult fr = rewrite_content(q, form_data, ordinals, 0, report.needs_displacement, nullptr);
-        if (fr.dangling) return make_error(ErrorCode::kUnsupported, "content stream ends inside an operator");
+        RewriteResult fr =
+            rewrite_content(q, form_data, ordinals, 0, report.needs_displacement, nullptr);
+        if (fr.dangling)
+          return make_error(ErrorCode::kUnsupported, "content stream ends inside an operator");
         report.form_show_ops[form_index] = fr.show_ops;
         bool changed = false;
         const std::string out = apply_edits(form_data, fr.edits, 0, form_data.size(), &changed);
-        if (changed) form.replaceStreamData(out, QPDFObjectHandle::newNull(), QPDFObjectHandle::newNull());
+        if (changed)
+          form.replaceStreamData(out, QPDFObjectHandle::newNull(), QPDFObjectHandle::newNull());
       }
     }
     QPDFWriter w(q);

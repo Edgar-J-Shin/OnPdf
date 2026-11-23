@@ -2,7 +2,6 @@
 #include "onpdf/edit/text_layout.h"
 
 #include "../test_support.h"
-
 #include <gtest/gtest.h>
 
 namespace onpdf::edit {
@@ -12,8 +11,10 @@ using onpdf::test::testdata;
 
 TEST(TextLayout, SplitsLines) {
   EXPECT_EQ(split_lines("a\nb"), (std::vector<std::string>{"a", "b"}));
-  EXPECT_EQ(split_lines("a\r\nb\r\n\r\n"), (std::vector<std::string>{"a", "b"})) << "CR 제거, 끝의 빈 줄 버림";
-  EXPECT_EQ(split_lines("a\n\nb"), (std::vector<std::string>{"a", "", "b"})) << "가운데 빈 줄은 유지";
+  EXPECT_EQ(split_lines("a\r\nb\r\n\r\n"), (std::vector<std::string>{"a", "b"}))
+      << "CR 제거, 끝의 빈 줄 버림";
+  EXPECT_EQ(split_lines("a\n\nb"), (std::vector<std::string>{"a", "", "b"}))
+      << "가운데 빈 줄은 유지";
   EXPECT_TRUE(split_lines("").empty());
   EXPECT_TRUE(split_lines("\n\n").empty());
 }
@@ -57,7 +58,8 @@ TEST(TextLayout, WrapsWithinWidth) {
   for (const auto& line : l.lines) joined += line.text;
   EXPECT_EQ(joined, "ABCDEFGH") << "글자를 잃지 않는다";
   // 한글 어절 + 개행
-  l = layout_text(**face, "한글 텍스트 추가\n둘째", 20.0, {0, 0}, 1.2, (*face)->shape("한글 텍스트", 20.0).width + 1);
+  l = layout_text(**face, "한글 텍스트 추가\n둘째", 20.0, {0, 0}, 1.2,
+                  (*face)->shape("한글 텍스트", 20.0).width + 1);
   ASSERT_EQ(l.lines.size(), 3u);
   EXPECT_EQ(l.lines[0].text, "한글 텍스트");
   EXPECT_EQ(l.lines[1].text, "추가");

@@ -173,14 +173,17 @@ Result<engine::ChangeSet> ReplaceTextLineCommand::undo(engine::EditableDocument&
 
 bool ReplaceTextLineCommand::merge_with(const Command& next) {
   const auto* other = dynamic_cast<const ReplaceTextLineCommand*>(&next);
-  if (other == nullptr || utf8_ || other->utf8_ || !executed_ || !other->executed_) return false;  // 서식만
-  if (other->page_ != page_ || box_.empty() || other->line_id_ != box_) return false;  // 이 명령이 만든 상자를 잇는 것만
+  if (other == nullptr || utf8_ || other->utf8_ || !executed_ || !other->executed_)
+    return false;  // 서식만
+  if (other->page_ != page_ || box_.empty() || other->line_id_ != box_)
+    return false;  // 이 명령이 만든 상자를 잇는 것만
   if (other->size_) size_ = other->size_;
   if (other->color_) color_ = other->color_;
   box_ = other->box_;
   ids_ = other->ids_;
   used_fallback_ = other->used_fallback_;
-  // before_(첫 수술 전 토큰)는 그대로 — 취소는 첫 상태로. other 의 토큰은 호출자(UndoStack 이 돌려준 뒤 discard)가 해제한다
+  // before_(첫 수술 전 토큰)는 그대로 — 취소는 첫 상태로. other 의 토큰은 호출자(UndoStack 이
+  // 돌려준 뒤 discard)가 해제한다
   return true;
 }
 

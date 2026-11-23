@@ -5,7 +5,6 @@
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QPlainTextEdit>
-
 #include <algorithm>
 
 namespace onpdf::app {
@@ -39,8 +38,10 @@ FormFieldEditor::FormFieldEditor(int page, engine::FormWidgetInfo widget, QWidge
 void FormFieldEditor::place(const QRectF& viewport_rect, double px_per_pt) {
   // 너무 작은 칸(체크 크기)도 입력할 수 있게 최소 크기를 둔다
   const QRectF r = viewport_rect.adjusted(-1, -1, 1, 1);
-  setGeometry(QRect(r.topLeft().toPoint(), QSize(std::max(40, qRound(r.width())), std::max(18, qRound(r.height())))));
-  double pixel = widget_.font_size > 0 ? widget_.font_size * px_per_pt : viewport_rect.height() * 0.6;
+  setGeometry(QRect(r.topLeft().toPoint(),
+                    QSize(std::max(40, qRound(r.width())), std::max(18, qRound(r.height())))));
+  double pixel =
+      widget_.font_size > 0 ? widget_.font_size * px_per_pt : viewport_rect.height() * 0.6;
   if (widget_.multiline && widget_.font_size <= 0) pixel = 12.0 * px_per_pt;
   QFont font = this->font();
   font.setPixelSize(std::max(8, qRound(pixel)));

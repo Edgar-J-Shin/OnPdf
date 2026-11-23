@@ -4,10 +4,10 @@
 //   QApplication → UiDispatcher → PdfiumWorker → MainWindow
 // 창이 먼저 죽고(핸들 close), 워커가 join 되고, 그 뒤 디스패처가 미처리 콜백을 버린다.
 
-#include "main_window.h"
 #include "onpdf/core/engine/pdfium_worker.h"
-#include "ui_dispatcher.h"
 
+#include "main_window.h"
+#include "ui_dispatcher.h"
 #include <QApplication>
 #include <QCommandLineOption>
 #include <QCommandLineParser>

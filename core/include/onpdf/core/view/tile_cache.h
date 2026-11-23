@@ -32,7 +32,8 @@ class TileCache {
   // 같은 키가 있으면 교체. 상한 초과 시 가장 오래된 것부터 제거
   void put(const TileKey& key, std::shared_ptr<const Bitmap> bitmap);
   // 한 쪽의 모든 타일 (배율 불문). 대체 타일(이전 배율·미리보기) 그리기용. LRU 갱신 없음
-  [[nodiscard]] std::vector<std::pair<TileKey, std::shared_ptr<const Bitmap>>> tiles_for_page(int page) const;
+  [[nodiscard]] std::vector<std::pair<TileKey, std::shared_ptr<const Bitmap>>> tiles_for_page(
+      int page) const;
   // 모든 키 (LRU 순서 아님). 테스트·진단용
   [[nodiscard]] std::vector<TileKey> keys() const;
   void clear();

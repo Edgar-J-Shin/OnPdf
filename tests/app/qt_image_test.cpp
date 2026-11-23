@@ -1,8 +1,7 @@
 #include "qt_image.h"
 
-#include <gtest/gtest.h>
-
 #include <QImage>
+#include <gtest/gtest.h>
 
 namespace onpdf::app {
 namespace {
@@ -14,8 +13,8 @@ Bitmap sample_bitmap() {
   b.stride = 12;
   b.pixels = {
       // B    G    R    A
-      0,   0,   255, 255, 0,   255, 0,   255, 255, 0,   0,   255,  // red, green, blue
-      10,  20,  30,  255, 40,  50,  60,  255, 70,  80,  90,  255,
+      0,  0,  255, 255, 0,  255, 0,  255, 255, 0,  0,  255,  // red, green, blue
+      10, 20, 30,  255, 40, 50,  60, 255, 70,  80, 90, 255,
   };
   return b;
 }

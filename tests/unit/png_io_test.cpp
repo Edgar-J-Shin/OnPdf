@@ -1,8 +1,7 @@
 #include "onpdf/core/image/png_io.h"
 
-#include <gtest/gtest.h>
-
 #include <filesystem>
+#include <gtest/gtest.h>
 
 namespace onpdf::image {
 namespace {
@@ -14,8 +13,8 @@ TEST(PngIo, RoundTripPreservesPixels) {
   bitmap.stride = 12;
   bitmap.pixels = {
       // B    G    R    A
-      0,   0,   255, 255, 0,   255, 0,   255, 255, 0,   0,   255,  // row 0: red, green, blue
-      10,  20,  30,  255, 40,  50,  60,  255, 70,  80,  90,  255,  // row 1
+      0,  0,  255, 255, 0,  255, 0,  255, 255, 0,  0,  255,  // row 0: red, green, blue
+      10, 20, 30,  255, 40, 50,  60, 255, 70,  80, 90, 255,  // row 1
   };
 
   const auto path = std::filesystem::temp_directory_path() / "onpdf_png_io_test.png";

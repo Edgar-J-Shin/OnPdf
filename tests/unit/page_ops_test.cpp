@@ -1,10 +1,8 @@
 #include "onpdf/edit/page_ops.h"
 
 #include "../fake_document.h"
-
-#include <gtest/gtest.h>
-
 #include <algorithm>
+#include <gtest/gtest.h>
 #include <numeric>
 #include <random>
 #include <vector>
@@ -40,10 +38,12 @@ TEST(PageOps, ValidateMoveRejectsBadArguments) {
 TEST(PageOps, InvertOrderIsInverse) {
   const std::vector<int> order{2, 0, 3, 1};
   const auto inv = invert_order(order);
-  for (std::size_t i = 0; i < order.size(); ++i) EXPECT_EQ(inv[static_cast<std::size_t>(order[i])], static_cast<int>(i));
+  for (std::size_t i = 0; i < order.size(); ++i)
+    EXPECT_EQ(inv[static_cast<std::size_t>(order[i])], static_cast<int>(i));
 }
 
-// apply_order 가 가짜 문서를 정확히 target 순서로 만들고, 되돌리기(역순열)로 원래로 온다 — 무작위 순열 100회
+// apply_order 가 가짜 문서를 정확히 target 순서로 만들고, 되돌리기(역순열)로 원래로 온다 — 무작위
+// 순열 100회
 TEST(PageOps, ApplyOrderRandomPermutationsRoundTrip) {
   std::mt19937 rng(1234);
   for (int trial = 0; trial < 100; ++trial) {
@@ -51,7 +51,8 @@ TEST(PageOps, ApplyOrderRandomPermutationsRoundTrip) {
     std::vector<int> target(static_cast<std::size_t>(n));
     std::iota(target.begin(), target.end(), 0);
     std::shuffle(target.begin(), target.end(), rng);
-    FakeDocument doc(std::vector<engine::PageSize>(static_cast<std::size_t>(n), engine::PageSize{100, 200}));
+    FakeDocument doc(
+        std::vector<engine::PageSize>(static_cast<std::size_t>(n), engine::PageSize{100, 200}));
     ASSERT_TRUE(apply_order(doc, target));
     EXPECT_EQ(doc.labels(), target) << "trial " << trial;
     EXPECT_LE(doc.move_calls, n);

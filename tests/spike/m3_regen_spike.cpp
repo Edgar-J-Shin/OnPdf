@@ -1,5 +1,6 @@
 // Spike #55 후속: M3 객체 편집(#47·#49)이 기존 문서에서 PDFium 콘텐츠 재생성 손실을 내는가.
-// 제품 엔진(PdfiumDocument)을 그대로 써서 시나리오별로 편집 → 저장 → 다시 열기 → 편집 영역 밖 픽셀 비교.
+// 제품 엔진(PdfiumDocument)을 그대로 써서 시나리오별로 편집 → 저장 → 다시 열기 → 편집 영역 밖 픽셀
+// 비교.
 //
 // 실행: onpdf_spike_m3_regen <out-dir> a.pdf b.pdf ...   (쪽 0, 1)
 // 시나리오
@@ -46,11 +47,13 @@ long diff_outside(const Bitmap& a, const Bitmap& b, const std::vector<Rect>& mas
       const double px = x / kScale, py = y / kScale;
       bool masked = false;
       for (const auto& m : masks)
-        if (px >= m.x - 2 && px <= m.x + m.w + 2 && py >= m.y - 2 && py <= m.y + m.h + 2) masked = true;
+        if (px >= m.x - 2 && px <= m.x + m.w + 2 && py >= m.y - 2 && py <= m.y + m.h + 2)
+          masked = true;
       if (masked) continue;
       const auto* pa = a.row(y) + x * 4;
       const auto* pb = b.row(y) + x * 4;
-      const int d = std::max({std::abs(pa[0] - pb[0]), std::abs(pa[1] - pb[1]), std::abs(pa[2] - pb[2])});
+      const int d =
+          std::max({std::abs(pa[0] - pb[0]), std::abs(pa[1] - pb[1]), std::abs(pa[2] - pb[2])});
       if (d > 48) ++n;
     }
   return n;
@@ -63,7 +66,8 @@ RenderOptions opts() {
   return o;
 }
 
-Stat finish(PdfiumDocument& doc, int page, const fs::path& tmp, const Bitmap& base, const std::vector<Rect>& masks) {
+Stat finish(PdfiumDocument& doc, int page, const fs::path& tmp, const Bitmap& base,
+            const std::vector<Rect>& masks) {
   Stat s;
   if (auto r = doc.save_to(tmp, false); !r) {
     s.error = "save: " + r.error().message;
@@ -83,7 +87,9 @@ Stat finish(PdfiumDocument& doc, int page, const fs::path& tmp, const Bitmap& ba
   return s;
 }
 
-std::string cell(const Stat& s) { return s.error.empty() ? std::to_string(s.outside_big) : s.error; }
+std::string cell(const Stat& s) {
+  return s.error.empty() ? std::to_string(s.outside_big) : s.error;
+}
 
 }  // namespace
 
@@ -102,7 +108,8 @@ int main(int argc, char** argv) {
     const auto bytes = read_file(file);
     auto base_doc = PdfiumDocument::open_from_memory(bytes);
     if (!base_doc) continue;
-    const std::string name = file.parent_path().filename().string() + "/" + file.filename().string();
+    const std::string name =
+        file.parent_path().filename().string() + "/" + file.filename().string();
     for (int p = 0; p < std::min(2, base_doc->page_count()); ++p) {
       auto base = base_doc->render_page(p, opts());
       if (!base) continue;
@@ -152,7 +159,8 @@ int main(int argc, char** argv) {
       } else {
         move.error = del.error = "-";
       }
-      std::cout << name << '\t' << p << '\t' << images << '\t' << cell(add) << '\t' << cell(move) << '\t' << cell(del) << std::endl;
+      std::cout << name << '\t' << p << '\t' << images << '\t' << cell(add) << '\t' << cell(move)
+                << '\t' << cell(del) << std::endl;
     }
   }
   std::error_code ec;

@@ -7,7 +7,6 @@
 #include <QImage>
 #include <QObject>
 #include <QPainter>
-
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -20,8 +19,8 @@ namespace onpdf::app {
 
 class UiDispatcher;
 
-// 인쇄 작업 하나. 쪽은 워커에서 래스터로 렌더(kNormal, 동시 최대 2장)하고, 메인 스레드에서 쪽 순서대로
-// QPrinter 에 그린다. 프린터는 작업보다 오래 살아야 한다 (MainWindow 소유).
+// 인쇄 작업 하나. 쪽은 워커에서 래스터로 렌더(kNormal, 동시 최대 2장)하고, 메인 스레드에서 쪽
+// 순서대로 QPrinter 에 그린다. 프린터는 작업보다 오래 살아야 한다 (MainWindow 소유).
 class PrintJob : public QObject {
   Q_OBJECT
  public:
@@ -33,20 +32,23 @@ class PrintJob : public QObject {
     bool high_quality = true;
   };
 
-  PrintJob(engine::DocumentHandle handle, UiDispatcher& dispatcher, QPrinter& printer, Request request,
-           QObject* parent = nullptr);
+  PrintJob(engine::DocumentHandle handle, UiDispatcher& dispatcher, QPrinter& printer,
+           Request request, QObject* parent = nullptr);
   // 진행 중이면 신호 없이 취소한다 (소유자가 소멸 중일 수 있으므로)
   ~PrintJob() override;
 
   // 인쇄를 시작한다. 시작하지 못하면 false (finished(kFailed) 는 다음 이벤트 턴에)
   bool start();
-  // 대기 렌더 취소 + 프린터 작업 중단 → finished(kCancelled) (다음 이벤트 턴). 이미 끝났으면 아무것도 하지 않는다
+  // 대기 렌더 취소 + 프린터 작업 중단 → finished(kCancelled) (다음 이벤트 턴). 이미 끝났으면
+  // 아무것도 하지 않는다
   void cancel();
 
   [[nodiscard]] bool active() const noexcept { return active_; }
   [[nodiscard]] int total_sheets() const noexcept { return total_sheets_; }
   [[nodiscard]] int printed_sheets() const noexcept { return printed_sheets_; }
-  [[nodiscard]] const std::vector<int>& failed_pages() const noexcept { return failed_pages_; }  // 0 기준
+  [[nodiscard]] const std::vector<int>& failed_pages() const noexcept {
+    return failed_pages_;
+  }  // 0 기준
   // 테스트·측정용
   [[nodiscard]] int max_in_flight() const noexcept { return max_in_flight_; }
   [[nodiscard]] qint64 max_draw_ms() const noexcept { return max_draw_ms_; }
@@ -67,7 +69,7 @@ class PrintJob : public QObject {
     std::uint64_t serial = 0;
   };
   struct Slot {
-    QImage image;            // null 이면 렌더 실패 → 빈 장
+    QImage image;  // null 이면 렌더 실패 → 빈 장
     view::Placement placement;
   };
 
@@ -103,9 +105,12 @@ class PrintJob : public QObject {
 };
 
 // 인쇄 대화상자를 거친 QPrinter 상태 + 문서 정보 → 요청. current_page 는 0 기준
-[[nodiscard]] PrintJob::Request make_print_request(const QPrinter& printer, const engine::DocumentInfo& info,
+[[nodiscard]] PrintJob::Request make_print_request(const QPrinter& printer,
+                                                   const engine::DocumentInfo& info,
                                                    int current_page);
-// 문서가 정한 인쇄 기본값(매수·쪽 범위·양면)을 대화상자 초기값으로 넣는다. 이전 문서의 범위는 지운다
-void apply_print_preferences(QPrinter& printer, const view::PrintPreferences& prefs, int page_count);
+// 문서가 정한 인쇄 기본값(매수·쪽 범위·양면)을 대화상자 초기값으로 넣는다. 이전 문서의 범위는
+// 지운다
+void apply_print_preferences(QPrinter& printer, const view::PrintPreferences& prefs,
+                             int page_count);
 
 }  // namespace onpdf::app

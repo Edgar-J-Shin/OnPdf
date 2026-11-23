@@ -1,7 +1,6 @@
 #include "onpdf/core/engine/pdfium_document.h"
 
 #include "../test_support.h"
-
 #include <gtest/gtest.h>
 
 namespace onpdf::engine {

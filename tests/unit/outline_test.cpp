@@ -1,11 +1,10 @@
-#include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/core/view/outline.h"
 
+#include "onpdf/core/engine/pdfium_document.h"
+
 #include "../test_support.h"
-
-#include <gtest/gtest.h>
-
 #include <cstddef>
+#include <gtest/gtest.h>
 #include <string>
 
 namespace onpdf::view {
@@ -116,8 +115,10 @@ TEST(OutlineLoad, PdfiumSampleHasUriAndEmptyTargets) {
   bool has_uri = false;
   bool has_none = false;
   for (const auto& item : outline->items) {
-    if (!item.target) has_none = true;
-    else if (item.target->kind == LinkKind::kUri) has_uri = true;
+    if (!item.target)
+      has_none = true;
+    else if (item.target->kind == LinkKind::kUri)
+      has_uri = true;
   }
   EXPECT_TRUE(has_uri);
   EXPECT_TRUE(has_none);

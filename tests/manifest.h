@@ -3,13 +3,11 @@
 // testdata/manifest.tsv 읽기 — 매니페스트 테스트와 왕복 테스트가 함께 쓴다.
 
 #include "test_support.h"
-
-#include <gtest/gtest.h>
-
 #include <cctype>
 #include <charconv>
 #include <cstdio>
 #include <fstream>
+#include <gtest/gtest.h>
 #include <string>
 #include <vector>
 
@@ -78,7 +76,8 @@ inline const Manifest& manifest() {
       e.owner_password = cols[3];
       if (!parse_number(cols[4], e.pages) || !parse_number(cols[5], e.width) ||
           !parse_number(cols[6], e.height)) {
-        result.bad_rows.push_back("line " + std::to_string(line_no) + ": pages/width/height not numeric");
+        result.bad_rows.push_back("line " + std::to_string(line_no) +
+                                  ": pages/width/height not numeric");
         continue;
       }
       e.render = cols[7] == "1";
@@ -93,9 +92,12 @@ inline const Manifest& manifest() {
   return m;
 }
 
-inline std::vector<ManifestEntry> load_manifest() { return manifest().entries; }
+inline std::vector<ManifestEntry> load_manifest() {
+  return manifest().entries;
+}
 
-// gtest 이름에는 영숫자·밑줄만 쓸 수 있다. 비ASCII 바이트는 hex 로 바꿔 파일마다 고유한 이름을 만든다.
+// gtest 이름에는 영숫자·밑줄만 쓸 수 있다. 비ASCII 바이트는 hex 로 바꿔 파일마다 고유한 이름을
+// 만든다.
 inline std::string test_name(const ::testing::TestParamInfo<ManifestEntry>& info) {
   std::string name;
   for (char c : info.param.file) {

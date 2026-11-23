@@ -1,7 +1,8 @@
 #pragma once
 
 // 폼 채우기 Command (#51). 위젯은 필드 이름 + 컨트롤 index (engine::FieldRef) 로 가리킨다.
-// 이전 값은 첫 실행 때 문서에서 읽어 보관한다. 같은 이름의 위젯은 값을 공유하므로 ChangeSet 은 엔진이 돌려준 쪽 전부
+// 이전 값은 첫 실행 때 문서에서 읽어 보관한다. 같은 이름의 위젯은 값을 공유하므로 ChangeSet 은
+// 엔진이 돌려준 쪽 전부
 
 #include "onpdf/core/engine/form.h"
 #include "onpdf/edit/command.h"
@@ -28,9 +29,10 @@ class SetFormTextCommand final : public Command {
   bool executed_ = false;
 };
 
-// 체크박스 켜기·끄기, 라디오 위젯 선택. 라디오의 이전 선택은 같은 필드에서 켜져 있던 위젯 (다른 쪽 포함).
-// 처음 선택 없던 라디오 그룹의 첫 선택은 되돌릴 수 없다 (PDFium 이 그룹 해제를 지원하지 않음): undo 는 문서를 바꾸지 않고
-// 성공한다 — 실패로 두면 스택이 막혀 그 앞의 편집도 되돌릴 수 없다. 앱은 undoable() 이 거짓이면 안내한다
+// 체크박스 켜기·끄기, 라디오 위젯 선택. 라디오의 이전 선택은 같은 필드에서 켜져 있던 위젯 (다른 쪽
+// 포함). 처음 선택 없던 라디오 그룹의 첫 선택은 되돌릴 수 없다 (PDFium 이 그룹 해제를 지원하지
+// 않음): undo 는 문서를 바꾸지 않고 성공한다 — 실패로 두면 스택이 막혀 그 앞의 편집도 되돌릴 수
+// 없다. 앱은 undoable() 이 거짓이면 안내한다
 class SetFormCheckedCommand final : public Command {
  public:
   SetFormCheckedCommand(int page, engine::FieldRef ref, bool checked);
@@ -45,8 +47,8 @@ class SetFormCheckedCommand final : public Command {
   engine::FieldRef ref_;
   bool checked_;
   bool radio_ = false;
-  bool before_checked_ = false;     // 체크박스
-  int previous_page_ = -1;          // 라디오: 이전에 켜져 있던 위젯 (없으면 -1)
+  bool before_checked_ = false;  // 체크박스
+  int previous_page_ = -1;       // 라디오: 이전에 켜져 있던 위젯 (없으면 -1)
   engine::FieldRef previous_ref_;
   bool executed_ = false;
 };

@@ -1,11 +1,10 @@
-#include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/edit/insert_pages.h"
+
+#include "onpdf/core/engine/pdfium_document.h"
 
 #include "../fake_document.h"
 #include "../test_support.h"
-
 #include <gtest/gtest.h>
-
 #include <string>
 #include <vector>
 
@@ -20,7 +19,8 @@ using onpdf::test::testdata;
 
 TEST(InsertPagesCommand, ExecuteUndoRedoOnFake) {
   FakeDocument doc({{1, 1}, {2, 2}});
-  doc.add_file("src.pdf", FakeFile{{{{9, 9}, 0, 100}, {{8, 8}, 0, 101}, {{7, 7}, 0, 102}}, "", true});
+  doc.add_file("src.pdf",
+               FakeFile{{{{9, 9}, 0, 100}, {{8, 8}, 0, 101}, {{7, 7}, 0, 102}}, "", true});
   InsertPagesCommand cmd("src.pdf", "", {2, 0}, 1);  // 소스 0·2 쪽을 1번 자리에
   auto change = cmd.execute(doc);
   ASSERT_TRUE(change) << change.error().message;

@@ -1,15 +1,14 @@
 // QpdfTools: 병합(주 입력 목차 보존)·추출·검사·쪽 수·권한 — write_files_safely 와 함께 (#37)
-#include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/core/engine/qpdf_tools.h"
+
+#include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/core/engine/save.h"
 #include "onpdf/core/platform/path.h"
 #include "onpdf/edit/add_text_command.h"
 
 #include "../test_support.h"
-
-#include <gtest/gtest.h>
-
 #include <filesystem>
+#include <gtest/gtest.h>
 
 namespace onpdf::engine {
 namespace {
@@ -24,19 +23,21 @@ std::size_t files_in(const std::filesystem::path& dir) {
 }
 
 // 병합 결과를 임시→검증→교체로 쓰는 호출자 쪽 조립 (앱·CLI 가 쓰는 것과 같은 모양)
-Result<std::vector<SaveResult>> merge_safely(const std::vector<StructureInput>& inputs, const std::filesystem::path& out,
-                                             int expected_pages) {
+Result<std::vector<SaveResult>> merge_safely(const std::vector<StructureInput>& inputs,
+                                             const std::filesystem::path& out, int expected_pages) {
   SafeWriteHooks hooks;
   hooks.write = [&](const std::vector<std::filesystem::path>& temps) -> Result<void> {
     auto r = QpdfTools::merge(inputs, temps.front());
     if (!r) return std::unexpected(r.error());
     return {};
   };
-  hooks.verify = [&](std::size_t, const std::filesystem::path&, const std::filesystem::path& temp) -> Result<void> {
+  hooks.verify = [&](std::size_t, const std::filesystem::path&,
+                     const std::filesystem::path& temp) -> Result<void> {
     if (auto c = QpdfTools::check(temp); !c) return std::unexpected(c.error());
     auto n = QpdfTools::page_count(temp);
     if (!n) return std::unexpected(n.error());
-    if (*n != expected_pages) return make_error(ErrorCode::kSaveVerifyFailed, "page count mismatch");
+    if (*n != expected_pages)
+      return make_error(ErrorCode::kSaveVerifyFailed, "page count mismatch");
     return {};
   };
   return write_files_safely({out}, hooks);
@@ -73,7 +74,8 @@ TEST(QpdfTools, CheckReportsWarningsAndErrors) {
 TEST(QpdfTools, MergeKeepsPrimaryOutlineAndPages) {
   ScopedTempDir dir;
   const auto out = dir / "merged.pdf";
-  const std::vector<StructureInput> inputs{{testdata("bookmarks.pdf"), ""}, {testdata("encrypted-aes256.pdf"), "user"},
+  const std::vector<StructureInput> inputs{{testdata("bookmarks.pdf"), ""},
+                                           {testdata("encrypted-aes256.pdf"), "user"},
                                            {testdata("korean-embedded.pdf"), ""}};
   auto saved = merge_safely(inputs, out, 13);
   ASSERT_TRUE(saved) << saved.error().message;
@@ -87,7 +89,8 @@ TEST(QpdfTools, MergeKeepsPrimaryOutlineAndPages) {
   auto korean = doc->load_text(12);
   ASSERT_TRUE(korean);
   bool non_ascii = false;
-  for (char ch : korean->all_text()) non_ascii = non_ascii || static_cast<unsigned char>(ch) >= 0x80;
+  for (char ch : korean->all_text())
+    non_ascii = non_ascii || static_cast<unsigned char>(ch) >= 0x80;
   EXPECT_TRUE(non_ascii);
   EXPECT_EQ(doc->signature_count(), 0);
 }
@@ -95,14 +98,17 @@ TEST(QpdfTools, MergeKeepsPrimaryOutlineAndPages) {
 TEST(QpdfTools, MergeRejectsBadInputsWithoutOutput) {
   ScopedTempDir dir;
   const auto out = dir / "merged.pdf";
-  auto wrong_pw = merge_safely({{testdata("simple.pdf"), ""}, {testdata("encrypted-aes256.pdf"), "wrong"}}, out, 4);
+  auto wrong_pw = merge_safely(
+      {{testdata("simple.pdf"), ""}, {testdata("encrypted-aes256.pdf"), "wrong"}}, out, 4);
   ASSERT_FALSE(wrong_pw);
   EXPECT_EQ(wrong_pw.error().code, ErrorCode::kPasswordRequired);
   EXPECT_NE(wrong_pw.error().message.find("encrypted-aes256.pdf"), std::string::npos);
-  auto forbidden = merge_safely({{testdata("simple.pdf"), ""}, {testdata("perm-no-extract.pdf"), ""}}, out, 4);
+  auto forbidden =
+      merge_safely({{testdata("simple.pdf"), ""}, {testdata("perm-no-extract.pdf"), ""}}, out, 4);
   ASSERT_FALSE(forbidden);
   EXPECT_EQ(forbidden.error().code, ErrorCode::kPermissionDenied);
-  auto broken = merge_safely({{testdata("simple.pdf"), ""}, {testdata("truncated.pdf"), ""}}, out, 2);
+  auto broken =
+      merge_safely({{testdata("simple.pdf"), ""}, {testdata("truncated.pdf"), ""}}, out, 2);
   EXPECT_FALSE(broken);
   EXPECT_FALSE(QpdfTools::merge({}, out));
   EXPECT_EQ(files_in(dir.path()), 0u) << "실패하면 결과 파일도 임시 파일도 없다";
@@ -118,7 +124,8 @@ TEST(QpdfTools, MergeRejectsBadInputsWithoutOutput) {
 TEST(QpdfTools, EncryptedPrimaryInputYieldsPlainOutput) {
   ScopedTempDir dir;
   const auto out = dir / "merged.pdf";
-  auto saved = merge_safely({{testdata("encrypted-aes256.pdf"), "user"}, {testdata("simple.pdf"), ""}}, out, 4);
+  auto saved = merge_safely(
+      {{testdata("encrypted-aes256.pdf"), "user"}, {testdata("simple.pdf"), ""}}, out, 4);
   ASSERT_TRUE(saved) << saved.error().message;
   EXPECT_EQ(*QpdfTools::page_count(out), 4);  // 암호 없이
   auto doc = PdfiumDocument::open(out);
@@ -142,7 +149,8 @@ TEST(QpdfTools, DamagedFileNamedPasswordIsNotAPasswordError) {
   auto checked = QpdfTools::check(odd);
   ASSERT_FALSE(checked);
   EXPECT_EQ(checked.error().code, ErrorCode::kJobFailed);
-  EXPECT_EQ(checked.error().message.rfind("qpdfjob json: ", 0), std::string::npos) << "접두가 정리된다: " << checked.error().message;
+  EXPECT_EQ(checked.error().message.rfind("qpdfjob json: ", 0), std::string::npos)
+      << "접두가 정리된다: " << checked.error().message;
   // 진짜 암호 오류는 여전히 구분된다
   auto locked = QpdfTools::check(testdata("encrypted-aes256.pdf"));
   ASSERT_FALSE(locked);
@@ -153,7 +161,8 @@ TEST(QpdfTools, DamagedFileNamedPasswordIsNotAPasswordError) {
 TEST(QpdfTools, MergeRecoversDamagedInputWithWarnings) {
   ScopedTempDir dir;
   const auto out = dir / "merged.pdf";
-  auto report = QpdfTools::merge({{testdata("bad-xref.pdf"), ""}, {testdata("simple.pdf"), ""}}, out);
+  auto report =
+      QpdfTools::merge({{testdata("bad-xref.pdf"), ""}, {testdata("simple.pdf"), ""}}, out);
   ASSERT_TRUE(report) << report.error().message;
   EXPECT_FALSE(report->warnings.empty());
   EXPECT_EQ(*QpdfTools::page_count(out), 4);
@@ -166,21 +175,25 @@ TEST(QpdfTools, ExtractRangesAllOrNothing) {
   const auto ranges = ranges_every(3, 10);
   std::vector<std::filesystem::path> outs;
   for (std::size_t i = 0; i < ranges.size(); ++i) {
-    outs.push_back(dir.path() / path_from_utf8(output_name("bookmarks-%d.pdf", static_cast<int>(i) + 1,
-                                                            static_cast<int>(ranges.size()), ranges[i], 10)));
+    outs.push_back(dir.path() /
+                   path_from_utf8(output_name("bookmarks-%d.pdf", static_cast<int>(i) + 1,
+                                              static_cast<int>(ranges.size()), ranges[i], 10)));
   }
   SafeWriteHooks hooks;
   hooks.write = [&](const std::vector<std::filesystem::path>& temps) -> Result<void> {
     for (std::size_t i = 0; i < temps.size(); ++i) {
-      if (auto r = QpdfTools::extract(in, ranges[i], temps[i]); !r) return std::unexpected(r.error());
+      if (auto r = QpdfTools::extract(in, ranges[i], temps[i]); !r)
+        return std::unexpected(r.error());
     }
     return {};
   };
   int verified = 0;
-  hooks.verify = [&](std::size_t i, const std::filesystem::path&, const std::filesystem::path& temp) -> Result<void> {
+  hooks.verify = [&](std::size_t i, const std::filesystem::path&,
+                     const std::filesystem::path& temp) -> Result<void> {
     auto n = QpdfTools::page_count(temp);
     if (!n) return std::unexpected(n.error());
-    if (*n != ranges[i].last - ranges[i].first + 1) return make_error(ErrorCode::kSaveVerifyFailed, "pages");
+    if (*n != ranges[i].last - ranges[i].first + 1)
+      return make_error(ErrorCode::kSaveVerifyFailed, "pages");
     ++verified;
     return {};
   };
@@ -199,7 +212,8 @@ TEST(QpdfTools, ExtractRangesAllOrNothing) {
   std::vector<std::filesystem::path> outs2{dir2 / "a.pdf", dir2 / "b.pdf"};
   SafeWriteHooks failing;
   failing.write = hooks.write;
-  failing.verify = [&](std::size_t, const std::filesystem::path& target, const std::filesystem::path&) -> Result<void> {
+  failing.verify = [&](std::size_t, const std::filesystem::path& target,
+                       const std::filesystem::path&) -> Result<void> {
     if (target.filename() == "b.pdf") return make_error(ErrorCode::kSaveVerifyFailed, "injected");
     return {};
   };
@@ -208,7 +222,6 @@ TEST(QpdfTools, ExtractRangesAllOrNothing) {
   EXPECT_EQ(r2.error().code, ErrorCode::kSaveVerifyFailed);
   EXPECT_EQ(files_in(dir2.path()), 0u) << "실패하면 결과 0개, 임시 0개";
 }
-
 
 // 재작성 (#61): 미참조 객체 폐기, 암호 유지, 손상 복구 경고는 성공, 오류는 실패
 TEST(QpdfTools, RewriteDropsUnreferencedAndKeepsEncryption) {
@@ -230,7 +243,8 @@ TEST(QpdfTools, RewriteDropsUnreferencedAndKeepsEncryption) {
     const auto bloated = dir / "bloated.pdf";
     ASSERT_TRUE(doc->save_to(bloated, false));
     const auto original_size = std::filesystem::file_size(testdata("simple.pdf"));
-    EXPECT_GT(std::filesystem::file_size(bloated), original_size + 2000) << "PDFium 저장은 미참조 폰트를 남긴다";
+    EXPECT_GT(std::filesystem::file_size(bloated), original_size + 2000)
+        << "PDFium 저장은 미참조 폰트를 남긴다";
     const auto slim = dir / "slim.pdf";
     auto r = QpdfTools::rewrite(bloated, slim);
     ASSERT_TRUE(r) << r.error().message;

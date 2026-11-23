@@ -4,11 +4,9 @@
 #include "onpdf/edit/font_face.h"
 
 #include "../test_support.h"
-
-#include <gtest/gtest.h>
-
 #include <chrono>
 #include <fstream>
+#include <gtest/gtest.h>
 #include <iterator>
 
 namespace onpdf::engine {
@@ -76,7 +74,9 @@ TEST(TextObjects, AddWritesFontAndMarkAndReusesFont) {
   ASSERT_TRUE(save_document_safely(*doc, saved, {}));
   const std::string bytes = file_bytes(saved);
   int fontfiles = 0;
-  for (std::size_t at = bytes.find("/FontFile2"); at != std::string::npos; at = bytes.find("/FontFile2", at + 1)) ++fontfiles;
+  for (std::size_t at = bytes.find("/FontFile2"); at != std::string::npos;
+       at = bytes.find("/FontFile2", at + 1))
+    ++fontfiles;
   EXPECT_EQ(fontfiles, 1) << "같은 서브셋은 한 번만 임베딩";
   EXPECT_NE(bytes.find("/CIDToGIDMap"), std::string::npos);
   EXPECT_NE(bytes.find("/ToUnicode"), std::string::npos);
@@ -159,7 +159,8 @@ TEST(TextObjects, MoveShiftsInPagePointsOnAnyRotation) {
     options.scale = 1.0f;
     auto before = doc->render_page(0, options);
     ASSERT_TRUE(before);
-    TextObjectsSpec spec = spec_for("회전", {100, 100}, 20.0, {0, 0, 0, 255});  // 테스트 폰트에 있는 글자만
+    TextObjectsSpec spec =
+        spec_for("회전", {100, 100}, 20.0, {0, 0, 0, 255});  // 테스트 폰트에 있는 글자만
     auto added = doc->add_text_objects(0, spec);
     ASSERT_TRUE(added) << "rotation " << rotation;
     const auto origin_before = (*doc->text_objects(0))[0].baseline_origin;
@@ -170,7 +171,10 @@ TEST(TextObjects, MoveShiftsInPagePointsOnAnyRotation) {
     // 추출 글자 상자도 같이 움직인다
     bool found = false;
     for (const auto& ch : doc->load_text(0)->chars) {
-      if (ch.code == U'회') { found = true; EXPECT_NEAR(ch.box.x, 160.0, 3.0) << "rotation " << rotation; }
+      if (ch.code == U'회') {
+        found = true;
+        EXPECT_NEAR(ch.box.x, 160.0, 3.0) << "rotation " << rotation;
+      }
     }
     EXPECT_TRUE(found);
     EXPECT_FALSE(doc->move_page_objects(0, {"onpdf-text-ffffffffffffffff"}, {1, 1}));
@@ -179,7 +183,8 @@ TEST(TextObjects, MoveShiftsInPagePointsOnAnyRotation) {
     auto restored = doc->render_page(0, options);
     ASSERT_TRUE(restored);
     int diff = 0;
-    for (std::size_t i = 0; i < before->pixels.size(); ++i) diff += before->pixels[i] != restored->pixels[i];
+    for (std::size_t i = 0; i < before->pixels.size(); ++i)
+      diff += before->pixels[i] != restored->pixels[i];
     EXPECT_EQ(diff, 0) << "rotation " << rotation;
   }
 }
@@ -197,25 +202,29 @@ TEST(TextObjects, RemoveFindsByMarkAndPreservesOriginalContent) {
   auto with_text = doc->render_page(0, options);
   ASSERT_TRUE(with_text);
   int changed = 0;
-  for (std::size_t i = 0; i < before->pixels.size(); ++i) changed += before->pixels[i] != with_text->pixels[i];
+  for (std::size_t i = 0; i < before->pixels.size(); ++i)
+    changed += before->pixels[i] != with_text->pixels[i];
   EXPECT_GT(changed, 1000) << "글이 그려졌다";
   EXPECT_FALSE(doc->remove_text_objects(0, {"onpdf-text-ffffffffffffffff"})) << "없는 id";
-  EXPECT_FALSE(doc->remove_text_objects(0, {ids->ids.front(), "onpdf-text-ffffffffffffffff"})) << "하나라도 없으면 전부 거절";
+  EXPECT_FALSE(doc->remove_text_objects(0, {ids->ids.front(), "onpdf-text-ffffffffffffffff"}))
+      << "하나라도 없으면 전부 거절";
   EXPECT_EQ(doc->text_objects(0)->size(), 1u) << "부분 삭제 없음";
-  ASSERT_TRUE(doc->remove_text_objects(0, {ids->ids.front(), ids->ids.front()})) << "중복 id 는 한 번만 지운다 (리뷰 I11)";
+  ASSERT_TRUE(doc->remove_text_objects(0, {ids->ids.front(), ids->ids.front()}))
+      << "중복 id 는 한 번만 지운다 (리뷰 I11)";
   EXPECT_TRUE(doc->text_objects(0)->empty());
   auto after = doc->render_page(0, options);
   ASSERT_TRUE(after);
   int diff = 0;
-  for (std::size_t i = 0; i < before->pixels.size(); ++i) diff += before->pixels[i] != after->pixels[i];
+  for (std::size_t i = 0; i < before->pixels.size(); ++i)
+    diff += before->pixels[i] != after->pixels[i];
   EXPECT_EQ(diff, 0) << "GenerateContent 가 원본 내용을 바꾸지 않는다";
   // 저장 검증: 저장 전후 텍스트 객체 집합이 같아야 한다 (지운 상태에서도 통과)
   ScopedTempDir dir;
   EXPECT_TRUE(save_document_safely(*doc, dir / "removed.pdf", {}));
 }
 
-
-// 미참조 폰트 판정 (#61): 캐시가 비면 false, 쓰이는 동안 false, 지운 뒤 true, 같은 글자 집합을 다시 넣으면 false
+// 미참조 폰트 판정 (#61): 캐시가 비면 false, 쓰이는 동안 false, 지운 뒤 true, 같은 글자 집합을 다시
+// 넣으면 false
 TEST(TextObjects, HasUnreferencedFonts) {
   auto doc = PdfiumDocument::open(testdata("simple.pdf"));
   ASSERT_TRUE(doc);
@@ -229,7 +238,8 @@ TEST(TextObjects, HasUnreferencedFonts) {
   ASSERT_TRUE(again);
   EXPECT_EQ(doc->font_cache_size(), 1) << "같은 서브셋 key 재사용";
   EXPECT_FALSE(doc->has_unreferenced_fonts());
-  auto other = doc->add_text_objects(1, spec_for("둘째 쪽", {72, 100}, 20, {0, 0, 0, 255}));  // 다른 글자 집합 → 폰트 2개
+  auto other = doc->add_text_objects(
+      1, spec_for("둘째 쪽", {72, 100}, 20, {0, 0, 0, 255}));  // 다른 글자 집합 → 폰트 2개
   ASSERT_TRUE(other);
   EXPECT_EQ(doc->font_cache_size(), 2);
   EXPECT_FALSE(doc->has_unreferenced_fonts()) << "두 쪽에 걸쳐 모두 쓰인다";
@@ -245,7 +255,8 @@ TEST(TextObjects, HasUnreferencedFontsScansLargeDocumentQuickly) {
   ASSERT_TRUE(doc->remove_text_objects(999, added->ids));
   const auto t0 = std::chrono::steady_clock::now();
   EXPECT_TRUE(doc->has_unreferenced_fonts());
-  const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  const auto ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
   EXPECT_LT(ms, 2000.0) << "1,000쪽을 훑어도 저장 시간을 눈에 띄게 늘리지 않는다";
 }
 }  // namespace

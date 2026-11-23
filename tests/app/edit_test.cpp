@@ -1,37 +1,35 @@
-// 편집 기반(#31): 쪽 회전 → 화면 갱신, 실행 취소·다시 실행, 수정 표시, 저장·다른 이름으로 저장, 닫기·열기 전 확인.
-// 원본 저장 경로를 쓰는 테스트는 testdata 를 덮어쓰지 않도록 임시 폴더 사본을 연다.
+// 편집 기반(#31): 쪽 회전 → 화면 갱신, 실행 취소·다시 실행, 수정 표시, 저장·다른 이름으로 저장,
+// 닫기·열기 전 확인. 원본 저장 경로를 쓰는 테스트는 testdata 를 덮어쓰지 않도록 임시 폴더 사본을
+// 연다.
 
+#include "onpdf/core/engine/document_handle.h"
+#include "onpdf/core/engine/pdfium_worker.h"
+#include "onpdf/core/platform/path.h"
+#include "onpdf/edit/command.h"
+
+#include "../test_support.h"
 #include "document_view.h"
 #include "main_window.h"
 #include "outline_panel.h"
-#include "onpdf/core/engine/document_handle.h"
-#include "onpdf/edit/command.h"
-#include "onpdf/core/engine/pdfium_worker.h"
-#include "onpdf/core/platform/path.h"
 #include "thumbnail_panel.h"
 #include "ui_dispatcher.h"
-
-#include "../test_support.h"
-
-#include <gtest/gtest.h>
-
 #include <QAbstractButton>
-#include <QStatusBar>
+#include <QAbstractItemModel>
 #include <QAction>
 #include <QApplication>
 #include <QEventLoop>
 #include <QInputDialog>
+#include <QItemSelectionModel>
+#include <QListView>
 #include <QMessageBox>
 #include <QMimeData>
 #include <QPrinter>
 #include <QSpinBox>
-#include <QAbstractItemModel>
-#include <QItemSelectionModel>
-#include <QListView>
+#include <QStatusBar>
 #include <QTimer>
-
 #include <filesystem>
 #include <fstream>
+#include <gtest/gtest.h>
 #include <string>
 
 namespace onpdf::app {
@@ -92,7 +90,9 @@ class EditTest : public ::testing::Test {
   bool open_path(const std::filesystem::path& path) {
     const QString file = QString::fromStdString(onpdf::path_to_utf8(path.filename()));
     window_.open_file(QString::fromStdString(onpdf::path_to_utf8(path)));
-    return spin_until([&] { return window_.windowTitle().contains(file) && window_.document_view()->has_document(); });
+    return spin_until([&] {
+      return window_.windowTitle().contains(file) && window_.document_view()->has_document();
+    });
   }
   bool open(const char* name) { return open_path(testdata(name)); }
   // 임시 폴더 사본을 연다 (원래 경로로 저장해도 testdata 가 바뀌지 않게)
@@ -130,23 +130,28 @@ TEST_F(EditTest, RotateUndoRedoUpdatesViewAndModifiedState) {
   const QSize thumb_before = thumbs->thumb_size(0);
   ASSERT_GT(thumb_before.height(), thumb_before.width());  // 세로 쪽
   // 회전 전에 썸네일이 세로 그림으로 그려져 있어야 다시 렌더 여부를 판정할 수 있다
-  ASSERT_TRUE(spin_until([&] { return thumbs->cached_count() == 2 && thumbs->pending_requests() == 0; }));
+  ASSERT_TRUE(
+      spin_until([&] { return thumbs->cached_count() == 2 && thumbs->pending_requests() == 0; }));
   ASSERT_GT(thumbs->thumbnail(0).height(), thumbs->thumbnail(0).width());
-  // 뷰 레이아웃의 1쪽 높이 = 2쪽 위쪽 - 1쪽 위쪽 (간격 포함). 가장 넓은 쪽(2쪽, 792pt)이 그대로라 배율도 그대로
+  // 뷰 레이아웃의 1쪽 높이 = 2쪽 위쪽 - 1쪽 위쪽 (간격 포함). 가장 넓은 쪽(2쪽, 792pt)이 그대로라
+  // 배율도 그대로
   const auto first_page_height = [&] {
-    return view->page_point_to_viewport(1, {0, 0}).y() - view->page_point_to_viewport(0, {0, 0}).y();
+    return view->page_point_to_viewport(1, {0, 0}).y() -
+           view->page_point_to_viewport(0, {0, 0}).y();
   };
   const double height_before = first_page_height();
 
   ASSERT_TRUE(rotate(1));
   // 뷰 레이아웃도 새 쪽 크기: 1쪽 높이가 792pt → 612pt 비율로 줄었다
-  EXPECT_LT(first_page_height(), height_before * 0.85) << "view layout must use the rotated page size";
+  EXPECT_LT(first_page_height(), height_before * 0.85)
+      << "view layout must use the rotated page size";
   EXPECT_TRUE(window_.isWindowModified());
   EXPECT_TRUE(window_.undo_action()->isEnabled());
   EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("쪽 회전")));
   EXPECT_FALSE(window_.redo_action()->isEnabled());
   const QSize thumb_after = thumbs->thumb_size(0);
-  EXPECT_LT(thumb_after.height(), thumb_after.width()) << "thumbnail row must follow the rotated page";
+  EXPECT_LT(thumb_after.height(), thumb_after.width())
+      << "thumbnail row must follow the rotated page";
   // 썸네일 그림 자체도 새 방향으로 다시 렌더된다 (이전 세로 그림을 버림)
   ASSERT_TRUE(spin_until([&] {
     const QImage image = thumbs->thumbnail(0);
@@ -185,7 +190,8 @@ TEST_F(EditTest, SaveFailureKeepsModifiedAndReports) {
   ASSERT_TRUE(rotate(1));
   bool reported = false;
   answer_dialog("save_failed", QMessageBox::AcceptRole, &reported);
-  ASSERT_TRUE(window_.save_to(QString::fromStdString(onpdf::path_to_utf8(dir_ / "no-such-folder" / "x.pdf"))));
+  ASSERT_TRUE(window_.save_to(
+      QString::fromStdString(onpdf::path_to_utf8(dir_ / "no-such-folder" / "x.pdf"))));
   ASSERT_TRUE(spin_until([&] { return reported && !window_.saving(); }));
   EXPECT_TRUE(window_.isWindowModified());
 }
@@ -270,7 +276,8 @@ TEST_F(EditTest, SavingReadOnlyFileExplainsAndKeepsOriginal) {
     fs::path path;
     ~Restore() {
       std::error_code ec;
-      fs::permissions(path, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::add, ec);
+      fs::permissions(path, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::add,
+                      ec);
     }
   } restore{copy};
   if (std::ofstream probe(copy, std::ios::binary | std::ios::app); probe) {
@@ -325,11 +332,13 @@ TEST_F(EditTest, PrintWhileEditBusyIsRefused) {
       << window_.statusBar()->currentMessage().toStdString();
   ASSERT_TRUE(spin_until([&] { return idle(); }));
   ASSERT_TRUE(window_.print_with(printer));
-  ASSERT_TRUE(spin_until([&] { return window_.print_job() != nullptr && !window_.print_job()->active(); }));
+  ASSERT_TRUE(
+      spin_until([&] { return window_.print_job() != nullptr && !window_.print_job()->active(); }));
   EXPECT_TRUE(std::filesystem::exists(dir_ / "out.pdf"));
 }
 
-// 폴더에 새 파일을 만들 수 없으면 "다른 폴더에" 저장하라고 안내한다 (#31 리뷰 I4). 보호가 없는 환경(Windows·root)은 건너뛴다
+// 폴더에 새 파일을 만들 수 없으면 "다른 폴더에" 저장하라고 안내한다 (#31 리뷰 I4). 보호가 없는
+// 환경(Windows·root)은 건너뛴다
 TEST_F(EditTest, SavingIntoReadOnlyFolderExplains) {
   namespace fs = std::filesystem;
   const auto folder = dir_ / "locked";
@@ -384,9 +393,9 @@ TEST_F(EditTest, SignedDocumentSavesIncrementally) {
   ASSERT_TRUE(spin_until([&] { return !window_.saving() && !window_.isWindowModified(); }));
   const auto after = read_bytes(copy);
   ASSERT_GT(after.size(), original.size());
-  EXPECT_TRUE(std::equal(original.begin(), original.end(), after.begin())) << "signed bytes must be preserved";
+  EXPECT_TRUE(std::equal(original.begin(), original.end(), after.begin()))
+      << "signed bytes must be preserved";
 }
-
 
 // ---------------------------------------------------------------- 쪽 삭제·이동·삽입 (#33)
 
@@ -396,7 +405,9 @@ class PageOpsTest : public EditTest {
   QAbstractItemModel* model() { return thumbs()->list()->model(); }
   int rows() { return model()->rowCount(); }
   QSpinBox* spin() { return window_.findChild<QSpinBox*>(); }
-  bool wait_idle() { return spin_until([&] { return idle(); }); }
+  bool wait_idle() {
+    return spin_until([&] { return idle(); });
+  }
   bool go_to(int page) {
     window_.document_view()->go_to_page(page);
     return spin_until([&] { return window_.document_view()->current_page() == page; });
@@ -428,7 +439,8 @@ TEST_F(PageOpsTest, DeleteSelectedPagesUpdatesViewThumbsAndSpin) {
   ASSERT_NE(spin(), nullptr);
   EXPECT_EQ(spin()->maximum(), 8);
   EXPECT_TRUE(window_.isWindowModified());
-  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("쪽 삭제"))) << window_.undo_action()->text().toStdString();
+  EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("쪽 삭제")))
+      << window_.undo_action()->text().toStdString();
   ASSERT_TRUE(window_.edit_controller()->undo());
   ASSERT_TRUE(wait_idle());
   EXPECT_EQ(window_.document_view()->page_count(), 10);
@@ -496,7 +508,8 @@ TEST_F(PageOpsTest, MoveUpAndDownActionsUseCurrentPage) {
   EXPECT_FALSE(window_.edit_controller()->busy());
 }
 
-// 구조 편집 뒤에도 옮긴 블록이 선택으로 남아 "아래로 이동" 을 연속으로 눌러도 블록이 쪼개지지 않는다 (리뷰 W4)
+// 구조 편집 뒤에도 옮긴 블록이 선택으로 남아 "아래로 이동" 을 연속으로 눌러도 블록이 쪼개지지
+// 않는다 (리뷰 W4)
 TEST_F(PageOpsTest, SelectionFollowsMovedBlock) {
   ASSERT_TRUE(open("mixed-sizes.pdf"));
   window_.activateWindow();
@@ -517,7 +530,8 @@ TEST_F(PageOpsTest, SelectionFollowsMovedBlock) {
   EXPECT_EQ(thumbs()->selected_pages(), (std::vector<int>{2, 3}));  // 취소도 원래 자리를 선택
 }
 
-// 명령이 문서를 바꾼 뒤 실패하면(PDFium 은 롤백이 없다) 실제 문서 상태로 화면을 맞추고 수정됨으로 둔다 (리뷰 W5)
+// 명령이 문서를 바꾼 뒤 실패하면(PDFium 은 롤백이 없다) 실제 문서 상태로 화면을 맞추고 수정됨으로
+// 둔다 (리뷰 W5)
 class HalfFailingDelete final : public edit::Command {
  public:
   [[nodiscard]] std::string_view id() const noexcept override { return "half_failing"; }
@@ -525,7 +539,9 @@ class HalfFailingDelete final : public edit::Command {
     if (auto r = doc.delete_pages({0}); !r) return std::unexpected(r.error());
     return make_error(ErrorCode::kInvalidState, "simulated failure after change");
   }
-  Result<engine::ChangeSet> undo(engine::EditableDocument&) override { return make_error(ErrorCode::kInvalidState, "n/a"); }
+  Result<engine::ChangeSet> undo(engine::EditableDocument&) override {
+    return make_error(ErrorCode::kInvalidState, "n/a");
+  }
 };
 
 TEST_F(PageOpsTest, FailedCommandResyncsDocumentState) {
@@ -534,14 +550,15 @@ TEST_F(PageOpsTest, FailedCommandResyncsDocumentState) {
   ASSERT_TRUE(spin_until([&] { return idle() && window_.document_view()->page_count() == 9; }));
   EXPECT_EQ(rows(), 9);
   EXPECT_EQ(spin()->maximum(), 9);
-  EXPECT_TRUE(window_.isWindowModified());               // 문서는 바뀌었다
-  EXPECT_FALSE(window_.edit_controller()->can_undo());   // 기록은 믿을 수 없어 버렸다
+  EXPECT_TRUE(window_.isWindowModified());              // 문서는 바뀌었다
+  EXPECT_FALSE(window_.edit_controller()->can_undo());  // 기록은 믿을 수 없어 버렸다
   EXPECT_TRUE(window_.save_action()->isEnabled());
 }
 
 TEST_F(PageOpsTest, InsertFromFileAndUndo) {
   open_copy("simple.pdf");
-  ASSERT_TRUE(window_.insert_pages_from(QString::fromStdString(onpdf::path_to_utf8(testdata("korean-embedded.pdf"))), 1));
+  ASSERT_TRUE(window_.insert_pages_from(
+      QString::fromStdString(onpdf::path_to_utf8(testdata("korean-embedded.pdf"))), 1));
   ASSERT_TRUE(wait_idle());
   EXPECT_EQ(window_.document_view()->page_count(), 3);
   EXPECT_EQ(rows(), 3);
@@ -568,10 +585,13 @@ TEST_F(PageOpsTest, InsertingEncryptedSourceAsksPassword) {
     poll->deleteLater();
   });
   poll->start();
-  ASSERT_TRUE(window_.insert_pages_from(QString::fromStdString(onpdf::path_to_utf8(testdata("encrypted-aes256.pdf"))), 2));
-  ASSERT_TRUE(spin_until([&] { return asked && idle() && window_.document_view()->page_count() == 4; }));
+  ASSERT_TRUE(window_.insert_pages_from(
+      QString::fromStdString(onpdf::path_to_utf8(testdata("encrypted-aes256.pdf"))), 2));
+  ASSERT_TRUE(
+      spin_until([&] { return asked && idle() && window_.document_view()->page_count() == 4; }));
   EXPECT_EQ(rows(), 4);
-  // 끝에 넣었으니 화면은 3번째 쪽(첫 삽입 쪽), 스핀도 같은 값이어야 한다 (리뷰 W3: 범위보다 값이 먼저 들어가면 2 에 묶인다)
+  // 끝에 넣었으니 화면은 3번째 쪽(첫 삽입 쪽), 스핀도 같은 값이어야 한다 (리뷰 W3: 범위보다 값이
+  // 먼저 들어가면 2 에 묶인다)
   EXPECT_EQ(window_.document_view()->current_page(), 2);
   EXPECT_EQ(spin()->maximum(), 4);
   EXPECT_EQ(spin()->value(), 3);
@@ -579,8 +599,11 @@ TEST_F(PageOpsTest, InsertingEncryptedSourceAsksPassword) {
 
 TEST_F(PageOpsTest, SourceForbiddingExtractionIsExplained) {
   open_copy("simple.pdf");
-  ASSERT_TRUE(window_.insert_pages_from(QString::fromStdString(onpdf::path_to_utf8(testdata("perm-no-extract.pdf"))), 0));
-  ASSERT_TRUE(spin_until([&] { return idle() && window_.statusBar()->currentMessage().contains(QStringLiteral("추출")); }));
+  ASSERT_TRUE(window_.insert_pages_from(
+      QString::fromStdString(onpdf::path_to_utf8(testdata("perm-no-extract.pdf"))), 0));
+  ASSERT_TRUE(spin_until([&] {
+    return idle() && window_.statusBar()->currentMessage().contains(QStringLiteral("추출"));
+  }));
   EXPECT_EQ(window_.document_view()->page_count(), 2);
   EXPECT_FALSE(window_.isWindowModified());
 }
@@ -630,16 +653,19 @@ TEST_F(PageOpsTest, SelectedThumbnailsAreRotatedTogether) {
 TEST_F(PageOpsTest, OutlineReloadedAfterDeleteKeepsTab) {
   open_copy("bookmarks.pdf");
   OutlinePanel* outline = window_.outline_panel();
-  ASSERT_TRUE(spin_until([&] { return outline->outline() != nullptr && outline->row_count() > 0; }));
+  ASSERT_TRUE(
+      spin_until([&] { return outline->outline() != nullptr && outline->row_count() > 0; }));
   const int rows_before = outline->row_count();
   window_.sidebar()->setCurrentWidget(thumbs());
   ASSERT_TRUE(window_.delete_pages({0}));
   ASSERT_TRUE(wait_idle());
   // 재로드가 끝나면 새 스냅샷이 들어온다 (이전 스냅샷은 set_outline(nullptr) 로 비워진다)
-  ASSERT_TRUE(spin_until([&] { return outline->outline() != nullptr && outline->row_count() > 0; }));
+  ASSERT_TRUE(
+      spin_until([&] { return outline->outline() != nullptr && outline->row_count() > 0; }));
   EXPECT_EQ(outline->row_count(), rows_before);
   for (const auto& item : outline->outline()->items) {
-    if (item.target && item.target->kind == view::LinkKind::kPage) EXPECT_LT(item.target->page, 9) << item.title;
+    if (item.target && item.target->kind == view::LinkKind::kPage)
+      EXPECT_LT(item.target->page, 9) << item.title;
   }
   EXPECT_EQ(window_.sidebar()->currentWidget(), thumbs());  // 편집 뒤 재로드는 탭을 바꾸지 않는다
 }
@@ -648,7 +674,8 @@ TEST_F(PageOpsTest, SignatureWarningShownOnceThenProceeds) {
   open_copy("signed-dummy.pdf");
   bool warned = false;
   answer_dialog("signature_warning", QMessageBox::AcceptRole, &warned);
-  ASSERT_TRUE(window_.insert_pages_from(QString::fromStdString(onpdf::path_to_utf8(testdata("simple.pdf"))), 1));
+  ASSERT_TRUE(window_.insert_pages_from(
+      QString::fromStdString(onpdf::path_to_utf8(testdata("simple.pdf"))), 1));
   ASSERT_TRUE(spin_until([&] { return idle() && window_.document_view()->page_count() == 3; }));
   EXPECT_TRUE(warned);
   // 두 번째 구조 편집은 묻지 않는다 (대화상자가 뜨면 아래가 멈춰 시간 초과로 실패한다)
@@ -660,7 +687,8 @@ TEST_F(PageOpsTest, SignatureWarningCancelLeavesDocument) {
   open_copy("signed-dummy.pdf");
   bool warned = false;
   answer_dialog("signature_warning", QMessageBox::RejectRole, &warned);
-  EXPECT_FALSE(window_.insert_pages_from(QString::fromStdString(onpdf::path_to_utf8(testdata("simple.pdf"))), 1));
+  EXPECT_FALSE(window_.insert_pages_from(
+      QString::fromStdString(onpdf::path_to_utf8(testdata("simple.pdf"))), 1));
   EXPECT_TRUE(warned);
   EXPECT_EQ(window_.document_view()->page_count(), 1);
   EXPECT_FALSE(window_.isWindowModified());

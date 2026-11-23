@@ -21,7 +21,10 @@ struct TextPos {
 class TextSelection {
  public:
   [[nodiscard]] bool empty() const noexcept { return anchor_.page < 0 || anchor_ == focus_; }
-  void set(TextPos anchor, TextPos focus) noexcept { anchor_ = anchor; focus_ = focus; }
+  void set(TextPos anchor, TextPos focus) noexcept {
+    anchor_ = anchor;
+    focus_ = focus;
+  }
   void set_focus(TextPos focus) noexcept { focus_ = focus; }
   void clear() noexcept { anchor_ = focus_ = TextPos{}; }
 
@@ -37,7 +40,8 @@ class TextSelection {
     return !empty() && page >= start().page && page <= end().page;
   }
 
-  // 쪽별 인덱스 제공자로 텍스트를 합친다 (쪽 사이 "\n\n"). provider 가 nullptr 를 주면 그 쪽은 건너뛴다
+  // 쪽별 인덱스 제공자로 텍스트를 합친다 (쪽 사이 "\n\n"). provider 가 nullptr 를 주면 그 쪽은
+  // 건너뛴다
   [[nodiscard]] std::string text(const std::function<const PageTextIndex*(int)>& provider) const;
 
  private:
