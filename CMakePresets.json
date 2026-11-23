@@ -40,6 +40,17 @@
         "ONPDF_BUILD_APP": "ON",
         "CMAKE_PREFIX_PATH": "$env{QT_ROOT}"
       }
+    },
+    {
+      "name": "release-app",
+      "displayName": "Release + Qt app (배포용, #90)",
+      "inherits": "release",
+      "cacheVariables": {
+        "ONPDF_BUILD_APP": "ON",
+        "ONPDF_BUILD_TESTS": "OFF",
+        "ONPDF_BUILD_CLI": "OFF",
+        "CMAKE_PREFIX_PATH": "$env{QT_ROOT}"
+      }
     }
   ],
   "buildPresets": [
@@ -54,6 +65,10 @@
     {
       "name": "dev-app",
       "configurePreset": "dev-app"
+    },
+    {
+      "name": "release-app",
+      "configurePreset": "release-app"
     }
   ],
   "testPresets": [

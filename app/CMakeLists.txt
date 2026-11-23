@@ -23,6 +23,7 @@ add_library(onpdf_app_lib STATIC
   structure_job.h structure_job.cpp
   font_catalog_loader.h font_catalog_loader.cpp
   main_window.h main_window.cpp
+  file_open_filter.h
 )
 target_include_directories(onpdf_app_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(onpdf_app_lib PUBLIC onpdf::core onpdf::edit Qt6::Core Qt6::Gui Qt6::Widgets Qt6::PrintSupport)
@@ -31,19 +32,58 @@ onpdf_set_warnings(onpdf_app_lib)
 qt_add_executable(onpdf_app
   main.cpp
 )
-set_target_properties(onpdf_app PROPERTIES MACOSX_BUNDLE OFF WIN32_EXECUTABLE ON)
+# macOS 는 앱 번들(onpdf_app.app — 배포 워크플로우가 OnPdf.app 으로 이름을 바꾼다, #90), Windows 는 콘솔 없는 GUI 실행 파일
+set(ONPDF_MACOS_MIN "13.0" CACHE STRING "Info.plist LSMinimumSystemVersion (배포 워크플로우가 Qt 의 실제 최소 버전으로 넘긴다)")
+set_target_properties(onpdf_app PROPERTIES
+  WIN32_EXECUTABLE ON
+  MACOSX_BUNDLE ON
+  MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in"
+  MACOSX_BUNDLE_GUI_IDENTIFIER "io.github.edgar-j-shin.onpdf"
+  MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+  MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+  MACOSX_BUNDLE_COPYRIGHT "OnPdf contributors. Apache License 2.0")
 target_link_libraries(onpdf_app PRIVATE onpdf_app_lib Qt6::Widgets)
 target_compile_definitions(onpdf_app PRIVATE ONPDF_VERSION="${PROJECT_VERSION}")
 onpdf_set_warnings(onpdf_app)
 onpdf_set_runtime_rpath(onpdf_app)
 
-# 번들 글꼴 (#45): third_party/fetch_fonts.py 가 받아 둔 Noto Sans KR 을 실행 파일 옆 fonts/ 로 복사한다. 없으면 경고만 (텍스트 도구 비활성)
+# 글꼴·라이선스 자리: 번들은 Contents/Resources (글꼴 탐색이 applicationDirPath()/../Resources/fonts 를 본다), 그 밖에는 실행 파일 옆
+if(APPLE)
+  set(_onpdf_resource_dir "$<TARGET_BUNDLE_CONTENT_DIR:onpdf_app>/Resources")
+  set(_onpdf_install_resources "onpdf_app.app/Contents/Resources")
+else()
+  set(_onpdf_resource_dir "$<TARGET_FILE_DIR:onpdf_app>")
+  set(_onpdf_install_resources ".")
+endif()
+
+# 번들 글꼴 (#45): third_party/fetch_fonts.py 가 받아 둔 Noto Sans KR 을 fonts/ 로 복사한다. 없으면 경고만 (텍스트 도구 비활성)
 set(ONPDF_BUNDLED_FONT "${CMAKE_SOURCE_DIR}/third_party/fonts/NotoSansKR[wght].ttf")
+set(ONPDF_BUNDLED_FONT_LICENSE "${CMAKE_SOURCE_DIR}/third_party/fonts/OFL-NotoSansKR.txt")
 if(EXISTS "${ONPDF_BUNDLED_FONT}")
   add_custom_command(TARGET onpdf_app POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:onpdf_app>/fonts"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ONPDF_BUNDLED_FONT}" "${CMAKE_SOURCE_DIR}/third_party/fonts/OFL-NotoSansKR.txt" "$<TARGET_FILE_DIR:onpdf_app>/fonts/"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${_onpdf_resource_dir}/fonts"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ONPDF_BUNDLED_FONT}" "${ONPDF_BUNDLED_FONT_LICENSE}" "${_onpdf_resource_dir}/fonts/"
     COMMENT "Copying bundled font (Noto Sans KR, OFL)" VERBATIM)
 else()
   message(WARNING "번들 글꼴이 없습니다: python3 third_party/fetch_fonts.py 를 먼저 실행하세요 (텍스트 추가 도구가 비활성됩니다)")
 endif()
+
+# ---- 설치 규칙 (#90): cmake --install 이 배포 폴더를 만든다. Qt 는 windeployqt/macdeployqt 가 채운다 ----
+if(APPLE)
+  install(TARGETS onpdf_app BUNDLE DESTINATION .)
+  install(FILES "${ONPDF_PDFIUM_SHARED_LIB}" DESTINATION "onpdf_app.app/Contents/Frameworks")
+else()
+  install(TARGETS onpdf_app RUNTIME DESTINATION .)
+  if(WIN32)
+    # PDFium·vcpkg(qpdf·zlib·jpeg·harfbuzz…) 공유 라이브러리. Qt DLL 도 섞여 오지만 windeployqt 가 같은 파일을 쓴다
+    install(FILES $<TARGET_RUNTIME_DLLS:onpdf_app> DESTINATION .)
+  else()
+    install(FILES "${ONPDF_PDFIUM_SHARED_LIB}" DESTINATION .)
+  endif()
+endif()
+if(EXISTS "${ONPDF_BUNDLED_FONT}")
+  install(FILES "${ONPDF_BUNDLED_FONT}" "${ONPDF_BUNDLED_FONT_LICENSE}" DESTINATION "${_onpdf_install_resources}/fonts")
+endif()
+install(FILES "${CMAKE_SOURCE_DIR}/LICENSE" "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
+        DESTINATION "${_onpdf_install_resources}")
+install(DIRECTORY "${ONPDF_PDFIUM_LICENSES_DIR}/" DESTINATION "${_onpdf_install_resources}/licenses/pdfium")

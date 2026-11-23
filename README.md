@@ -31,6 +31,14 @@ PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편
 - [qpdf](https://github.com/qpdf/qpdf), Qt 6 Widgets (동적 링크), HarfBuzz + FreeType
 - GoogleTest, GitHub Actions
 
+## 설치
+
+[Releases](https://github.com/Edgar-J-Shin/OnPdf/releases) 에서 내려받습니다.
+
+- **Windows x64**: `OnPdf-<버전>-windows-x64.zip` 을 풀고 `onpdf_app.exe` 를 실행합니다(설치 과정 없음). 코드 서명 인증서가 아직 없어 SmartScreen 경고가 뜨면 "추가 정보 → 실행" 을 누르세요.
+- **macOS (Apple Silicon)**: `OnPdf-<버전>-macos-arm64.dmg` 를 열어 `OnPdf.app` 을 응용 프로그램 폴더로 끌어 놓습니다. 공증 전 빌드는 처음 한 번 Control-클릭 → "열기" 가 필요합니다. 최소 macOS 버전은 DMG 안 README.txt 에 적혀 있습니다. Intel Mac 용은 아직 없습니다.
+- 내려받은 파일은 같은 릴리스의 `SHA256SUMS.txt` 로 확인할 수 있습니다.
+
 ## 빌드
 
 ```bash

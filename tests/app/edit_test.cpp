@@ -9,6 +9,7 @@
 
 #include "../test_support.h"
 #include "document_view.h"
+#include "file_open_filter.h"
 #include "main_window.h"
 #include "outline_panel.h"
 #include "thumbnail_panel.h"
@@ -18,6 +19,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QEventLoop>
+#include <QFileOpenEvent>
 #include <QInputDialog>
 #include <QItemSelectionModel>
 #include <QListView>
@@ -694,5 +696,15 @@ TEST_F(PageOpsTest, SignatureWarningCancelLeavesDocument) {
   EXPECT_FALSE(window_.isWindowModified());
 }
 
+// macOS 가 Finder·Dock 에서 연 문서는 QFileOpenEvent 로 온다 (#90) — 앱에 설치한 필터가 창에서 연다
+TEST_F(EditTest, FileOpenEventOpensTheDocument) {
+  FileOpenFilter filter(window_);
+  qApp->installEventFilter(&filter);
+  QFileOpenEvent event(QString::fromStdString(onpdf::path_to_utf8(testdata("한글 파일명.pdf"))));
+  QApplication::sendEvent(qApp, &event);
+  EXPECT_TRUE(spin_until(
+      [&] { return window_.windowTitle().contains(QStringLiteral("한글 파일명.pdf")); }));
+  qApp->removeEventFilter(&filter);
+}
 }  // namespace
 }  // namespace onpdf::app
