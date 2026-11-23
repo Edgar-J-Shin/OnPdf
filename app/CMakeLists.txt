@@ -51,9 +51,11 @@ onpdf_set_runtime_rpath(onpdf_app)
 if(APPLE)
   set(_onpdf_resource_dir "$<TARGET_BUNDLE_CONTENT_DIR:onpdf_app>/Resources")
   set(_onpdf_install_resources "onpdf_app.app/Contents/Resources")
+  set(_onpdf_install_prefix "onpdf_app.app/Contents/Resources/")
 else()
   set(_onpdf_resource_dir "$<TARGET_FILE_DIR:onpdf_app>")
   set(_onpdf_install_resources ".")
+  set(_onpdf_install_prefix "")  # "./fonts" 는 CMP0177 경로 정규화 경고를 낸다
 endif()
 
 # 번들 글꼴 (#45): third_party/fetch_fonts.py 가 받아 둔 Noto Sans KR 을 fonts/ 로 복사한다. 없으면 경고만 (텍스트 도구 비활성)
@@ -80,20 +82,21 @@ else()
     get_filename_component(_onpdf_pdfium_bin "${ONPDF_PDFIUM_SHARED_LIB}" DIRECTORY)
     get_target_property(_onpdf_qtcore Qt6::Core IMPORTED_LOCATION_RELEASE)
     get_filename_component(_onpdf_qt_bin "${_onpdf_qtcore}" DIRECTORY)
-    install(TARGETS onpdf_app
-      RUNTIME DESTINATION .
-      RUNTIME_DEPENDENCIES
-        DIRECTORIES "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin" "${_onpdf_pdfium_bin}" "${_onpdf_qt_bin}"
-        PRE_EXCLUDE_REGEXES "^api-ms-" "^ext-ms-"
-        POST_EXCLUDE_REGEXES ".*[Ss]ystem32/.*" "/Qt6[A-Za-z]*\\.dll$" "/(msvcp|vcruntime|concrt)[0-9_a-z]*\\.dll$")
+    # 의존성 집합은 따로 설치한다 (거르기 옵션이 대상 종류·DESTINATION 보다 앞에 와야 한다 — CMake 문법)
+    install(TARGETS onpdf_app RUNTIME_DEPENDENCY_SET onpdf_runtime_deps RUNTIME DESTINATION .)
+    install(RUNTIME_DEPENDENCY_SET onpdf_runtime_deps
+      DIRECTORIES "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin" "${_onpdf_pdfium_bin}" "${_onpdf_qt_bin}"
+      PRE_EXCLUDE_REGEXES "^api-ms-" "^ext-ms-"
+      POST_EXCLUDE_REGEXES ".*[Ss]ystem32/.*" "/Qt6[A-Za-z]*\\.dll$" "/(msvcp|vcruntime|concrt)[0-9_a-z]*\\.dll$"
+      RUNTIME DESTINATION .)
   else()
     install(TARGETS onpdf_app RUNTIME DESTINATION .)
     install(FILES "${ONPDF_PDFIUM_SHARED_LIB}" DESTINATION .)
   endif()
 endif()
 if(EXISTS "${ONPDF_BUNDLED_FONT}")
-  install(FILES "${ONPDF_BUNDLED_FONT}" "${ONPDF_BUNDLED_FONT_LICENSE}" DESTINATION "${_onpdf_install_resources}/fonts")
+  install(FILES "${ONPDF_BUNDLED_FONT}" "${ONPDF_BUNDLED_FONT_LICENSE}" DESTINATION "${_onpdf_install_prefix}fonts")
 endif()
 install(FILES "${CMAKE_SOURCE_DIR}/LICENSE" "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
         DESTINATION "${_onpdf_install_resources}")
-install(DIRECTORY "${ONPDF_PDFIUM_LICENSES_DIR}/" DESTINATION "${_onpdf_install_resources}/licenses/pdfium")
+install(DIRECTORY "${ONPDF_PDFIUM_LICENSES_DIR}/" DESTINATION "${_onpdf_install_prefix}licenses/pdfium")
