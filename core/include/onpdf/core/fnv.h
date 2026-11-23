@@ -2,7 +2,8 @@
 
 // FNV-1a 64 — 저장소 전체의 단일 구현. 같은 알고리즘·표기(16진 16자, 소문자)를 세 곳이 공유한다:
 //  - edit 의 서브셋 키(`FontFace::subset` 의 `key`, 바이트)
-//  - 엔진의 저장 후처리가 FontFile2 바이트로 OnPdf 글꼴을 찾는 키 (#73 — 값이 어긋나면 변환이 조용히 빠진다)
+//  - 엔진의 저장 후처리가 FontFile2 바이트로 OnPdf 글꼴을 찾는 키 (#73 — 값이 어긋나면 변환이
+//  조용히 빠진다)
 //  - 줄 id 의 원문 해시(`text_lines.cpp`, UTF-32 를 리틀엔디언 4바이트씩)
 // Qt·PDFium 없음.
 
@@ -40,6 +41,8 @@ namespace onpdf {
   return hex;
 }
 
-[[nodiscard]] inline std::string fnv1a_hex(std::span<const std::uint8_t> bytes) { return fnv1a_hex(fnv1a64(bytes)); }
+[[nodiscard]] inline std::string fnv1a_hex(std::span<const std::uint8_t> bytes) {
+  return fnv1a_hex(fnv1a64(bytes));
+}
 
 }  // namespace onpdf

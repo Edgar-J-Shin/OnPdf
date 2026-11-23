@@ -7,7 +7,6 @@
 #include <QStandardItemModel>
 #include <QTreeView>
 #include <QVBoxLayout>
-
 #include <cstddef>
 #include <utility>
 
@@ -16,7 +15,9 @@ namespace {
 
 constexpr int kItemRole = Qt::UserRole + 1;  // Outline::items 인덱스
 
-std::size_t to_size(int value) { return static_cast<std::size_t>(value); }
+std::size_t to_size(int value) {
+  return static_cast<std::size_t>(value);
+}
 
 }  // namespace
 
@@ -30,7 +31,8 @@ OutlinePanel::OutlinePanel(QWidget* parent) : QWidget(parent) {
   model_ = new QStandardItemModel(this);
   tree_->setModel(model_);
   tree_->setHeaderHidden(true);
-  tree_->setIndentation(16);  // 기본 20px 보다 좁혀 폭 200px 사이드바에서 더 깊은 단계까지 제목이 보이게
+  tree_->setIndentation(
+      16);  // 기본 20px 보다 좁혀 폭 200px 사이드바에서 더 깊은 단계까지 제목이 보이게
   tree_->setUniformRowHeights(true);
   tree_->setEditTriggers(QAbstractItemView::NoEditTriggers);
   tree_->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -78,13 +80,15 @@ void OutlinePanel::set_outline(std::shared_ptr<const view::Outline> outline) {
   // 전위 순서라 부모가 항상 먼저 만들어진다
   for (int i = 0; i < outline_->size(); ++i) {
     const auto& item = outline_->items[to_size(i)];
-    QString title = QString::fromUtf8(item.title.data(), static_cast<qsizetype>(item.title.size())).simplified();
+    QString title = QString::fromUtf8(item.title.data(), static_cast<qsizetype>(item.title.size()))
+                        .simplified();
     if (title.isEmpty()) title = tr("(제목 없음)");
     auto* row = new QStandardItem(title);
     row->setData(i, kItemRole);
     row->setToolTip(title);
     if (!item.target) row->setForeground(palette().brush(QPalette::Disabled, QPalette::Text));
-    QStandardItem* parent = item.parent >= 0 && item.parent < i ? rows_[to_size(item.parent)] : root;
+    QStandardItem* parent =
+        item.parent >= 0 && item.parent < i ? rows_[to_size(item.parent)] : root;
     if (parent == nullptr) parent = root;
     parent->appendRow(row);
     rows_[to_size(i)] = row;
@@ -96,12 +100,15 @@ void OutlinePanel::set_outline(std::shared_ptr<const view::Outline> outline) {
   stack_->setCurrentWidget(tree_);
 }
 
-int OutlinePanel::row_count() const noexcept { return static_cast<int>(rows_.size()); }
+int OutlinePanel::row_count() const noexcept {
+  return static_cast<int>(rows_.size());
+}
 
 void OutlinePanel::highlight_for(int page, double y_pt) {
   if (!outline_ || outline_->empty() || page < 0) return;
   int index = outline_->item_at(page, y_pt);
-  // 같은 위치를 가리키는 항목이 여럿이면(예: 장과 첫 절이 같은 쪽 맨 위) 사용자가 고른 항목을 유지한다
+  // 같은 위치를 가리키는 항목이 여럿이면(예: 장과 첫 절이 같은 쪽 맨 위) 사용자가 고른 항목을
+  // 유지한다
   if (index >= 0 && highlighted_ >= 0 && highlighted_ != index) {
     const auto& now = outline_->items[to_size(highlighted_)];
     const auto& found = outline_->items[to_size(index)];

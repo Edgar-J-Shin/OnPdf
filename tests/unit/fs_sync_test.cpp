@@ -1,10 +1,8 @@
 #include "onpdf/core/platform/fs_sync.h"
 
 #include "../test_support.h"
-
-#include <gtest/gtest.h>
-
 #include <fstream>
+#include <gtest/gtest.h>
 #include <string>
 
 namespace onpdf::platform {

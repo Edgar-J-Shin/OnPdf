@@ -1,12 +1,13 @@
-// 텍스트 상자 Command (#47): 이동·삭제·수정 실행 → 취소 → 재실행 (가짜 + PDFium), id·상자·폰트 캐시 재사용, 보상
+// 텍스트 상자 Command (#47): 이동·삭제·수정 실행 → 취소 → 재실행 (가짜 + PDFium), id·상자·폰트 캐시
+// 재사용, 보상
+#include "onpdf/edit/text_box_commands.h"
+
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/edit/add_text_command.h"
 #include "onpdf/edit/object_commands.h"
-#include "onpdf/edit/text_box_commands.h"
 
 #include "../fake_document.h"
 #include "../test_support.h"
-
 #include <gtest/gtest.h>
 
 namespace onpdf::edit {
@@ -83,7 +84,8 @@ TEST(TextBoxCommands, RemoveExecuteUndoRedoOnFake) {
   EXPECT_FALSE(missing.execute(doc));
 }
 
-// 빈 줄이 든 상자: 삭제 취소·크기 변경 뒤에도 줄 자리가 같다 (상자 원문 전체를 첫 줄 블롭에 보관, 리뷰 W1)
+// 빈 줄이 든 상자: 삭제 취소·크기 변경 뒤에도 줄 자리가 같다 (상자 원문 전체를 첫 줄 블롭에 보관,
+// 리뷰 W1)
 TEST(TextBoxCommands, BlankLinesSurviveRemoveUndoAndReplace) {
   FakeDocument doc({{612, 792}});
   AddTextCommand add(box(0, "첫째\n\n셋째"));
@@ -97,7 +99,8 @@ TEST(TextBoxCommands, BlankLinesSurviveRemoveUndoAndReplace) {
   ASSERT_TRUE(remove.undo(doc));
   ASSERT_EQ(doc.text_objects_on(0).size(), 2u);
   EXPECT_DOUBLE_EQ(doc.text_objects_on(0)[1].line.origin.y, third_y) << "셋째 줄이 같은 자리";
-  ReplaceTextBoxCommand recolor(0, add.box_id(), test_font(), std::nullopt, std::nullopt, engine::Color{0, 0, 255, 255});
+  ReplaceTextBoxCommand recolor(0, add.box_id(), test_font(), std::nullopt, std::nullopt,
+                                engine::Color{0, 0, 255, 255});
   ASSERT_TRUE(recolor.execute(doc));
   EXPECT_DOUBLE_EQ(doc.text_objects_on(0)[1].line.origin.y, third_y);
   EXPECT_EQ(doc.text_objects_on(0)[0].box_text, "첫째\n\n셋째");
@@ -111,16 +114,19 @@ TEST(TextBoxCommands, WidthChangeWrapsAndKeepsSourceOnFake) {
   ASSERT_EQ(doc.text_objects_on(0).size(), 1u);
   auto face = test_font();
   const double narrow = face->shape("한글 텍스트", 24.0).width + 1;
-  ReplaceTextBoxCommand wrap(0, add.box_id(), face, std::nullopt, std::nullopt, std::nullopt, narrow);
+  ReplaceTextBoxCommand wrap(0, add.box_id(), face, std::nullopt, std::nullopt, std::nullopt,
+                             narrow);
   EXPECT_EQ(wrap.id(), "resize_text");
   ASSERT_TRUE(wrap.execute(doc));
   ASSERT_EQ(doc.text_objects_on(0).size(), 2u);
   EXPECT_EQ(doc.text_objects_on(0)[0].line.text, "한글 텍스트");
   EXPECT_EQ(doc.text_objects_on(0)[1].line.text, "추가");
-  EXPECT_EQ(doc.text_objects_on(0)[0].box_text, "한글 텍스트 추가") << "상자 원문은 줄바꿈 전 그대로";
+  EXPECT_EQ(doc.text_objects_on(0)[0].box_text, "한글 텍스트 추가")
+      << "상자 원문은 줄바꿈 전 그대로";
   EXPECT_DOUBLE_EQ(doc.text_objects_on(0)[0].width, narrow);
   // 색만 바꿔도 폭·줄바꿈 유지
-  ReplaceTextBoxCommand recolor(0, add.box_id(), face, std::nullopt, std::nullopt, engine::Color{0, 0, 255, 255});
+  ReplaceTextBoxCommand recolor(0, add.box_id(), face, std::nullopt, std::nullopt,
+                                engine::Color{0, 0, 255, 255});
   EXPECT_EQ(recolor.id(), "replace_text");
   ASSERT_TRUE(recolor.execute(doc));
   EXPECT_EQ(doc.text_objects_on(0).size(), 2u);
@@ -131,7 +137,8 @@ TEST(TextBoxCommands, WidthChangeWrapsAndKeepsSourceOnFake) {
   ASSERT_TRUE(wrap.execute(doc));
   EXPECT_EQ(doc.text_objects_on(0).size(), 2u);
   // 왼쪽 핸들: 원점 x 이동 + 폭
-  ReplaceTextBoxCommand left(0, add.box_id(), face, std::nullopt, std::nullopt, std::nullopt, narrow + 50, 22.0);
+  ReplaceTextBoxCommand left(0, add.box_id(), face, std::nullopt, std::nullopt, std::nullopt,
+                             narrow + 50, 22.0);
   ASSERT_TRUE(left.execute(doc));
   EXPECT_DOUBLE_EQ(doc.text_objects_on(0)[0].line.origin.x, 22.0);
 }
@@ -142,7 +149,8 @@ TEST(TextBoxCommands, ReplaceExecuteUndoRedoOnFake) {
   ASSERT_TRUE(add.execute(doc));
   const auto ids = add.object_ids();
   // 내용: 2줄 → 3줄 (id 2개 재사용 + 새 id)
-  ReplaceTextBoxCommand replace(0, add.box_id(), test_font(), std::string("첫째\n둘째\n셋째"), std::nullopt, std::nullopt);
+  ReplaceTextBoxCommand replace(0, add.box_id(), test_font(), std::string("첫째\n둘째\n셋째"),
+                                std::nullopt, std::nullopt);
   EXPECT_EQ(replace.id(), "replace_text");
   ASSERT_TRUE(replace.execute(doc));
   ASSERT_EQ(doc.text_objects_on(0).size(), 3u);
@@ -167,15 +175,18 @@ TEST(TextBoxCommands, ReplaceExecuteUndoRedoOnFake) {
   ASSERT_TRUE(bigger.undo(doc));
   EXPECT_DOUBLE_EQ(doc.text_objects_on(0)[0].line.font_size, 24.0);
   // 색만
-  ReplaceTextBoxCommand red(0, add.box_id(), test_font(), std::nullopt, std::nullopt, engine::Color{0, 0, 255, 255});
+  ReplaceTextBoxCommand red(0, add.box_id(), test_font(), std::nullopt, std::nullopt,
+                            engine::Color{0, 0, 255, 255});
   ASSERT_TRUE(red.execute(doc));
   EXPECT_EQ(doc.text_objects_on(0)[1].line.color, (engine::Color{0, 0, 255, 255}));
   // 아무것도 안 바꾸면 거절
-  ReplaceTextBoxCommand nothing(0, add.box_id(), test_font(), std::nullopt, std::nullopt, std::nullopt);
+  ReplaceTextBoxCommand nothing(0, add.box_id(), test_font(), std::nullopt, std::nullopt,
+                                std::nullopt);
   EXPECT_FALSE(nothing.execute(doc));
   // add 실패 → 보상: 이전 내용 복원
   doc.fail_next_add_text = 1;
-  ReplaceTextBoxCommand failing(0, add.box_id(), test_font(), std::string("둘째"), std::nullopt, std::nullopt);
+  ReplaceTextBoxCommand failing(0, add.box_id(), test_font(), std::string("둘째"), std::nullopt,
+                                std::nullopt);
   EXPECT_FALSE(failing.execute(doc));
   ASSERT_EQ(doc.text_objects_on(0).size(), 3u) << "보상으로 되살아난다";
   EXPECT_EQ(doc.text_objects_on(0)[0].line.text, "첫째");
@@ -204,7 +215,8 @@ TEST(TextBoxCommands, ExecuteUndoRedoOnPdfium) {
   EXPECT_NEAR((*doc->text_objects(0))[0].bbox.x, 72, 2.0);
   auto back = doc->render_page(0, render);
   int diff = 0;
-  for (std::size_t i = 0; i < original->pixels.size(); ++i) diff += original->pixels[i] != back->pixels[i];
+  for (std::size_t i = 0; i < original->pixels.size(); ++i)
+    diff += original->pixels[i] != back->pixels[i];
   EXPECT_EQ(diff, 0) << "이동 취소 뒤 렌더가 같다";
   ASSERT_TRUE(move.execute(*doc));
   ASSERT_TRUE(move.undo(*doc));
@@ -221,7 +233,8 @@ TEST(TextBoxCommands, ExecuteUndoRedoOnPdfium) {
   EXPECT_EQ(doc->font_cache_size(), 1) << "같은 서브셋 key";
   auto restored = doc->render_page(0, render);
   diff = 0;
-  for (std::size_t i = 0; i < original->pixels.size(); ++i) diff += original->pixels[i] != restored->pixels[i];
+  for (std::size_t i = 0; i < original->pixels.size(); ++i)
+    diff += original->pixels[i] != restored->pixels[i];
   EXPECT_EQ(diff, 0) << "삭제 취소 뒤 렌더가 같다";
   ASSERT_TRUE(remove.execute(*doc));
   ASSERT_TRUE(remove.undo(*doc));
@@ -245,18 +258,24 @@ TEST(TextBoxCommands, ExecuteUndoRedoOnPdfium) {
   AddTextCommand blank(box(0, "첫째\n\n셋째", {72, 600}));
   ASSERT_TRUE(blank.execute(*doc));
   auto before_blank = *doc->text_objects(0);
-  const auto third = std::find_if(before_blank.begin(), before_blank.end(), [&](const engine::TextObjectInfo& t) { return t.text == "셋째"; });
+  const auto third =
+      std::find_if(before_blank.begin(), before_blank.end(),
+                   [&](const engine::TextObjectInfo& t) { return t.text == "셋째"; });
   ASSERT_NE(third, before_blank.end());
   const double third_y = third->baseline_origin.y;
-  EXPECT_EQ(before_blank.back().box_text.empty() ? std::string("x") : std::string("ok"), "x") << "box_text 는 첫 줄에만";
+  EXPECT_EQ(before_blank.back().box_text.empty() ? std::string("x") : std::string("ok"), "x")
+      << "box_text 는 첫 줄에만";
   RemoveTextBoxCommand remove_blank(0, blank.box_id(), test_font());
   ASSERT_TRUE(remove_blank.execute(*doc));
   ASSERT_TRUE(remove_blank.undo(*doc));
   auto after_blank = *doc->text_objects(0);
-  const auto third_again = std::find_if(after_blank.begin(), after_blank.end(), [&](const engine::TextObjectInfo& t) { return t.text == "셋째"; });
+  const auto third_again =
+      std::find_if(after_blank.begin(), after_blank.end(),
+                   [&](const engine::TextObjectInfo& t) { return t.text == "셋째"; });
   ASSERT_NE(third_again, after_blank.end());
   EXPECT_NEAR(third_again->baseline_origin.y, third_y, 0.01);
-  // 옛 객체(블롭 없음)는 삭제 전에 복원 가능성을 확인한다 (리뷰 W2): 복원 가능한 글자면 삭제·취소 OK
+  // 옛 객체(블롭 없음)는 삭제 전에 복원 가능성을 확인한다 (리뷰 W2): 복원 가능한 글자면 삭제·취소
+  // OK
   engine::TextObjectsSpec legacy = *build_text_objects_spec(box(0, "회전 쪽", {72, 700}), "", {});
   legacy.write_box = false;
   auto legacy_added = doc->add_text_objects(0, legacy);

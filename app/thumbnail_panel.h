@@ -7,7 +7,6 @@
 #include <QImage>
 #include <QString>
 #include <QWidget>
-
 #include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
@@ -23,8 +22,9 @@ namespace onpdf::app {
 class UiDispatcher;
 class ThumbnailModel;
 
-// 쪽 썸네일 세로 목록. 보이는 행 ±4 쪽만 kLow 로 렌더하고(동시 8개), 범위를 벗어난 대기 요청은 취소한다.
-// 렌더 결과는 바이트 상한 캐시에 두며, 문서·폭이 바뀌면 세대를 올려 늦게 도착한 결과를 버린다.
+// 쪽 썸네일 세로 목록. 보이는 행 ±4 쪽만 kLow 로 렌더하고(동시 8개), 범위를 벗어난 대기 요청은
+// 취소한다. 렌더 결과는 바이트 상한 캐시에 두며, 문서·폭이 바뀌면 세대를 올려 늦게 도착한 결과를
+// 버린다.
 class ThumbnailPanel : public QWidget {
   Q_OBJECT
  public:
@@ -35,8 +35,8 @@ class ThumbnailPanel : public QWidget {
   void clear_document();
   // 편집으로 쪽 모양이 바뀌었다: 그 쪽 썸네일을 버리고 다시 렌더한다 (행 높이도 새 쪽 크기로)
   void invalidate_pages(const std::vector<int>& pages);
-  // 쪽 수·순서가 바뀌었다(삭제·이동·삽입): 세대를 올려 늦은 렌더를 버리고, 캐시를 비우고, 행 수를 문서 정보에
-  // 맞춘 뒤 스크롤 위치와 현재 쪽을 되살린다
+  // 쪽 수·순서가 바뀌었다(삭제·이동·삽입): 세대를 올려 늦은 렌더를 버리고, 캐시를 비우고, 행 수를
+  // 문서 정보에 맞춘 뒤 스크롤 위치와 현재 쪽을 되살린다
   void reset_pages(int current_page);
   // 편집 가능 상태(작업 중 아님·권한 있음)에서만 끌어 놓기·Delete·드롭을 받는다
   void set_editable(bool editable);
@@ -44,7 +44,8 @@ class ThumbnailPanel : public QWidget {
   [[nodiscard]] std::vector<int> selected_pages() const;  // 오름차순
   void select_pages(const std::vector<int>& pages);       // 선택을 이 쪽들로 바꾼다 (비면 그대로)
   [[nodiscard]] bool list_has_focus() const;
-  // 내부용(모델·목록이 부른다): 요청을 신호로 바꾼다. 문서는 Command 가 바꾸고, 행은 document_changed 뒤에 갱신한다
+  // 내부용(모델·목록이 부른다): 요청을 신호로 바꾼다. 문서는 Command 가 바꾸고, 행은
+  // document_changed 뒤에 갱신한다
   void request_move(const std::vector<int>& pages, int drop_row);
   void request_insert_file(const QString& path, int drop_row);
   void request_delete(const std::vector<int>& pages);
@@ -97,7 +98,8 @@ class ThumbnailPanel : public QWidget {
 
   void schedule_request();
   void request_visible();
-  void on_rendered(int page, int generation, std::uint64_t serial, onpdf::Result<onpdf::Bitmap> result);
+  void on_rendered(int page, int generation, std::uint64_t serial,
+                   onpdf::Result<onpdf::Bitmap> result);
   void update_thumb_width(bool force);
   void cancel_all();
   void on_user_activated(const QModelIndex& index);

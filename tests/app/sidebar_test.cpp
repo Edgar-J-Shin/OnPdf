@@ -1,37 +1,34 @@
-#include "document_view.h"
-#include "main_window.h"
 #include "onpdf/core/engine/pdfium_worker.h"
 #include "onpdf/core/platform/path.h"
+
+#include "../test_support.h"
+#include "document_view.h"
+#include "main_window.h"
 #include "outline_panel.h"
 #include "thumbnail_panel.h"
 #include "ui_dispatcher.h"
-
-#include "../test_support.h"
-
-#include <gtest/gtest.h>
-
 #include <QAction>
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QKeyEvent>
-#include <QListView>
-#include <QWheelEvent>
-#include <QStatusBar>
 #include <QLabel>
+#include <QListView>
 #include <QMouseEvent>
 #include <QScreen>
 #include <QScrollBar>
 #include <QSpinBox>
+#include <QStatusBar>
 #include <QTabWidget>
 #include <QTimer>
 #include <QTreeView>
-
+#include <QWheelEvent>
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
-#include <string>
+#include <gtest/gtest.h>
 #include <set>
+#include <string>
 
 namespace onpdf::app {
 namespace {
@@ -77,8 +74,10 @@ class SidebarTest : public ::testing::Test {
   bool open(const char* name, int expected_outline_rows) {
     window_.open_file(QString::fromStdString(onpdf::path_to_utf8(testdata(name))));
     return spin_until([&] {
-      return window_.document_view()->has_document() && outline().row_count() == expected_outline_rows &&
-             (expected_outline_rows == 0 || window_.sidebar()->currentWidget() == window_.outline_panel());
+      return window_.document_view()->has_document() &&
+             outline().row_count() == expected_outline_rows &&
+             (expected_outline_rows == 0 ||
+              window_.sidebar()->currentWidget() == window_.outline_panel());
     });
   }
   OutlinePanel& outline() { return *window_.outline_panel(); }
@@ -148,9 +147,11 @@ TEST_F(SidebarTest, ActivatingItemNavigatesAndHighlights) {
 TEST_F(SidebarTest, ScrollingMovesOutlineHighlight) {
   ASSERT_TRUE(open("bookmarks.pdf", 15));
   window_.document_view()->go_to_page(7);
-  ASSERT_TRUE(spin_until([&] { return highlighted_title() == "3.1 절 (page 8)"; }, 3000)) << highlighted_title();
+  ASSERT_TRUE(spin_until([&] { return highlighted_title() == "3.1 절 (page 8)"; }, 3000))
+      << highlighted_title();
   window_.document_view()->go_to_page(0);
-  ASSERT_TRUE(spin_until([&] { return highlighted_title() == "제 1 장 (page 1)"; }, 3000)) << highlighted_title();
+  ASSERT_TRUE(spin_until([&] { return highlighted_title() == "제 1 장 (page 1)"; }, 3000))
+      << highlighted_title();
 }
 
 TEST_F(SidebarTest, DocumentWithoutOutlineKeepsThumbnailTab) {
@@ -163,13 +164,14 @@ TEST_F(SidebarTest, DocumentWithoutOutlineKeepsThumbnailTab) {
 
 TEST_F(SidebarTest, ThumbnailClickNavigatesAndFollowsView) {
   ASSERT_TRUE(open("simple.pdf", 0));
-  ASSERT_TRUE(spin_until([&] { return thumbs().cached_count() == 2 && thumbs().pending_requests() == 0; }));
+  ASSERT_TRUE(
+      spin_until([&] { return thumbs().cached_count() == 2 && thumbs().pending_requests() == 0; }));
   EXPECT_FALSE(thumbs().thumbnail(0).isNull());
   // 가로 쪽 썸네일은 폭보다 낮다
   EXPECT_LT(thumbs().thumb_size(1).height(), thumbs().thumb_size(1).width());
   EXPECT_GT(thumbs().thumb_size(0).height(), thumbs().thumb_size(0).width());
 
-  emit thumbs().list()->clicked(thumbs().list()->model()->index(1, 0));
+  emit thumbs().list() -> clicked(thumbs().list()->model()->index(1, 0));
   ASSERT_TRUE(spin_until([&] { return window_.document_view()->current_page() == 1; }));
   EXPECT_EQ(thumbs().current_page(), 1);
 
@@ -195,7 +197,8 @@ TEST_F(SidebarTest, ThumbnailClickNavigatesAndFollowsView) {
 TEST_F(SidebarTest, LargeDocumentRequestsOnlyNearVisibleRows) {
   ASSERT_TRUE(open("large-1000.pdf", 0));
   ASSERT_EQ(thumbs().list()->model()->rowCount(), 1000);
-  ASSERT_TRUE(spin_until([&] { return thumbs().cached_count() > 0 && thumbs().pending_requests() == 0; }));
+  ASSERT_TRUE(
+      spin_until([&] { return thumbs().cached_count() > 0 && thumbs().pending_requests() == 0; }));
   const int initial = thumbs().requested_total();
   EXPECT_LE(initial, 20);  // 보이는 행 + 앞뒤 4
 
@@ -208,7 +211,8 @@ TEST_F(SidebarTest, LargeDocumentRequestsOnlyNearVisibleRows) {
     max_pending = std::max(max_pending, thumbs().pending_requests());
   }
   EXPECT_LE(max_pending, ThumbnailPanel::kMaxConcurrent);
-  ASSERT_TRUE(spin_until([&] { return thumbs().pending_requests() == 0 && !thumbs().thumbnail(999).isNull(); }));
+  ASSERT_TRUE(spin_until(
+      [&] { return thumbs().pending_requests() == 0 && !thumbs().thumbnail(999).isNull(); }));
   // 1,000쪽 전부가 아니라 지나간 화면 근처만 요청했다
   EXPECT_LT(thumbs().requested_total(), 250);
   RecordProperty("thumbnail_requests", thumbs().requested_total());
@@ -270,7 +274,8 @@ TEST_F(SidebarTest, PageSpinKeepsTypedPage) {
   EXPECT_EQ(window_.document_view()->current_page(), spin->maximum() - 1);
 }
 
-// 내부 링크 클릭: 위치가 추출 때 변환되어 있으므로 워커를 거치지 않고 클릭 즉시 그 지점으로 이동한다 (#12)
+// 내부 링크 클릭: 위치가 추출 때 변환되어 있으므로 워커를 거치지 않고 클릭 즉시 그 지점으로
+// 이동한다 (#12)
 TEST_F(SidebarTest, InternalLinkNavigatesImmediately) {
   ASSERT_TRUE(open("annotations.pdf", 0));
   auto* view = window_.document_view();
@@ -281,10 +286,12 @@ TEST_F(SidebarTest, InternalLinkNavigatesImmediately) {
   }
   ASSERT_NE(link, nullptr);
   ASSERT_TRUE(link->location.has_value());  // 링크는 즉시 변환
-  const QPointF at = view->page_point_to_viewport(0, {link->box.x + link->box.w / 2, link->box.y + link->box.h / 2});
+  const QPointF at = view->page_point_to_viewport(
+      0, {link->box.x + link->box.w / 2, link->box.y + link->box.h / 2});
   for (QEvent::Type type : {QEvent::MouseButtonPress, QEvent::MouseButtonRelease}) {
     QMouseEvent ev(type, at, view->viewport()->mapToGlobal(at.toPoint()), Qt::LeftButton,
-                   type == QEvent::MouseButtonPress ? Qt::LeftButton : Qt::NoButton, Qt::NoModifier);
+                   type == QEvent::MouseButtonPress ? Qt::LeftButton : Qt::NoButton,
+                   Qt::NoModifier);
     QApplication::sendEvent(view->viewport(), &ev);
   }
   // 이벤트 루프를 돌리지 않아도 이미 이동했다 (워커 왕복 없음)
@@ -298,7 +305,8 @@ TEST_F(SidebarTest, InternalLinkNavigatesImmediately) {
 // 썸네일 스크롤바를 끄는 동안에는 요청하지 않고, 놓으면 그 자리를 요청한다 (#12)
 TEST_F(SidebarTest, ThumbnailSliderDragDefersRequests) {
   ASSERT_TRUE(open("large-1000.pdf", 0));
-  ASSERT_TRUE(spin_until([&] { return thumbs().cached_count() > 0 && thumbs().pending_requests() == 0; }));
+  ASSERT_TRUE(
+      spin_until([&] { return thumbs().cached_count() > 0 && thumbs().pending_requests() == 0; }));
   QScrollBar* bar = thumbs().list()->verticalScrollBar();
   const int before = thumbs().requested_total();
   bar->setSliderDown(true);
@@ -309,7 +317,8 @@ TEST_F(SidebarTest, ThumbnailSliderDragDefersRequests) {
   settle(100);
   EXPECT_EQ(thumbs().requested_total(), before) << "no requests while dragging";
   bar->setSliderDown(false);  // sliderReleased
-  ASSERT_TRUE(spin_until([&] { return thumbs().requested_total() > before && thumbs().pending_requests() == 0; }));
+  ASSERT_TRUE(spin_until(
+      [&] { return thumbs().requested_total() > before && thumbs().pending_requests() == 0; }));
   const QModelIndex mid = thumbs().list()->indexAt(thumbs().list()->viewport()->rect().center());
   ASSERT_TRUE(mid.isValid());
   EXPECT_FALSE(thumbs().thumbnail(mid.row()).isNull());
@@ -319,19 +328,22 @@ TEST_F(SidebarTest, ThumbnailSliderDragDefersRequests) {
 // 화면 배율이 바뀌면(모니터 이동) 썸네일을 새 배율로 다시 렌더한다 (#12)
 TEST_F(SidebarTest, DevicePixelRatioChangeRerendersThumbnails) {
   ASSERT_TRUE(open("simple.pdf", 0));
-  ASSERT_TRUE(spin_until([&] { return thumbs().cached_count() == 2 && thumbs().pending_requests() == 0; }));
+  ASSERT_TRUE(
+      spin_until([&] { return thumbs().cached_count() == 2 && thumbs().pending_requests() == 0; }));
   const int generation = thumbs().generation();
   const int requested = thumbs().requested_total();
   QEvent change(QEvent::DevicePixelRatioChange);
   QApplication::sendEvent(&thumbs(), &change);
   EXPECT_GT(thumbs().generation(), generation);
   EXPECT_FALSE(thumbs().thumbnail(0).isNull());  // 새 그림이 올 때까지 이전 그림을 늘려 그린다
-  ASSERT_TRUE(spin_until([&] { return thumbs().requested_total() >= requested + 2 && thumbs().pending_requests() == 0; }));
+  ASSERT_TRUE(spin_until([&] {
+    return thumbs().requested_total() >= requested + 2 && thumbs().pending_requests() == 0;
+  }));
   EXPECT_EQ(thumbs().cached_count(), 2);
 }
 
-// 연속(관성) 스크롤 중에도 목차 강조가 따라간다: 강조 타이머는 스크롤마다 다시 시작하지 않는다(스로틀).
-// 디바운스면 스크롤이 계속되는 동안 타이머가 계속 미뤄져 강조가 멈춘다 (#12)
+// 연속(관성) 스크롤 중에도 목차 강조가 따라간다: 강조 타이머는 스크롤마다 다시 시작하지
+// 않는다(스로틀). 디바운스면 스크롤이 계속되는 동안 타이머가 계속 미뤄져 강조가 멈춘다 (#12)
 TEST_F(SidebarTest, OutlineHighlightTimerIsThrottledNotDebounced) {
   ASSERT_TRUE(open("bookmarks.pdf", 15));
   auto* timer = window_.findChild<QTimer*>(QStringLiteral("outline_highlight_timer"));
@@ -349,7 +361,8 @@ TEST_F(SidebarTest, OutlineHighlightTimerIsThrottledNotDebounced) {
   }
   bar->setValue(bar->value() + 30);
   ASSERT_TRUE(timer->isActive());
-  EXPECT_LE(timer->remainingTime(), first - 10) << "timer was restarted (debounce) instead of kept (throttle)";
+  EXPECT_LE(timer->remainingTime(), first - 10)
+      << "timer was restarted (debounce) instead of kept (throttle)";
   EXPECT_GT(first, 80);  // 100ms 간격
 }
 
@@ -393,12 +406,13 @@ TEST_F(SidebarTest, StatusBarRefreshesWhenTilesArrive) {
   emit view->tiles_changed();  // 연속 도착: 다시 시작하지 않는다
   EXPECT_LE(timer->remainingTime(), first - 15);
   EXPECT_EQ(status->text(), QStringLiteral("stale"));  // 아직 갱신 전
-  EXPECT_GT(first, 900);  // 1초 간격
+  EXPECT_GT(first, 900);                               // 1초 간격
   ASSERT_TRUE(spin_until([&] { return status->text().contains(QStringLiteral("MB")); }, 3000));
 }
 
 // 실제 화면 이동: 창을 배율이 다른 화면으로 옮기면 썸네일이 그 배율로 다시 렌더된다 (#12).
-// 배율이 다른 화면이 둘 이상 있을 때만 (예: macOS 내장 Retina + 외장 모니터). offscreen·단일 화면이면 건너뛴다
+// 배율이 다른 화면이 둘 이상 있을 때만 (예: macOS 내장 Retina + 외장 모니터). offscreen·단일
+// 화면이면 건너뛴다
 TEST_F(SidebarTest, MovingToScreenWithDifferentDprRerendersThumbnails) {
   ASSERT_TRUE(open("simple.pdf", 0));
   QScreen* home = window_.screen();
@@ -407,7 +421,8 @@ TEST_F(SidebarTest, MovingToScreenWithDifferentDprRerendersThumbnails) {
     if (screen->devicePixelRatio() != home->devicePixelRatio()) other = screen;
   }
   if (other == nullptr) GTEST_SKIP() << "needs two screens with different device pixel ratios";
-  ASSERT_TRUE(spin_until([&] { return thumbs().cached_count() == 2 && thumbs().pending_requests() == 0; }));
+  ASSERT_TRUE(
+      spin_until([&] { return thumbs().cached_count() == 2 && thumbs().pending_requests() == 0; }));
 
   auto rendered_at = [&](qreal dpr) {
     const QImage image = thumbs().thumbnail(0);
@@ -417,7 +432,8 @@ TEST_F(SidebarTest, MovingToScreenWithDifferentDprRerendersThumbnails) {
   ASSERT_TRUE(rendered_at(home->devicePixelRatio()));
   for (QScreen* target : {other, home}) {
     window_.move(target->availableGeometry().topLeft() + QPoint(40, 40));
-    ASSERT_TRUE(spin_until([&] { return thumbs().devicePixelRatioF() == target->devicePixelRatio(); }, 5000))
+    ASSERT_TRUE(spin_until(
+        [&] { return thumbs().devicePixelRatioF() == target->devicePixelRatio(); }, 5000))
         << "window did not move to screen " << target->name().toStdString();
     EXPECT_TRUE(spin_until([&] { return rendered_at(target->devicePixelRatio()); }, 5000))
         << "thumbnails not re-rendered at dpr " << target->devicePixelRatio();

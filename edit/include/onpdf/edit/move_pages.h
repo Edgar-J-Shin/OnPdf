@@ -6,8 +6,9 @@
 
 namespace onpdf::edit {
 
-// 쪽 이동: pages(오름차순 블록)를 dest 자리(블록을 뺀 뒤의 삽입 위치)로. 쪽 객체는 그대로라 목차·링크가 유지된다.
-// 취소는 역순열을 단일 쪽 이동의 열로 적용한다 (비연속 선택도 정확히 되돌린다)
+// 쪽 이동: pages(오름차순 블록)를 dest 자리(블록을 뺀 뒤의 삽입 위치)로. 쪽 객체는 그대로라
+// 목차·링크가 유지된다. 취소는 역순열을 단일 쪽 이동의 열로 적용한다 (비연속 선택도 정확히
+// 되돌린다)
 class MovePagesCommand final : public Command {
  public:
   MovePagesCommand(std::vector<int> pages, int dest);  // 정렬·중복 제거한다

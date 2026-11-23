@@ -24,7 +24,8 @@ std::vector<NeededTile> compute_needed(const PageLayout& layout, const Rect& vie
   // 1. 보이는 쪽: 미리보기 + 뷰포트와 교차하는 타일
   for (int page : visible_pages) {
     const engine::PageSize pt = layout.page_size_pt(page);
-    add({page, preview_scale_q_for(pt, options.preview_scale_q), 0, 0}, engine::Priority::kHigh, true);
+    add({page, preview_scale_q_for(pt, options.preview_scale_q), 0, 0}, engine::Priority::kHigh,
+        true);
     const Rect r = layout.page_rect(page);
     const Rect vis = viewport_doc.intersected(r).translated(-r.x, -r.y);  // 쪽 픽셀 좌표
     if (vis.empty()) continue;
@@ -52,7 +53,8 @@ std::vector<NeededTile> compute_needed(const PageLayout& layout, const Rect& vie
   }
   for (int page : prefetch) {
     const engine::PageSize pt = layout.page_size_pt(page);
-    add({page, preview_scale_q_for(pt, options.preview_scale_q), 0, 0}, engine::Priority::kLow, false);
+    add({page, preview_scale_q_for(pt, options.preview_scale_q), 0, 0}, engine::Priority::kLow,
+        false);
     const Size px = page_pixel_size(pt, scale_q);
     const int nx = tiles_across(px.w);
     const int ny = tiles_across(px.h);
@@ -84,7 +86,7 @@ struct TileScheduler::State {
   std::function<void(const TileKey&)> on_tile;
   Stats stats;
   double render_ms_total = 0.0;
-  int timed_samples = 0;     // avg_render_ms 표본 수 (현재 요청의 결과만)
+  int timed_samples = 0;  // avg_render_ms 표본 수 (현재 요청의 결과만)
   std::uint64_t next_id = 0;
 
   State(TileSource& s, TileCache& c, SchedulerOptions o) : source(s), cache(c), options(o) {}
@@ -101,8 +103,8 @@ struct TileScheduler::State {
     auto it = in_flight.find(key);
     const bool current = it != in_flight.end() && it->second.id == id;
     if (!current) {
-      // 지난 요청: 승격 때 취소했지만 이미 워커에서 실행 중이던 렌더. 성공이면 결과를 버리지 않고 쓰고,
-      // 같은 키로 다시 낸 요청은 중복이므로 취소한다 (같은 타일이 두 번 렌더되지 않게)
+      // 지난 요청: 승격 때 취소했지만 이미 워커에서 실행 중이던 렌더. 성공이면 결과를 버리지 않고
+      // 쓰고, 같은 키로 다시 낸 요청은 중복이므로 취소한다 (같은 타일이 두 번 렌더되지 않게)
       if (!result || cache.contains(key)) return;
       if (it != in_flight.end()) {
         it->second.handle.cancel();
@@ -135,7 +137,9 @@ struct TileScheduler::State {
 TileScheduler::TileScheduler(TileSource& source, TileCache& cache, SchedulerOptions options)
     : state_(std::make_shared<State>(source, cache, options)) {}
 
-TileScheduler::~TileScheduler() { state_->cancel_all(); }
+TileScheduler::~TileScheduler() {
+  state_->cancel_all();
+}
 
 void TileScheduler::set_layout(const PageLayout* layout) {
   state_->layout = layout;
@@ -146,7 +150,9 @@ void TileScheduler::set_on_tile(std::function<void(const TileKey&)> on_tile) {
   state_->on_tile = std::move(on_tile);
 }
 
-void TileScheduler::cancel_all() { state_->cancel_all(); }
+void TileScheduler::cancel_all() {
+  state_->cancel_all();
+}
 
 void TileScheduler::update(const Rect& viewport_doc) {
   State& s = *state_;
@@ -158,8 +164,8 @@ void TileScheduler::update(const Rect& viewport_doc) {
   for (const auto& n : s.needed) wanted.emplace(n.key, n.priority);
   for (auto it = s.in_flight.begin(); it != s.in_flight.end();) {
     auto w = wanted.find(it->first);
-    const bool keep = w != wanted.end() &&
-                      !(w->second == engine::Priority::kHigh && it->second.priority == engine::Priority::kLow);
+    const bool keep = w != wanted.end() && !(w->second == engine::Priority::kHigh &&
+                                             it->second.priority == engine::Priority::kLow);
     if (keep) {
       ++it;
       continue;
@@ -172,18 +178,21 @@ void TileScheduler::update(const Rect& viewport_doc) {
   // 캐시에도 없고 요청 중도 아닌 타일 요청. 보이는 타일 먼저 넣는다(같은 우선순위 안에서 FIFO)
   std::weak_ptr<State> weak = state_;
   for (const auto& n : s.needed) {
-    if (s.cache.contains(n.key) || s.in_flight.contains(n.key) || s.failed.contains(n.key)) continue;
+    if (s.cache.contains(n.key) || s.in_flight.contains(n.key) || s.failed.contains(n.key))
+      continue;
     TileRequest req{n.key, s.layout->page_size_pt(n.key.page)};
     const std::uint64_t id = ++s.next_id;
     State::InFlight f{{}, n.priority, std::chrono::steady_clock::now(), id};
     // 동기 소스는 request() 안에서 바로 콜백을 부르므로, 먼저 in_flight 에 넣는다
     s.in_flight.emplace(n.key, std::move(f));
     ++s.stats.requested;
-    engine::TaskHandle handle = s.source.request(req, n.priority, [weak, id](const TileKey& key, Result<Bitmap> r) {
-      if (auto st = weak.lock()) st->on_done(key, id, std::move(r));
-    });
+    engine::TaskHandle handle =
+        s.source.request(req, n.priority, [weak, id](const TileKey& key, Result<Bitmap> r) {
+          if (auto st = weak.lock()) st->on_done(key, id, std::move(r));
+        });
     auto again = s.in_flight.find(n.key);
-    if (again != s.in_flight.end() && again->second.id == id) again->second.handle = std::move(handle);
+    if (again != s.in_flight.end() && again->second.id == id)
+      again->second.handle = std::move(handle);
   }
 }
 
@@ -195,8 +204,12 @@ int TileScheduler::pending_visible() const noexcept {
   return n;
 }
 
-int TileScheduler::in_flight() const noexcept { return static_cast<int>(state_->in_flight.size()); }
+int TileScheduler::in_flight() const noexcept {
+  return static_cast<int>(state_->in_flight.size());
+}
 
-TileScheduler::Stats TileScheduler::stats() const noexcept { return state_->stats; }
+TileScheduler::Stats TileScheduler::stats() const noexcept {
+  return state_->stats;
+}
 
 }  // namespace onpdf::view

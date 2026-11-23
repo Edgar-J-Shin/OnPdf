@@ -19,7 +19,9 @@ void PageLayout::set_scale_q(int scale_q) {
   rebuild();
 }
 
-double PageLayout::scale() const noexcept { return dequantize_scale(scale_q_); }
+double PageLayout::scale() const noexcept {
+  return dequantize_scale(scale_q_);
+}
 
 void PageLayout::rebuild() {
   tops_.assign(pages_pt_.size() + 1, 0.0);
@@ -88,8 +90,8 @@ Point PageLayout::page_px_to_pt(int page, Point page_px) const {
 }
 
 namespace {
-// 맞춤 배율은 내림으로 양자화한다. 반올림하면 문서가 뷰포트보다 최대 1.6% 커져 불필요한 스크롤바가 생긴다.
-// 픽셀 크기는 올림(ceil)이므로 1px 여유를 둔다.
+// 맞춤 배율은 내림으로 양자화한다. 반올림하면 문서가 뷰포트보다 최대 1.6% 커져 불필요한 스크롤바가
+// 생긴다. 픽셀 크기는 올림(ceil)이므로 1px 여유를 둔다.
 int quantize_floor(double scale) noexcept {
   const long q = static_cast<long>(std::floor(scale * kScaleQuantum));
   return static_cast<int>(q < kMinScaleQ ? kMinScaleQ : q);

@@ -6,7 +6,6 @@
 
 #include <QObject>
 #include <QPointer>
-
 #include <functional>
 #include <utility>
 

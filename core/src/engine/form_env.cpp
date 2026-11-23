@@ -14,7 +14,8 @@ std::unique_ptr<FormEnvironment> FormEnvironment::create(FPDF_DOCUMENT doc) {
   return env;
 }
 
-FormPageView::FormPageView(FPDF_PAGE page, FPDF_FORMHANDLE form) noexcept : page_(page), form_(form) {
+FormPageView::FormPageView(FPDF_PAGE page, FPDF_FORMHANDLE form) noexcept
+    : page_(page), form_(form) {
   if (page_ != nullptr && form_ != nullptr) FORM_OnAfterLoadPage(page_, form_);
 }
 

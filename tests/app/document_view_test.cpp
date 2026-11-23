@@ -1,14 +1,11 @@
 #include "document_view.h"
 
-#include "document_session.h"
 #include "onpdf/core/engine/pdfium_worker.h"
 #include "onpdf/core/platform/path.h"
-#include "ui_dispatcher.h"
 
 #include "../test_support.h"
-
-#include <gtest/gtest.h>
-
+#include "document_session.h"
+#include "ui_dispatcher.h"
 #include <QApplication>
 #include <QEventLoop>
 #include <QKeyEvent>
@@ -18,8 +15,8 @@
 #include <QPointingDevice>
 #include <QScrollBar>
 #include <QTimer>
-
 #include <cmath>
+#include <gtest/gtest.h>
 
 namespace onpdf::app {
 namespace {
@@ -54,10 +51,12 @@ class DocumentViewTest : public ::testing::Test {
     o.use_system_fonts = false;
     return o;
   }
-  // 람다가 지역 변수를 참조로 잡으므로 반환 전에 반드시 연결을 끊는다 (두 번째 open 에서 죽은 스택 접근 방지)
+  // 람다가 지역 변수를 참조로 잡으므로 반환 전에 반드시 연결을 끊는다 (두 번째 open 에서 죽은 스택
+  // 접근 방지)
   bool open(const char* name) {
     bool opened = false, failed = false;
-    const auto c1 = QObject::connect(&session_, &DocumentSession::opened, &view_, [&](const QString&, int) { opened = true; });
+    const auto c1 = QObject::connect(&session_, &DocumentSession::opened, &view_,
+                                     [&](const QString&, int) { opened = true; });
     const auto c2 = QObject::connect(&session_, &DocumentSession::open_failed, &view_,
                                      [&](const QString&, const QString&) { failed = true; });
     session_.open(QString::fromStdString(onpdf::path_to_utf8(testdata(name))));
@@ -71,7 +70,8 @@ class DocumentViewTest : public ::testing::Test {
   bool wait_first_view() {
     if (view_.pending_visible_tiles() == 0) return true;
     bool done = false;
-    const auto c = QObject::connect(&view_, &DocumentView::first_view_rendered, &view_, [&] { done = true; });
+    const auto c =
+        QObject::connect(&view_, &DocumentView::first_view_rendered, &view_, [&] { done = true; });
     const bool ok = spin_until([&] { return done; });
     QObject::disconnect(c);
     return ok;
@@ -83,7 +83,8 @@ class DocumentViewTest : public ::testing::Test {
   }
   void send_mouse(QEvent::Type type, QPointF pos, Qt::MouseButton button = Qt::LeftButton,
                   Qt::MouseButtons buttons = Qt::LeftButton) {
-    QMouseEvent ev(type, pos, view_.viewport()->mapToGlobal(pos.toPoint()), button, buttons, Qt::NoModifier);
+    QMouseEvent ev(type, pos, view_.viewport()->mapToGlobal(pos.toPoint()), button, buttons,
+                   Qt::NoModifier);
     QApplication::sendEvent(view_.viewport(), &ev);
   }
   void drag(QPointF from, QPointF to) {
@@ -97,7 +98,8 @@ class DocumentViewTest : public ::testing::Test {
     const auto& box = index->chars[static_cast<std::size_t>(ch)].box;
     return view_.page_point_to_viewport(page, {box.x + box.w / 2, box.y + box.h / 2});
   }
-  // 드래그 시작점은 글자 왼쪽 가장자리(그 글자부터 포함), 끝점은 오른쪽 가장자리 너머(그 글자까지 포함)
+  // 드래그 시작점은 글자 왼쪽 가장자리(그 글자부터 포함), 끝점은 오른쪽 가장자리 너머(그 글자까지
+  // 포함)
   QPointF char_left(int page, int ch) {
     const auto* index = view_.text_index(page);
     const auto& box = index->chars[static_cast<std::size_t>(ch)].box;
@@ -121,7 +123,8 @@ TEST_F(DocumentViewTest, DragSelectsKoreanText) {
   const auto* index = view_.text_index(0);
   const view::TextRange line0 = index->lines[0].chars;
   bool changed = false;
-  QObject::connect(&view_, &DocumentView::selection_changed, &view_, [&](bool has) { changed = has; });
+  QObject::connect(&view_, &DocumentView::selection_changed, &view_,
+                   [&](bool has) { changed = has; });
   drag(char_left(0, line0.start), char_right(0, line0.end - 1));
   EXPECT_TRUE(changed);
   EXPECT_TRUE(view_.has_selection());
@@ -177,7 +180,8 @@ TEST_F(DocumentViewTest, ClickOnLinksActivatesWithoutOpening) {
   ASSERT_TRUE(open("annotations.pdf"));
   ASSERT_TRUE(wait_text(0));
   std::vector<view::Link> activated;
-  QObject::connect(&view_, &DocumentView::link_activated, &view_, [&](const view::Link& l) { activated.push_back(l); });
+  QObject::connect(&view_, &DocumentView::link_activated, &view_,
+                   [&](const view::Link& l) { activated.push_back(l); });
   // 내부 링크 Rect [72 360 300 380] → 쪽 포인트 (100, 792-370)
   const QPointF internal = view_.page_point_to_viewport(0, {100, 792 - 370});
   send_mouse(QEvent::MouseButtonPress, internal);
@@ -205,11 +209,14 @@ TEST_F(DocumentViewTest, HoverReportsLinkTarget) {
   ASSERT_TRUE(open("annotations.pdf"));
   ASSERT_TRUE(wait_text(0));
   QString hovered;
-  QObject::connect(&view_, &DocumentView::link_hovered, &view_, [&](const QString& t) { hovered = t; });
-  send_mouse(QEvent::MouseMove, view_.page_point_to_viewport(0, {100, 792 - 410}), Qt::NoButton, Qt::NoButton);
+  QObject::connect(&view_, &DocumentView::link_hovered, &view_,
+                   [&](const QString& t) { hovered = t; });
+  send_mouse(QEvent::MouseMove, view_.page_point_to_viewport(0, {100, 792 - 410}), Qt::NoButton,
+             Qt::NoButton);
   EXPECT_EQ(hovered, QStringLiteral("https://github.com/Edgar-J-Shin/OnPdf"));
   EXPECT_EQ(view_.viewport()->cursor().shape(), Qt::PointingHandCursor);
-  send_mouse(QEvent::MouseMove, view_.page_point_to_viewport(0, {300, 600}), Qt::NoButton, Qt::NoButton);
+  send_mouse(QEvent::MouseMove, view_.page_point_to_viewport(0, {300, 600}), Qt::NoButton,
+             Qt::NoButton);
   EXPECT_TRUE(hovered.isEmpty());
   EXPECT_EQ(view_.viewport()->cursor().shape(), Qt::ArrowCursor);
 }
@@ -221,11 +228,13 @@ TEST_F(DocumentViewTest, StaleTextIndexIgnoredAfterReplace) {
   // (이전 문서의 대기 작업은 핸들 close 로 kInvalidState 가 되며, 그 결과는 캐시하지 않는다)
   ASSERT_TRUE(open("scanned.pdf"));
   std::vector<int> ready_pages;
-  QObject::connect(&view_, &DocumentView::text_index_ready, &view_, [&](int p) { ready_pages.push_back(p); });
+  QObject::connect(&view_, &DocumentView::text_index_ready, &view_,
+                   [&](int p) { ready_pages.push_back(p); });
   ASSERT_TRUE(wait_text(0));
   spin_until([] { return false; }, 150);
   EXPECT_EQ(view_.text_index(0)->char_count(), 0);
-  // scanned.pdf 는 3쪽: 0~2 는 가시 ±1 프리페치로 정당하게 인덱싱될 수 있다. 그 밖(이전 문서 범위)은 절대 없어야 한다
+  // scanned.pdf 는 3쪽: 0~2 는 가시 ±1 프리페치로 정당하게 인덱싱될 수 있다. 그 밖(이전 문서
+  // 범위)은 절대 없어야 한다
   for (int p : ready_pages) EXPECT_LT(p, 3) << "stale index from previous document: page " << p;
   for (int p = 3; p < 1000; ++p) EXPECT_EQ(view_.text_index(p), nullptr) << p;
   EXPECT_FALSE(view_.has_selection());
@@ -241,7 +250,6 @@ TEST_F(DocumentViewTest, SelectAllOnCurrentPage) {
   view_.clear_selection();
   EXPECT_FALSE(view_.has_selection());
 }
-
 
 TEST_F(DocumentViewTest, OpensAndRendersFirstView) {
   ASSERT_TRUE(open("simple.pdf"));
@@ -260,13 +268,15 @@ TEST_F(DocumentViewTest, ScrollingLargeDocumentRequestsBoundedTiles) {
   QScrollBar* v = view_.verticalScrollBar();
   const int max = v->maximum();
   ASSERT_GT(max, 0);
-  // 10단계로 끝까지 이동. 각 단계에서 요청은 뷰포트 타일 + 미리보기 + 앞뒤 쪽 프리페치 정도여야 한다
+  // 10단계로 끝까지 이동. 각 단계에서 요청은 뷰포트 타일 + 미리보기 + 앞뒤 쪽 프리페치 정도여야
+  // 한다
   for (int i = 1; i <= 10; ++i) v->setValue(max * i / 10);
   EXPECT_EQ(view_.current_page(), 999);
   const int requested = view_.scheduler_stats().requested;
   // 뷰포트당 타일 수는 화면 배율의 제곱에 비례한다 (Retina dpr 2 → 4배)
   const double dpr = view_.devicePixelRatioF();
-  EXPECT_LT(requested, static_cast<int>(10 * 40 * dpr * dpr)) << "requests should be bounded by viewport, not document size";
+  EXPECT_LT(requested, static_cast<int>(10 * 40 * dpr * dpr))
+      << "requests should be bounded by viewport, not document size";
   EXPECT_GT(requested, 10);
   // 지나간 뷰포트의 요청은 취소된다
   EXPECT_GT(view_.scheduler_stats().cancelled, 0);
@@ -291,7 +301,8 @@ TEST_F(DocumentViewTest, ZoomKeepsAnchorAndClamps) {
 }
 
 TEST_F(DocumentViewTest, HorizontalAnchorWhenDocumentNarrowerThanViewport) {
-  // bookmarks.pdf 는 전 쪽 Letter(612pt) 라 100% 에서도 문서 폭(644px)이 뷰포트보다 좁다 → 가운데 정렬 오프셋 존재
+  // bookmarks.pdf 는 전 쪽 Letter(612pt) 라 100% 에서도 문서 폭(644px)이 뷰포트보다 좁다 → 가운데
+  // 정렬 오프셋 존재
   ASSERT_TRUE(open("bookmarks.pdf"));
   view_.set_zoom(0.5);
   const double vw = view_.viewport()->width();
@@ -305,8 +316,8 @@ TEST_F(DocumentViewTest, HorizontalAnchorWhenDocumentNarrowerThanViewport) {
   // 같은 문서 지점(300pt = 1.0 배율에서 300px) 의 새 뷰 x
   const double hoff_after = std::floor((vw - (612 + 32)) / 2.0);
   const double new_view_x = hoff_after + 16 + 300 - view_.horizontalScrollBar()->value();
-  // 가로 스크롤이 불가능하므로 앵커를 정확히 고정할 수는 없지만, 오프셋을 무시한 구현은 수십 px 을 튀게 한다.
-  // 올바른 구현은 "스크롤 0 + 새 오프셋" 이라는 유일한 해를 내므로 그 값과 일치해야 한다
+  // 가로 스크롤이 불가능하므로 앵커를 정확히 고정할 수는 없지만, 오프셋을 무시한 구현은 수십 px 을
+  // 튀게 한다. 올바른 구현은 "스크롤 0 + 새 오프셋" 이라는 유일한 해를 내므로 그 값과 일치해야 한다
   EXPECT_NEAR(new_view_x, hoff_after + 316, 1.0);
   EXPECT_EQ(view_.horizontalScrollBar()->value(), 0);
   EXPECT_EQ(view_.current_page(), 0);
@@ -356,7 +367,8 @@ TEST_F(DocumentViewTest, GoToPageKeepsShortAndLastPage) {
   ASSERT_TRUE(open("mixed-sizes.pdf"));
   const int last = view_.page_count() - 1;
   int signalled = -1;
-  QObject::connect(&view_, &DocumentView::current_page_changed, &view_, [&](int p) { signalled = p; });
+  QObject::connect(&view_, &DocumentView::current_page_changed, &view_,
+                   [&](int p) { signalled = p; });
   view_.go_to_page(4);  // 252×144pt 명함: 뷰포트 중앙은 다음 쪽에 걸린다
   EXPECT_EQ(view_.current_page(), 4);
   EXPECT_EQ(signalled, 4);
@@ -381,10 +393,12 @@ TEST_F(DocumentViewTest, ZoomReleasesPageAnchor) {
   ASSERT_TRUE(open("bookmarks.pdf"));
   view_.go_to_page(0);
   ASSERT_EQ(view_.verticalScrollBar()->value(), 0);
-  // 앵커를 0쪽 왼쪽 위 모서리에 두면 확대 후에도 그 모서리가 같은 자리에 남아 스크롤 값이 0 그대로다
+  // 앵커를 0쪽 왼쪽 위 모서리에 두면 확대 후에도 그 모서리가 같은 자리에 남아 스크롤 값이 0
+  // 그대로다
   view_.set_zoom(DocumentView::kMinZoom, view_.page_point_to_viewport(0, {0, 0}));
   ASSERT_EQ(view_.verticalScrollBar()->value(), 0);  // 전제: 값이 그대로
-  const auto center = view_.page_point_at(QPointF(view_.viewport()->width() / 2.0, view_.viewport()->height() / 2.0));
+  const auto center = view_.page_point_at(
+      QPointF(view_.viewport()->width() / 2.0, view_.viewport()->height() / 2.0));
   ASSERT_TRUE(center);
   ASSERT_GT(center->first, 0);  // 전제: 중앙이 0쪽이 아니다
   EXPECT_EQ(view_.current_page(), center->first);
@@ -419,14 +433,16 @@ TEST_F(DocumentViewTest, SelectionChangeRepaintsOnlySelectionArea) {
   const view::TextRange line0 = view_.text_index(0)->lines[0].chars;
   drag(char_left(0, line0.start), char_right(0, line0.start + 2));
   QApplication::processEvents();
-  // 늦게 오는 타일·미리보기가 스파이 중에 전체를 다시 그리지 않게 렌더가 가라앉을 때까지 기다린다 (Windows CI 에서 간헐 실패)
+  // 늦게 오는 타일·미리보기가 스파이 중에 전체를 다시 그리지 않게 렌더가 가라앉을 때까지 기다린다
+  // (Windows CI 에서 간헐 실패)
   ASSERT_TRUE(spin_until([&] { return view_.pending_visible_tiles() == 0; }));
   spin_until([] { return false; }, 300);
 
   struct PaintSpy : QObject {
     QRect bounds;
     bool eventFilter(QObject*, QEvent* e) override {
-      if (e->type() == QEvent::Paint) bounds |= static_cast<QPaintEvent*>(e)->region().boundingRect();
+      if (e->type() == QEvent::Paint)
+        bounds |= static_cast<QPaintEvent*>(e)->region().boundingRect();
       return false;
     }
   } spy;
@@ -435,7 +451,8 @@ TEST_F(DocumentViewTest, SelectionChangeRepaintsOnlySelectionArea) {
   QApplication::processEvents();
   view_.viewport()->removeEventFilter(&spy);
   ASSERT_FALSE(spy.bounds.isEmpty());
-  EXPECT_LT(spy.bounds.height(), view_.viewport()->height() / 4) << "selection change repainted the whole view";
+  EXPECT_LT(spy.bounds.height(), view_.viewport()->height() / 4)
+      << "selection change repainted the whole view";
   EXPECT_LT(spy.bounds.width(), view_.viewport()->width());
 }
 
@@ -446,8 +463,8 @@ TEST_F(DocumentViewTest, PinchGestureZoomsAroundPoint) {
   const QPointF pos(view_.viewport()->width() / 2.0, view_.viewport()->height() / 3.0);
   const auto anchor_before = view_.page_point_at(pos);
   ASSERT_TRUE(anchor_before);
-  QNativeGestureEvent pinch(Qt::ZoomNativeGesture, QPointingDevice::primaryPointingDevice(), 2, pos, pos,
-                            view_.viewport()->mapToGlobal(pos), 0.25, QPointF());
+  QNativeGestureEvent pinch(Qt::ZoomNativeGesture, QPointingDevice::primaryPointingDevice(), 2, pos,
+                            pos, view_.viewport()->mapToGlobal(pos), 0.25, QPointF());
   QApplication::sendEvent(view_.viewport(), &pinch);
   EXPECT_NEAR(view_.zoom() / before, 1.25, 0.03);
   const auto anchor_after = view_.page_point_at(pos);

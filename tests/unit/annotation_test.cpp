@@ -1,13 +1,11 @@
 // PdfiumDocument 주석 API: 좌표 변환·조회·생성·AP 규칙·스냅샷 복원 (#35)
 #include "onpdf/core/engine/pdfium_document.h"
-#include "onpdf/core/engine/save.h"
 #include "onpdf/core/engine/qpdf_tools.h"
+#include "onpdf/core/engine/save.h"
 
 #include "../test_support.h"
-
-#include <gtest/gtest.h>
-
 #include <cmath>
+#include <gtest/gtest.h>
 #include <string>
 #include <vector>
 
@@ -18,19 +16,23 @@ using onpdf::test::ScopedTempDir;
 using onpdf::test::testdata;
 
 const AnnotationInfo* find_id(const std::vector<AnnotationInfo>& list, const std::string& id) {
-  for (const auto& a : list) if (a.id == id) return &a;
+  for (const auto& a : list)
+    if (a.id == id) return &a;
   return nullptr;
 }
 
 // 사각형 안에서 조건을 만족하는 픽셀 비율 (BGRA)
-double fraction_in(const Bitmap& bmp, const Rect& rect_pt, double scale, bool (*pred)(int r, int g, int b)) {
-  const int x0 = std::max(0, static_cast<int>(rect_pt.x * scale)), y0 = std::max(0, static_cast<int>(rect_pt.y * scale));
+double fraction_in(const Bitmap& bmp, const Rect& rect_pt, double scale,
+                   bool (*pred)(int r, int g, int b)) {
+  const int x0 = std::max(0, static_cast<int>(rect_pt.x * scale)),
+            y0 = std::max(0, static_cast<int>(rect_pt.y * scale));
   const int x1 = std::min(bmp.width, static_cast<int>(rect_pt.right() * scale));
   const int y1 = std::min(bmp.height, static_cast<int>(rect_pt.bottom() * scale));
   int hit = 0, total = 0;
   for (int y = y0; y < y1; ++y) {
     for (int x = x0; x < x1; ++x) {
-      const auto* p = bmp.pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(bmp.stride) +
+      const auto* p = bmp.pixels.data() +
+                      static_cast<std::size_t>(y) * static_cast<std::size_t>(bmp.stride) +
                       static_cast<std::size_t>(x) * 4;
       ++total;
       if (pred(p[2], p[1], p[0])) ++hit;
@@ -38,9 +40,15 @@ double fraction_in(const Bitmap& bmp, const Rect& rect_pt, double scale, bool (*
   }
   return total == 0 ? 0.0 : static_cast<double>(hit) / total;
 }
-bool yellowish(int r, int g, int b) { return r > 200 && g > 200 && b < 80; }
-bool greenish(int r, int g, int b) { return g > 200 && r < 80 && b < 80; }
-bool dark(int r, int g, int b) { return r < 90 && g < 90 && b < 90; }  // 글자
+bool yellowish(int r, int g, int b) {
+  return r > 200 && g > 200 && b < 80;
+}
+bool greenish(int r, int g, int b) {
+  return g > 200 && r < 80 && b < 80;
+}
+bool dark(int r, int g, int b) {
+  return r < 90 && g < 90 && b < 90;
+}  // 글자
 
 // 메모 아이콘 사각형이 회전된 쪽에서도 입력한 쪽 포인트 자리로 돌아온다 (to_user ↔ to_rect 왕복)
 TEST(Annotations, RectRoundTripsOnRotatedPages) {
@@ -71,7 +79,8 @@ TEST(Annotations, RectRoundTripsOnRotatedPages) {
   }
 }
 
-// 선택 사각형(쪽 포인트)으로 만든 하이라이트의 Rect 는 사각형들의 합집합이고, 색 변경은 AP 가 생긴 뒤에도 된다
+// 선택 사각형(쪽 포인트)으로 만든 하이라이트의 Rect 는 사각형들의 합집합이고, 색 변경은 AP 가 생긴
+// 뒤에도 된다
 TEST(Annotations, HighlightFromSelectionAndRecolorAfterRender) {
   auto doc = PdfiumDocument::open(testdata("simple.pdf"));
   ASSERT_TRUE(doc);
@@ -111,7 +120,8 @@ TEST(Annotations, HighlightFromSelectionAndRecolorAfterRender) {
   ASSERT_TRUE(after);
   EXPECT_GT(fraction_in(*after, quads.front(), 2.0, greenish), 0.3);
   EXPECT_LT(fraction_in(*after, quads.front(), 2.0, yellowish), 0.05);
-  // 이전 색으로 되돌리면 다시 노랑이고 글자도 그대로 보인다 (리뷰 C1: AP 텍스트 복원은 /Resources 를 잃어 글자를 덮었다)
+  // 이전 색으로 되돌리면 다시 노랑이고 글자도 그대로 보인다 (리뷰 C1: AP 텍스트 복원은 /Resources
+  // 를 잃어 글자를 덮었다)
   ASSERT_TRUE(doc->set_annotation_color(0, *id, snap->color));
   auto restored = doc->render_page(0, options);
   ASSERT_TRUE(restored);
@@ -172,13 +182,15 @@ TEST(Annotations, RemoveAndRestoreKeepsTextVisible) {
   auto after = doc->render_page(0, options);
   ASSERT_TRUE(after);
   EXPECT_GT(fraction_in(*after, hl, 2.0, yellowish), 0.3);
-  EXPECT_NEAR(fraction_in(*after, hl, 2.0, dark), text_before, 0.01) << "복원된 하이라이트가 글자를 덮으면 안 된다";
+  EXPECT_NEAR(fraction_in(*after, hl, 2.0, dark), text_before, 0.01)
+      << "복원된 하이라이트가 글자를 덮으면 안 된다";
   auto snap2 = doc->snapshot_annotation(0, snap->id);
   ASSERT_TRUE(snap2);
   EXPECT_EQ(snap2->color, snap->color);
   EXPECT_EQ(snap2->quads, snap->quads);
   EXPECT_EQ(snap2->flags, snap->flags);
-  // Square: 내부색(/IC)과 불투명도(/CA) 도 왕복한다 (리뷰 W3). 복원된 하이라이트가 끝으로 갔으니 Square 는 이제 #0
+  // Square: 내부색(/IC)과 불투명도(/CA) 도 왕복한다 (리뷰 W3). 복원된 하이라이트가 끝으로 갔으니
+  // Square 는 이제 #0
   auto sq = doc->snapshot_annotation(0, "#0");
   ASSERT_TRUE(sq);
   EXPECT_EQ(sq->kind, AnnotationKind::kSquare);
@@ -289,15 +301,19 @@ TEST(Annotations, SquareAndCircleCarryBorderAndInterior) {
     EXPECT_EQ(c->kind, AnnotationKind::kCircle);
     EXPECT_FLOAT_EQ(c->border_width, 1.0f);
     EXPECT_FLOAT_EQ(c->opacity, 1.0f);
-    EXPECT_FALSE(doc->snapshot_annotation(0, *cid)->has_interior) << "/IC 가 없으면 채움 없음 (GetColor 의 기본 검정에 속지 않는다)";
-    // 렌더: 사각형 안쪽이 채움(반투명 연분홍)으로 흰색이 아니다. 원 안쪽은 채움이 없어 흰색이 남는다
+    EXPECT_FALSE(doc->snapshot_annotation(0, *cid)->has_interior)
+        << "/IC 가 없으면 채움 없음 (GetColor 의 기본 검정에 속지 않는다)";
+    // 렌더: 사각형 안쪽이 채움(반투명 연분홍)으로 흰색이 아니다. 원 안쪽은 채움이 없어 흰색이
+    // 남는다
     RenderOptions options;
     options.scale = 1.0f;
     auto bmp = doc->render_page(0, options);
     ASSERT_TRUE(bmp);
     const auto not_white = [](int r, int g, int b) { return !(r > 250 && g > 250 && b > 250); };
-    EXPECT_GT(fraction_in(*bmp, {106, 156, 188, 68}, 1.0, not_white), 0.95) << "rotation " << rotation;
-    EXPECT_LT(fraction_in(*bmp, {360, 190, 40, 40}, 1.0, not_white), 0.5) << "원 가운데는 채움이 없다";
+    EXPECT_GT(fraction_in(*bmp, {106, 156, 188, 68}, 1.0, not_white), 0.95)
+        << "rotation " << rotation;
+    EXPECT_LT(fraction_in(*bmp, {360, 190, 40, 40}, 1.0, not_white), 0.5)
+        << "원 가운데는 채움이 없다";
   }
   AnnotationSpec no_rect;
   no_rect.kind = AnnotationKind::kSquare;
@@ -324,7 +340,8 @@ TEST(Annotations, BorderWidthSetterClearsApAndRejectsBs) {
   ASSERT_TRUE(snap);
   EXPECT_FLOAT_EQ(snap->border_width, 6.0f);
   EXPECT_FALSE(doc->set_annotation_border_width(0, *id, 0.0));
-  // 다른 프로그램이 /BS /W 로 만든 사각형: has_bs, setter 거절 (Command 가 삭제·재생성으로 우회한다)
+  // 다른 프로그램이 /BS /W 로 만든 사각형: has_bs, setter 거절 (Command 가 삭제·재생성으로
+  // 우회한다)
   auto other = PdfiumDocument::open(testdata("annotations.pdf"));
   ASSERT_TRUE(other);
   auto list = other->annotations(0);
@@ -339,13 +356,16 @@ TEST(Annotations, BorderWidthSetterClearsApAndRejectsBs) {
   EXPECT_TRUE(other->snapshot_annotation(0, "#1")->has_bs);
 }
 
-// 렌더 없이 저장해도 OnPdf 주석에는 AP 가 들어간다 — 없으면 다른 뷰어가 /CA 등을 무시하고 제멋대로 그린다 (#53)
+// 렌더 없이 저장해도 OnPdf 주석에는 AP 가 들어간다 — 없으면 다른 뷰어가 /CA 등을 무시하고 제멋대로
+// 그린다 (#53)
 TEST(Annotations, SaveGeneratesAppearanceForUnrenderedAnnotations) {
   auto doc = PdfiumDocument::open(testdata("simple.pdf"));
   ASSERT_TRUE(doc);
   std::vector<std::string> ids;
-  for (AnnotationKind kind : {AnnotationKind::kHighlight, AnnotationKind::kUnderline, AnnotationKind::kStrikeOut,
-                              AnnotationKind::kText, AnnotationKind::kInk, AnnotationKind::kSquare, AnnotationKind::kCircle}) {
+  for (AnnotationKind kind :
+       {AnnotationKind::kHighlight, AnnotationKind::kUnderline, AnnotationKind::kStrikeOut,
+        AnnotationKind::kText, AnnotationKind::kInk, AnnotationKind::kSquare,
+        AnnotationKind::kCircle}) {
     AnnotationSpec s;
     s.kind = kind;
     s.quads = {{72, 60, 200, 20}};
@@ -357,7 +377,8 @@ TEST(Annotations, SaveGeneratesAppearanceForUnrenderedAnnotations) {
     ASSERT_TRUE(id) << static_cast<int>(kind);
     ids.push_back(*id);
   }
-  for (const auto& a : *doc->annotations(1)) EXPECT_FALSE(a.has_appearance) << a.id << " — 새 주석은 AP 없이 만든다";
+  for (const auto& a : *doc->annotations(1))
+    EXPECT_FALSE(a.has_appearance) << a.id << " — 새 주석은 AP 없이 만든다";
   ScopedTempDir dir;
   ASSERT_TRUE(save_document_safely(*doc, dir / "ap.pdf", {}));
   auto reopened = PdfiumDocument::open(dir / "ap.pdf");
@@ -374,10 +395,13 @@ TEST(Annotations, SaveGeneratesAppearanceForUnrenderedAnnotations) {
   EXPECT_EQ(*doc->ensure_annotation_appearances(), 0) << "이미 AP 가 있으면 렌더하지 않는다";
 }
 
-// 저장 파일의 주석은 간접 객체다 (PDF 규격 표 30). FPDFPage_CreateAnnot 은 직접 사전을 넣지만, 저장 전 AP 생성 렌더가
-// 간접 객체로 바꾼다 (#53). 렌더하지 않은 쪽·암호 문서도
+// 저장 파일의 주석은 간접 객체다 (PDF 규격 표 30). FPDFPage_CreateAnnot 은 직접 사전을 넣지만, 저장
+// 전 AP 생성 렌더가 간접 객체로 바꾼다 (#53). 렌더하지 않은 쪽·암호 문서도
 TEST(Annotations, SavedAnnotationsAreIndirectObjects) {
-  struct Case { const char* file; const char* password; };
+  struct Case {
+    const char* file;
+    const char* password;
+  };
   for (const Case c : {Case{"simple.pdf", ""}, Case{"encrypted-aes256.pdf", "owner"}}) {
     auto doc = PdfiumDocument::open(testdata(c.file), c.password);
     ASSERT_TRUE(doc) << c.file;
@@ -395,7 +419,8 @@ TEST(Annotations, SavedAnnotationsAreIndirectObjects) {
     EXPECT_EQ(*direct, 0) << c.file;
     auto reopened = PdfiumDocument::open(dir / "safe.pdf", c.password);
     ASSERT_TRUE(reopened) << c.file;
-    for (const auto& a : *reopened->annotations(0)) EXPECT_TRUE(a.has_appearance) << c.file << " " << a.id;
+    for (const auto& a : *reopened->annotations(0))
+      EXPECT_TRUE(a.has_appearance) << c.file << " " << a.id;
   }
   // 증분 저장(서명 문서)도 같다
   auto signed_doc = PdfiumDocument::open(testdata("signed-dummy.pdf"));

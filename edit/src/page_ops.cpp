@@ -18,13 +18,16 @@ Result<void> validate_move(int count, const std::vector<int>& pages, int dest) {
   std::sort(sorted.begin(), sorted.end());
   for (std::size_t i = 0; i < sorted.size(); ++i) {
     if (sorted[i] < 0 || sorted[i] >= count) {
-      return make_error(ErrorCode::kInvalidArgument, "move: page index out of range: " + std::to_string(sorted[i]));
+      return make_error(ErrorCode::kInvalidArgument,
+                        "move: page index out of range: " + std::to_string(sorted[i]));
     }
-    if (i > 0 && sorted[i] == sorted[i - 1]) return make_error(ErrorCode::kInvalidArgument, "move: duplicate page");
+    if (i > 0 && sorted[i] == sorted[i - 1])
+      return make_error(ErrorCode::kInvalidArgument, "move: duplicate page");
   }
   const int n = static_cast<int>(pages.size());
   if (dest < 0 || dest > count - n) {
-    return make_error(ErrorCode::kInvalidArgument, "move: destination out of range: " + std::to_string(dest));
+    return make_error(ErrorCode::kInvalidArgument,
+                      "move: destination out of range: " + std::to_string(dest));
   }
   return {};
 }
@@ -41,7 +44,8 @@ std::vector<int> simulate_move(int count, const std::vector<int>& pages, int des
   }
   std::vector<int> result;
   result.reserve(static_cast<std::size_t>(count));
-  const auto cut = remaining.begin() + std::clamp<std::ptrdiff_t>(dest, 0, static_cast<std::ptrdiff_t>(remaining.size()));
+  const auto cut = remaining.begin() + std::clamp<std::ptrdiff_t>(
+                                           dest, 0, static_cast<std::ptrdiff_t>(remaining.size()));
   result.insert(result.end(), remaining.begin(), cut);
   result.insert(result.end(), pages.begin(), pages.end());
   result.insert(result.end(), cut, remaining.end());
@@ -67,7 +71,8 @@ Result<void> apply_order(engine::EditableDocument& doc, const std::vector<int>& 
   for (int pos = 0; pos < count; ++pos) {
     const int wanted = target[static_cast<std::size_t>(pos)];
     const auto it = std::find(current.begin() + pos, current.end(), wanted);
-    if (it == current.end()) return make_error(ErrorCode::kInvalidArgument, "order is not a permutation");
+    if (it == current.end())
+      return make_error(ErrorCode::kInvalidArgument, "order is not a permutation");
     const int from = static_cast<int>(it - current.begin());
     if (from == pos) continue;
     if (auto moved = doc.move_pages({from}, pos); !moved) return moved;

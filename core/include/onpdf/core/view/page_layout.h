@@ -31,9 +31,11 @@ class PageLayout {
   [[nodiscard]] const LayoutOptions& options() const noexcept { return options_; }
 
   [[nodiscard]] int page_count() const noexcept { return static_cast<int>(pages_pt_.size()); }
-  [[nodiscard]] engine::PageSize page_size_pt(int page) const { return pages_pt_[static_cast<std::size_t>(page)]; }
-  [[nodiscard]] Rect page_rect(int page) const;        // 문서 px
-  [[nodiscard]] double total_height() const noexcept;  // 여백 포함
+  [[nodiscard]] engine::PageSize page_size_pt(int page) const {
+    return pages_pt_[static_cast<std::size_t>(page)];
+  }
+  [[nodiscard]] Rect page_rect(int page) const;          // 문서 px
+  [[nodiscard]] double total_height() const noexcept;    // 여백 포함
   [[nodiscard]] double document_width() const noexcept;  // 가장 넓은 쪽 + 양쪽 여백
 
   // y 가 속한 쪽 (간격은 위쪽 쪽에 귀속). 범위 밖은 0 / 마지막 쪽으로 clamp. 쪽이 없으면 -1
@@ -43,7 +45,8 @@ class PageLayout {
 
   [[nodiscard]] Point doc_to_page_px(int page, Point doc) const;
   [[nodiscard]] Point page_px_to_doc(int page, Point page_px) const;
-  [[nodiscard]] Point page_px_to_pt(int page, Point page_px) const;  // 쪽 포인트 (좌상단 원점, y 아래)
+  [[nodiscard]] Point page_px_to_pt(int page,
+                                    Point page_px) const;  // 쪽 포인트 (좌상단 원점, y 아래)
 
   // 뷰포트 너비에 가장 넓은 쪽을 맞추는 배율
   [[nodiscard]] int fit_width_scale_q(double viewport_w) const noexcept;

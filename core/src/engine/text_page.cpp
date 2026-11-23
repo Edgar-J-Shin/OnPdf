@@ -1,12 +1,12 @@
 #include "onpdf/core/engine/text_page.h"
 
-#include "dest.h"
 #include "onpdf/core/engine/pdfium_library.h"
 
 #include <fpdf_doc.h>
 #include <fpdf_text.h>
 #include <fpdfview.h>
 
+#include "dest.h"
 #include <algorithm>
 #include <cmath>
 #include <string>
@@ -30,7 +30,8 @@ Result<TextPage> TextPage::load(FPDF_PAGE page) {
   return TextPage(std::move(text_page));
 }
 
-Result<view::PageTextIndex> TextPage::extract(FPDF_DOCUMENT doc, FPDF_PAGE page, int page_index) const {
+Result<view::PageTextIndex> TextPage::extract(FPDF_DOCUMENT doc, FPDF_PAGE page,
+                                              int page_index) const {
   PdfiumLibrary::assert_current_thread();
   view::PageTextIndex index;
   index.page = page_index;
@@ -45,10 +46,10 @@ Result<view::PageTextIndex> TextPage::extract(FPDF_DOCUMENT doc, FPDF_PAGE page,
   //  - /Rotate 90 쪽도, 회전 텍스트 매트릭스(0 1 -1 0 … Tm)도 그 프레임에서는 글이 가로로 흐른다
   //  - 유효 글자 크기 = Tf 크기 × ‖(a,b)‖ (Cairo/Skia 식 "1 Tf + Tm 스케일" 문서 대응)
   int line_start = 0;
-  double line_ox = 0.0, line_oy = 0.0;   // 줄 첫 글자 origin (사용자 좌표)
-  double line_dx = 1.0, line_dy = 0.0;   // 줄 방향 단위 벡터
-  double line_size = 0.0;                // 줄 유효 글자 크기
-  double prev_ox = 0.0, prev_oy = 0.0;   // 직전 글자 origin
+  double line_ox = 0.0, line_oy = 0.0;  // 줄 첫 글자 origin (사용자 좌표)
+  double line_dx = 1.0, line_dy = 0.0;  // 줄 방향 단위 벡터
+  double line_size = 0.0;               // 줄 유효 글자 크기
+  double prev_ox = 0.0, prev_oy = 0.0;  // 직전 글자 origin
   bool line_open = false;
   Rect line_box;
   bool line_has_box = false;
@@ -71,9 +72,11 @@ Result<view::PageTextIndex> TextPage::extract(FPDF_DOCUMENT doc, FPDF_PAGE page,
     }
     view::TextChar ch;
     ch.generated = FPDFText_IsGenerated(tp, i) == 1;
-    // 유니코드 매핑 오류(ToUnicode 없음 등) 글자는 U+FFFD. PDFium 이 주는 값은 유니코드가 아닌 글자 코드라
-    // 그대로 쓰면 복사·검색에 엉뚱한 글자가 조용히 섞인다 (#12 C1 결정). 그 밖에 유니코드 스칼라가 아닌 값도 U+FFFD
-    ch.code = FPDFText_HasUnicodeMapError(tp, i) == 1 ? char32_t{0xFFFD} : view::sanitize_text_code(code);
+    // 유니코드 매핑 오류(ToUnicode 없음 등) 글자는 U+FFFD. PDFium 이 주는 값은 유니코드가 아닌 글자
+    // 코드라 그대로 쓰면 복사·검색에 엉뚱한 글자가 조용히 섞인다 (#12 C1 결정). 그 밖에 유니코드
+    // 스칼라가 아닌 값도 U+FFFD
+    ch.code =
+        FPDFText_HasUnicodeMapError(tp, i) == 1 ? char32_t{0xFFFD} : view::sanitize_text_code(code);
     ch.font_size = static_cast<float>(FPDFText_GetFontSize(tp, i));
     double l = 0, r = 0, b = 0, t = 0;
     bool has_box = false;
@@ -100,13 +103,16 @@ Result<view::PageTextIndex> TextPage::extract(FPDF_DOCUMENT doc, FPDF_PAGE page,
     }
     if (size <= 0.0 && has_box) size = std::abs(t - b);
 
-    // 기하 규칙(방향 프레임): 수직 편차가 크거나 진행이 뒤로 가면 새 줄 (PDFium 줄바꿈이 없는 문서 대비)
+    // 기하 규칙(방향 프레임): 수직 편차가 크거나 진행이 뒤로 가면 새 줄 (PDFium 줄바꿈이 없는 문서
+    // 대비)
     if (line_open && has_box && has_origin) {
       const double fs = std::max(size, line_size);
       const double rel_x = ox - line_ox, rel_y = oy - line_oy;
-      const double perp = -line_dy * rel_x + line_dx * rel_y;                 // 줄 수직 편차
-      const double advance = line_dx * (ox - prev_ox) + line_dy * (oy - prev_oy);  // 직전 글자 대비 진행
-      const bool direction_changed = std::abs(dx * line_dx + dy * line_dy) < 0.9;  // 방향 25° 이상 변화
+      const double perp = -line_dy * rel_x + line_dx * rel_y;  // 줄 수직 편차
+      const double advance =
+          line_dx * (ox - prev_ox) + line_dy * (oy - prev_oy);  // 직전 글자 대비 진행
+      const bool direction_changed =
+          std::abs(dx * line_dx + dy * line_dy) < 0.9;  // 방향 25° 이상 변화
       if (std::abs(perp) > 0.5 * fs || advance < -fs || direction_changed) close_line();
     }
     if (!line_open) {
@@ -124,7 +130,8 @@ Result<view::PageTextIndex> TextPage::extract(FPDF_DOCUMENT doc, FPDF_PAGE page,
         line_has_box = true;
       } else {
         const double x0 = std::min(line_box.x, ch.box.x), y0 = std::min(line_box.y, ch.box.y);
-        const double x1 = std::max(line_box.right(), ch.box.right()), y1 = std::max(line_box.bottom(), ch.box.bottom());
+        const double x1 = std::max(line_box.right(), ch.box.right()),
+                     y1 = std::max(line_box.bottom(), ch.box.bottom());
         line_box = {x0, y0, x1 - x0, y1 - y0};
       }
     }
@@ -147,7 +154,8 @@ Result<view::PageTextIndex> TextPage::extract(FPDF_DOCUMENT doc, FPDF_PAGE page,
     link.box = space.to_rect(rect.left, rect.right, rect.bottom, rect.top);
     if (FPDF_DEST dest = FPDFLink_GetDest(doc, link_handle); dest != nullptr) {
       link.kind = view::LinkKind::kPage;
-      if (!fill_location(doc, dest, link)) continue;  // 링크는 추출 때 대상 위치를 쪽 포인트로 바로 변환
+      if (!fill_location(doc, dest, link))
+        continue;  // 링크는 추출 때 대상 위치를 쪽 포인트로 바로 변환
     } else if (FPDF_ACTION action = FPDFLink_GetAction(link_handle); action != nullptr) {
       const unsigned long type = FPDFAction_GetType(action);
       if (type == PDFACTION_URI) {
@@ -175,7 +183,8 @@ int TextPage::raw_char_count() const {
   return std::max(0, FPDFText_CountChars(text_page_.get()));
 }
 
-std::vector<view::SourceRange> TextPage::find(const std::string& query_utf8, view::SearchOptions options) const {
+std::vector<view::SourceRange> TextPage::find(const std::string& query_utf8,
+                                              view::SearchOptions options) const {
   PdfiumLibrary::assert_current_thread();
   std::vector<view::SourceRange> out;
   if (query_utf8.empty()) return out;

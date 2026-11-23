@@ -2,8 +2,8 @@
 
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/core/engine/pdfium_library.h"
-#include "pdfium_worker_impl.h"
 
+#include "pdfium_worker_impl.h"
 #include <cassert>
 #include <cstdio>
 #include <exception>
@@ -175,11 +175,21 @@ PdfiumWorker::~PdfiumWorker() {
 TaskHandle PdfiumWorker::post(Task task, Priority priority) {
   return impl_->post(std::move(task), priority);
 }
-void PdfiumWorker::cancel_all() noexcept { impl_->cancel_all(); }
-void PdfiumWorker::stop() noexcept { impl_->stop(); }
-bool PdfiumWorker::is_worker_thread() const noexcept { return impl_->is_worker_thread(); }
-bool PdfiumWorker::is_stopped() const noexcept { return impl_->is_stopped(); }
-std::size_t PdfiumWorker::pending_count() const { return impl_->pending_count(); }
+void PdfiumWorker::cancel_all() noexcept {
+  impl_->cancel_all();
+}
+void PdfiumWorker::stop() noexcept {
+  impl_->stop();
+}
+bool PdfiumWorker::is_worker_thread() const noexcept {
+  return impl_->is_worker_thread();
+}
+bool PdfiumWorker::is_stopped() const noexcept {
+  return impl_->is_stopped();
+}
+std::size_t PdfiumWorker::pending_count() const {
+  return impl_->pending_count();
+}
 
 DocumentId PdfiumWorker::register_document(std::unique_ptr<PdfiumDocument> document) {
   return impl_->register_document(std::move(document));
@@ -187,6 +197,8 @@ DocumentId PdfiumWorker::register_document(std::unique_ptr<PdfiumDocument> docum
 PdfiumDocument* PdfiumWorker::find_document(DocumentId id) const noexcept {
   return impl_->find_document(id);
 }
-void PdfiumWorker::unregister_document(DocumentId id) noexcept { impl_->unregister_document(id); }
+void PdfiumWorker::unregister_document(DocumentId id) noexcept {
+  impl_->unregister_document(id);
+}
 
 }  // namespace onpdf::engine

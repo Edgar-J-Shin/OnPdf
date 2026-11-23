@@ -5,14 +5,12 @@
 
 #include "../manifest.h"
 #include "../test_support.h"
-
-#include <gtest/gtest.h>
-
 #include <cctype>
 #include <charconv>
-#include <cstdio>
 #include <chrono>
+#include <cstdio>
 #include <fstream>
+#include <gtest/gtest.h>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -107,8 +105,8 @@ TEST(Testdata, LargeDocumentOpensQuickly) {
   const auto render_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
   RecordProperty("open_ms", static_cast<int>(open_ms));
   RecordProperty("render_last_page_ms", static_cast<int>(render_ms));
-  std::cout << "[ perf     ] large-1000.pdf open " << open_ms << " ms, render page 1000 " << render_ms
-            << " ms\n";
+  std::cout << "[ perf     ] large-1000.pdf open " << open_ms << " ms, render page 1000 "
+            << render_ms << " ms\n";
   EXPECT_LT(open_ms, 10000);
 }
 

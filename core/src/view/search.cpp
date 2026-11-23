@@ -10,8 +10,9 @@ TextRange map_source_range(const PageTextIndex& index, SourceRange source) {
   if (source.count <= 0 || index.chars.empty()) return {};
   const int s = source.start;
   const int e = source.start + source.count;  // 미포함
-  auto first = std::lower_bound(index.chars.begin(), index.chars.end(), s,
-                                [](const TextChar& c, int value) { return c.source_index < value; });
+  auto first =
+      std::lower_bound(index.chars.begin(), index.chars.end(), s,
+                       [](const TextChar& c, int value) { return c.source_index < value; });
   auto last = std::lower_bound(index.chars.begin(), index.chars.end(), e,
                                [](const TextChar& c, int value) { return c.source_index < value; });
   const int a = static_cast<int>(first - index.chars.begin());
@@ -24,10 +25,12 @@ std::string normalize_query(std::string_view utf8) {
   out.reserve(utf8.size());
   for (std::size_t i = 0; i < utf8.size(); ++i) {
     const auto c = static_cast<unsigned char>(utf8[i]);
-    if (c == 0xC2 && i + 1 < utf8.size() && static_cast<unsigned char>(utf8[i + 1]) == 0xA0) {  // U+00A0
+    if (c == 0xC2 && i + 1 < utf8.size() &&
+        static_cast<unsigned char>(utf8[i + 1]) == 0xA0) {  // U+00A0
       out += ' ';
       ++i;
-    } else if (c == 0xE3 && i + 2 < utf8.size() && static_cast<unsigned char>(utf8[i + 1]) == 0x80 &&
+    } else if (c == 0xE3 && i + 2 < utf8.size() &&
+               static_cast<unsigned char>(utf8[i + 1]) == 0x80 &&
                static_cast<unsigned char>(utf8[i + 2]) == 0x80) {  // U+3000
       out += ' ';
       i += 2;
@@ -51,14 +54,17 @@ SearchSession::SearchSession(Executor executor, int max_in_flight, std::size_t m
       max_hits_(max_hits),
       alive_(std::make_shared<int>(0)) {}
 
-SearchSession::~SearchSession() { cancel_in_flight(); }
+SearchSession::~SearchSession() {
+  cancel_in_flight();
+}
 
 void SearchSession::cancel_in_flight() {
   for (auto& [page, handle] : in_flight_) handle.cancel();
   in_flight_.clear();
 }
 
-void SearchSession::start(std::string query, SearchOptions options, int page_count, int start_page) {
+void SearchSession::start(std::string query, SearchOptions options, int page_count,
+                          int start_page) {
   query = normalize_query(query);
   if (query.empty() || page_count <= 0) {
     clear();
@@ -146,7 +152,8 @@ void SearchSession::notify_changed() {
 }
 
 void SearchSession::pump() {
-  // 비재귀: 동기 실행기가 executor_ 안에서 on_page_done → pump 를 부르면 표시만 하고 바깥 루프가 이어 간다
+  // 비재귀: 동기 실행기가 executor_ 안에서 on_page_done → pump 를 부르면 표시만 하고 바깥 루프가
+  // 이어 간다
   if (in_pump_) {
     repump_ = true;
     return;
@@ -155,13 +162,14 @@ void SearchSession::pump() {
   std::weak_ptr<int> alive = alive_;
   do {
     repump_ = false;
-    while (next_order_ < order_.size() && static_cast<int>(in_flight_.size()) < max_in_flight_ && !truncated_) {
+    while (next_order_ < order_.size() && static_cast<int>(in_flight_.size()) < max_in_flight_ &&
+           !truncated_) {
       const int page = order_[next_order_++];
       const int generation = generation_;
       // 동기 실행기는 executor_ 안에서 바로 콜백하므로, 핸들 자리를 먼저 만든다
       in_flight_.emplace(page, engine::TaskHandle{});
-      engine::TaskHandle handle =
-          executor_(page, query_, options_, [this, alive, generation, page](Result<PageSearchResult> r) {
+      engine::TaskHandle handle = executor_(
+          page, query_, options_, [this, alive, generation, page](Result<PageSearchResult> r) {
             if (alive.expired()) return;
             on_page_done(generation, page, std::move(r));
           });
@@ -188,8 +196,10 @@ void SearchSession::on_page_done(int generation, int page, Result<PageSearchResu
     r.page = page;
   } else {
     ++pages_failed_;
-    if (result.error().code != ErrorCode::kCancelled && result.error().code != ErrorCode::kInvalidState) {
-      std::fprintf(stderr, "[onpdf] search failed for page %d: %s\n", page, result.error().message.c_str());
+    if (result.error().code != ErrorCode::kCancelled &&
+        result.error().code != ErrorCode::kInvalidState) {
+      std::fprintf(stderr, "[onpdf] search failed for page %d: %s\n", page,
+                   result.error().message.c_str());
     }
   }
   chars_seen_ += r.char_count;
@@ -273,9 +283,10 @@ bool SearchSession::next() {
       }
     }
   } else {
-    auto it = std::upper_bound(hits.begin(), hits.end(), *current_, [](const SearchHit& a, const SearchHit& b) {
-      return a.page != b.page ? a.page < b.page : a.range.start < b.range.start;
-    });
+    auto it = std::upper_bound(
+        hits.begin(), hits.end(), *current_, [](const SearchHit& a, const SearchHit& b) {
+          return a.page != b.page ? a.page < b.page : a.range.start < b.range.start;
+        });
     if (it == hits.end()) {
       if (searching()) return false;  // 아직 검색되지 않은 쪽이 있을 수 있음
       current_ = hits.front();
@@ -296,9 +307,10 @@ bool SearchSession::previous() {
   if (!current_) {
     current_ = hits.back();
   } else {
-    auto it = std::lower_bound(hits.begin(), hits.end(), *current_, [](const SearchHit& a, const SearchHit& b) {
-      return a.page != b.page ? a.page < b.page : a.range.start < b.range.start;
-    });
+    auto it = std::lower_bound(
+        hits.begin(), hits.end(), *current_, [](const SearchHit& a, const SearchHit& b) {
+          return a.page != b.page ? a.page < b.page : a.range.start < b.range.start;
+        });
     if (it == hits.begin()) {
       if (searching()) return false;
       current_ = hits.back();

@@ -401,7 +401,8 @@ std::string line_id_of(const PageAnalysis& analysis, const AnalyzedLine& line) {
   std::string id = first.container < 0 ? "p" : "f" + std::to_string(first.container);
   id += "/" + std::to_string(first.index) + "/";
   char hex[17];
-  std::snprintf(hex, sizeof hex, "%016llx", static_cast<unsigned long long>(onpdf::fnv1a64(line.text)));
+  std::snprintf(hex, sizeof hex, "%016llx",
+                static_cast<unsigned long long>(onpdf::fnv1a64(line.text)));
   return id + hex;
 }
 

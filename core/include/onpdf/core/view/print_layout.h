@@ -23,10 +23,10 @@ enum class Duplex { kUndefined, kSimplex, kFlipShortEdge, kFlipLongEdge };
 
 // 문서가 정한 인쇄 권한·기본값. 워커가 문서를 열 때 한 번 채운다.
 struct PrintPreferences {
-  bool allowed = true;        // 권한 비트 3 (인쇄)
-  bool high_quality = true;   // 권한 비트 12 (고품질 인쇄). 거짓이면 저해상도만
-  bool no_scaling = false;    // /ViewerPreferences /PrintScaling /None
-  int copies = 1;             // /NumCopies (1~999)
+  bool allowed = true;                           // 권한 비트 3 (인쇄)
+  bool high_quality = true;                      // 권한 비트 12 (고품질 인쇄). 거짓이면 저해상도만
+  bool no_scaling = false;                       // /ViewerPreferences /PrintScaling /None
+  int copies = 1;                                // /NumCopies (1~999)
   std::vector<std::pair<int, int>> page_ranges;  // /PrintPageRange, 0 기준 닫힌 구간. 비면 전체
   Duplex duplex = Duplex::kUndefined;
 };
@@ -36,8 +36,10 @@ struct PageRange {
   int last = 0;
 };
 
-// 범위 목록 → 출력할 쪽 순서. 쪽 수 밖은 잘라내고 뒤집힌 구간은 버린다. 겹침·중복은 사용자 의도로 보고 유지
-[[nodiscard]] std::vector<int> pages_in_ranges(const std::vector<PageRange>& ranges, int page_count);
+// 범위 목록 → 출력할 쪽 순서. 쪽 수 밖은 잘라내고 뒤집힌 구간은 버린다. 겹침·중복은 사용자 의도로
+// 보고 유지
+[[nodiscard]] std::vector<int> pages_in_ranges(const std::vector<PageRange>& ranges,
+                                               int page_count);
 
 struct PrintStep {
   int page = 0;
@@ -45,17 +47,19 @@ struct PrintStep {
 };
 
 // 매수 확장. collate=true 면 전체 순서를 copies 번 반복, false 면 쪽마다 repeat=copies
-[[nodiscard]] std::vector<PrintStep> print_sequence(const std::vector<int>& pages, int copies, bool collate);
+[[nodiscard]] std::vector<PrintStep> print_sequence(const std::vector<int>& pages, int copies,
+                                                    bool collate);
 
 struct Placement {
   int rotation = 0;    // 렌더 회전: 0 또는 270 (반시계 90°, 프린터 가로 방향 관례)
   double scale = 1.0;  // 쪽 포인트 → 용지 포인트
-  Rect target;         // 인쇄 가능 영역 좌상단 기준 포인트. 실제 크기에서는 영역보다 클 수 있다(잘림)
+  Rect target;  // 인쇄 가능 영역 좌상단 기준 포인트. 실제 크기에서는 영역보다 클 수 있다(잘림)
 };
 
 // 쪽을 인쇄 가능 영역에 배치한다. 쪽과 영역의 가로·세로 방향이 다르면(auto_rotate) 회전한다.
 // 크기가 0 이하이거나 유한하지 않으면 nullopt
-[[nodiscard]] std::optional<Placement> place_page(engine::PageSize page_pt, engine::PageSize printable_pt,
+[[nodiscard]] std::optional<Placement> place_page(engine::PageSize page_pt,
+                                                  engine::PageSize printable_pt,
                                                   PrintScaling scaling, bool auto_rotate = true);
 
 inline constexpr int kMaxPrintDpi = 300;

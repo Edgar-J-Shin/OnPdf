@@ -1,10 +1,10 @@
 // CFF charset 검사·항등 덮어쓰기 (#73, core 내부). 서브셋 생성은 edit 의 HarfBuzz 경로를 쓴다
 #include "cff_charset.h"
 
+#include "onpdf/core/fnv.h"
 #include "onpdf/edit/font_face.h"
 
 #include "../test_support.h"
-#include "onpdf/core/fnv.h"
 #include <gtest/gtest.h>
 
 namespace onpdf::engine::detail {
@@ -75,9 +75,9 @@ TEST(CffCharset, RejectsGlyfAndTruncatedData) {
 TEST(CffCharset, SubsetKeyMatchesCoreFnv) {
   std::string key;
   const auto otf = cff_subset_bytes("키 검증", &key);
-  EXPECT_EQ(onpdf::fnv1a_hex(otf), key) << "저장 후처리가 FontFile2 바이트로 OnPdf 글꼴을 찾는 근거";
+  EXPECT_EQ(onpdf::fnv1a_hex(otf), key)
+      << "저장 후처리가 FontFile2 바이트로 OnPdf 글꼴을 찾는 근거";
 }
-
 
 TEST(CffCharset, NonCidFontIsReportedAndLeftAlone) {
   auto face = edit::FontFace::load(testdata("fonts") / "SourceSans3-subset.otf");

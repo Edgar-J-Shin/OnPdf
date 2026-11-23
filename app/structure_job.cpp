@@ -1,15 +1,14 @@
 #include "structure_job.h"
 
 #include "ui_dispatcher.h"
-
 #include <QPointer>
-
 #include <memory>
 #include <utility>
 
 namespace onpdf::app {
 
-StructureJob::StructureJob(UiDispatcher& dispatcher, QObject* parent) : QObject(parent), dispatcher_(dispatcher) {}
+StructureJob::StructureJob(UiDispatcher& dispatcher, QObject* parent)
+    : QObject(parent), dispatcher_(dispatcher) {}
 
 StructureJob::~StructureJob() {
   ++generation_;  // 늦게 오는 결과는 버린다 (jthread 소멸이 join 한다)

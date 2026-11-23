@@ -36,9 +36,9 @@ struct SourceRange {
 // (흔한 검색어에 1,000쪽 문서여도 메모리가 결과 수에 비례하도록).
 struct PageSearchResult {
   int page = -1;
-  int char_count = 0;                        // 그 쪽 PDFium 글자 수 (텍스트 없는 문서 판정용)
-  std::vector<TextRange> ranges;             // 텍스트 인덱스 기준, 오름차순, 비어 있지 않음
-  std::vector<std::vector<Rect>> rects;      // ranges[i] 의 줄 단위 하이라이트 사각형 (쪽 포인트)
+  int char_count = 0;                    // 그 쪽 PDFium 글자 수 (텍스트 없는 문서 판정용)
+  std::vector<TextRange> ranges;         // 텍스트 인덱스 기준, 오름차순, 비어 있지 않음
+  std::vector<std::vector<Rect>> rects;  // ranges[i] 의 줄 단위 하이라이트 사각형 (쪽 포인트)
 };
 
 struct SearchHit {
@@ -57,8 +57,8 @@ class SearchSession {
  public:
   using PageCallback = std::function<void(Result<PageSearchResult>)>;
   // 쪽 검색을 시작하고, 완료 시 on_done 을 **세션을 소유한 스레드(메인)** 에서 부른다
-  using Executor =
-      std::function<engine::TaskHandle(int page, const std::string& query, SearchOptions options, PageCallback on_done)>;
+  using Executor = std::function<engine::TaskHandle(int page, const std::string& query,
+                                                    SearchOptions options, PageCallback on_done)>;
 
   explicit SearchSession(Executor executor, int max_in_flight = 4, std::size_t max_hits = 100'000);
   ~SearchSession();
@@ -101,7 +101,8 @@ class SearchSession {
   std::function<void()> on_changed;          // 결과 수·진행률 변화
   std::function<void()> on_current_changed;  // 현재 결과 변경 (스크롤 대상)
 
-  // 실행기 계약: on_done 은 동기·비동기 어느 쪽으로 불러도 된다. 동기 호출이어도 pump 는 재귀하지 않는다.
+  // 실행기 계약: on_done 은 동기·비동기 어느 쪽으로 불러도 된다. 동기 호출이어도 pump 는 재귀하지
+  // 않는다.
 
  private:
   void pump();

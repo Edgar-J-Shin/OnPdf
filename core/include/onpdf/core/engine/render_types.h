@@ -1,6 +1,7 @@
 #pragma once
 
-// PDFium 에 의존하지 않는 렌더링 관련 값 타입. app 은 이 헤더만 보고 pdfium_document.h 는 보지 않는다.
+// PDFium 에 의존하지 않는 렌더링 관련 값 타입. app 은 이 헤더만 보고 pdfium_document.h 는 보지
+// 않는다.
 
 namespace onpdf::engine {
 
@@ -19,7 +20,8 @@ struct RenderOptions {
   bool render_annotations = true;
   // LCD 서브픽셀 텍스트
   bool lcd_text = false;
-  // 인쇄용 렌더 (FPDF_PRINTING): 주석의 /F Print 플래그 규칙을 따른다 (화면 전용 주석 제외, 인쇄 전용 주석 포함)
+  // 인쇄용 렌더 (FPDF_PRINTING): 주석의 /F Print 플래그 규칙을 따른다 (화면 전용 주석 제외, 인쇄
+  // 전용 주석 포함)
   bool printing = false;
   // 회색조 렌더 (FPDF_GRAYSCALE)
   bool grayscale = false;

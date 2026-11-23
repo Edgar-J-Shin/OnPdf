@@ -8,8 +8,12 @@ namespace onpdf::app {
 
 namespace {
 
-void release_bitmap(void* info) { delete static_cast<onpdf::Bitmap*>(info); }
-void release_shared_bitmap(void* info) { delete static_cast<std::shared_ptr<const onpdf::Bitmap>*>(info); }
+void release_bitmap(void* info) {
+  delete static_cast<onpdf::Bitmap*>(info);
+}
+void release_shared_bitmap(void* info) {
+  delete static_cast<std::shared_ptr<const onpdf::Bitmap>*>(info);
+}
 
 }  // namespace
 
@@ -31,8 +35,8 @@ QImage to_qimage_shared(std::shared_ptr<const onpdf::Bitmap> bitmap, qreal devic
   // const 생성자를 쓰면 ro_data 가 되어 setDevicePixelRatio 가 깊은 복사를 한다.
   auto* owner = new std::shared_ptr<const onpdf::Bitmap>(std::move(bitmap));
   const onpdf::Bitmap& b = **owner;
-  QImage image(const_cast<uchar*>(b.pixels.data()), b.width, b.height, b.stride, QImage::Format_RGB32,
-               release_shared_bitmap, owner);
+  QImage image(const_cast<uchar*>(b.pixels.data()), b.width, b.height, b.stride,
+               QImage::Format_RGB32, release_shared_bitmap, owner);
   image.setDevicePixelRatio(device_pixel_ratio);
   return image;
 }
@@ -48,8 +52,9 @@ onpdf::Bitmap to_bitmap(const QImage& image) {
   out.stride = out.width * 4;
   out.pixels.resize(static_cast<std::size_t>(out.stride) * static_cast<std::size_t>(out.height));
   for (int y = 0; y < out.height; ++y) {
-    std::memcpy(out.pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(out.stride),
-                argb.constScanLine(y), static_cast<std::size_t>(out.stride));
+    std::memcpy(
+        out.pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(out.stride),
+        argb.constScanLine(y), static_cast<std::size_t>(out.stride));
   }
   return out;
 }

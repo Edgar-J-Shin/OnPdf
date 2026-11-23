@@ -68,7 +68,7 @@ TEST(TileCache, ReplaceAndShrink) {
   EXPECT_EQ(cache.tiles_for_page(2).size(), 0u);
   EXPECT_EQ(cache.keys().size(), 2u);
   for (int i = 0; i < 6; ++i) cache.put({2, 64, i, 0}, bitmap_of(kTile));  // 총 6MB + 500B
-  cache.set_max_bytes(kFourTiles);  // 줄이면 즉시 LRU 제거
+  cache.set_max_bytes(kFourTiles);                                         // 줄이면 즉시 LRU 제거
   EXPECT_LE(cache.stats().bytes, kFourTiles);
   cache.clear();
   EXPECT_EQ(cache.stats().count, 0u);

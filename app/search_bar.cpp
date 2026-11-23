@@ -1,11 +1,11 @@
 #include "search_bar.h"
 
 #include <QHBoxLayout>
-#include <QPalette>
-#include <QStyle>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPalette>
+#include <QStyle>
 #include <QToolButton>
 
 namespace onpdf::app {
@@ -67,7 +67,9 @@ void SearchBar::open_with(const QString& initial) {
   edit_->selectAll();
 }
 
-QString SearchBar::query() const { return edit_->text(); }
+QString SearchBar::query() const {
+  return edit_->text();
+}
 
 view::SearchOptions SearchBar::options() const {
   view::SearchOptions o;
@@ -76,7 +78,9 @@ view::SearchOptions SearchBar::options() const {
   return o;
 }
 
-QString SearchBar::status_text() const { return status_->text(); }
+QString SearchBar::status_text() const {
+  return status_->text();
+}
 
 void SearchBar::emit_query() {
   debounce_.stop();
@@ -100,7 +104,8 @@ void SearchBar::set_no_match(bool no_match) {
   edit_->setPalette(no_match ? palette : QPalette());
 }
 
-void SearchBar::set_status(std::size_t ordinal, std::size_t total, bool searching, bool truncated, bool no_text) {
+void SearchBar::set_status(std::size_t ordinal, std::size_t total, bool searching, bool truncated,
+                           bool no_text) {
   if (edit_->text().trimmed().isEmpty()) {
     status_->clear();
     set_no_match(false);
@@ -120,7 +125,8 @@ void SearchBar::set_status(std::size_t ordinal, std::size_t total, bool searchin
   }
   set_no_match(false);
   // 시작 쪽이 아직 검색 중이면 현재 결과가 정해지지 않았다
-  QString text = ordinal == 0 ? QStringLiteral("– / %1").arg(total) : QStringLiteral("%1 / %2").arg(ordinal).arg(total);
+  QString text = ordinal == 0 ? QStringLiteral("– / %1").arg(total)
+                              : QStringLiteral("%1 / %2").arg(ordinal).arg(total);
   if (truncated) {
     text += tr("+ (너무 많음)");
   } else if (searching) {

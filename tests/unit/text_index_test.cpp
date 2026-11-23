@@ -5,7 +5,8 @@
 namespace onpdf::view {
 namespace {
 
-// 3줄짜리 합성 인덱스. 글자 폭 10, 높이 12, 줄 간격 20. 2줄은 "ab cd." 로 공백·구두점 포함, 3줄 생성 공백 포함
+// 3줄짜리 합성 인덱스. 글자 폭 10, 높이 12, 줄 간격 20. 2줄은 "ab cd." 로 공백·구두점 포함, 3줄
+// 생성 공백 포함
 PageTextIndex sample() {
   PageTextIndex idx;
   idx.page = 0;
@@ -30,7 +31,8 @@ PageTextIndex sample() {
   put(U' ', 0, 0, true);
   put(U'y', 20, 40);
   idx.lines.push_back({{11, 14}, {0, 40, 30, 12}});
-  idx.links.push_back({{100, 100, 50, 20}, LinkKind::kUri, -1, std::nullopt, std::nullopt, "https://example.com"});
+  idx.links.push_back(
+      {{100, 100, 50, 20}, LinkKind::kUri, -1, std::nullopt, std::nullopt, "https://example.com"});
   return idx;
 }
 
@@ -47,11 +49,11 @@ TEST(TextIndex, LineLookup) {
 
 TEST(TextIndex, WordAt) {
   const auto idx = sample();
-  EXPECT_EQ(idx.word_at(2), (TextRange{0, 5}));   // Hello
-  EXPECT_EQ(idx.word_at(5), (TextRange{5, 7}));   // ab
-  EXPECT_EQ(idx.word_at(7), (TextRange{7, 8}));   // 공백은 그 글자 하나
-  EXPECT_EQ(idx.word_at(9), (TextRange{8, 10}));  // cd (구두점 앞에서 끝)
-  EXPECT_EQ(idx.word_at(10), (TextRange{10, 11})); // '.'
+  EXPECT_EQ(idx.word_at(2), (TextRange{0, 5}));     // Hello
+  EXPECT_EQ(idx.word_at(5), (TextRange{5, 7}));     // ab
+  EXPECT_EQ(idx.word_at(7), (TextRange{7, 8}));     // 공백은 그 글자 하나
+  EXPECT_EQ(idx.word_at(9), (TextRange{8, 10}));    // cd (구두점 앞에서 끝)
+  EXPECT_EQ(idx.word_at(10), (TextRange{10, 11}));  // '.'
   EXPECT_TRUE(is_word_separator(U'-'));
   EXPECT_TRUE(is_word_separator(0x2014));
 }
@@ -66,7 +68,7 @@ TEST(TextIndex, HitTestAndNearestPosition) {
   EXPECT_EQ(idx.nearest_position({-100, 25}), 5);
   EXPECT_EQ(idx.nearest_position({500, 25}), 11);
   // 글자 중심 기준 앞/뒤
-  EXPECT_EQ(idx.nearest_position({13, 6}), 1);   // 'e'(10..20) 중심 15 보다 왼쪽 → 1
+  EXPECT_EQ(idx.nearest_position({13, 6}), 1);  // 'e'(10..20) 중심 15 보다 왼쪽 → 1
   EXPECT_EQ(idx.nearest_position({17, 6}), 2);
   // 줄 사이(y=14..20)는 세로 거리 최소 줄. x=3 은 'a'(중심 5) 왼쪽 → 줄 시작
   EXPECT_EQ(idx.nearest_position({3, 19}), 5);
@@ -99,9 +101,9 @@ TEST(TextIndex, NearestPositionOnVerticalLine) {
   }
   idx.lines.push_back({{0, 3}, {100, 0, 10, 36}});
   EXPECT_EQ(idx.nearest_position({105, -5}), 0);
-  EXPECT_EQ(idx.nearest_position({105, 4}), 0);    // 첫 글자 중심(6) 위
-  EXPECT_EQ(idx.nearest_position({105, 8}), 1);    // 첫 글자 중심 아래
-  EXPECT_EQ(idx.nearest_position({105, 20}), 2);   // 둘째(18) 아래
+  EXPECT_EQ(idx.nearest_position({105, 4}), 0);   // 첫 글자 중심(6) 위
+  EXPECT_EQ(idx.nearest_position({105, 8}), 1);   // 첫 글자 중심 아래
+  EXPECT_EQ(idx.nearest_position({105, 20}), 2);  // 둘째(18) 아래
   EXPECT_EQ(idx.nearest_position({105, 100}), 3);
 }
 

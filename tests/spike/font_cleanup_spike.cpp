@@ -1,5 +1,6 @@
-// Spike #59: (1) 실행 취소로 지운 텍스트의 폰트 사전을 저장 파일에서 떨어뜨릴 수 있는가 (2) OTF(CFF)·TTC 서브셋 임베딩.
-// 제품 코드가 아니다 — qpdf 헤더를 engine 밖에서 직접 쓴다(스파이크 예외). 결론만 01-spike.md 로 옮긴다.
+// Spike #59: (1) 실행 취소로 지운 텍스트의 폰트 사전을 저장 파일에서 떨어뜨릴 수 있는가 (2)
+// OTF(CFF)·TTC 서브셋 임베딩. 제품 코드가 아니다 — qpdf 헤더를 engine 밖에서 직접 쓴다(스파이크
+// 예외). 결론만 01-spike.md 로 옮긴다.
 //
 // 실행: ONPDF_SPIKE_FONT_DIR=<otf/ttc 가 있는 폴더> onpdf_spike_font_cleanup
 #include "onpdf/core/engine/pdfium_document.h"
@@ -9,19 +10,16 @@
 #include "onpdf/edit/font_face.h"
 
 #include "../test_support.h"
-
-#include <qpdf/Buffer.hh>
-#include <qpdf/QPDF.hh>
-#include <qpdf/QPDFObjectHandle.hh>
-#include <qpdf/QPDFWriter.hh>
-
-#include <gtest/gtest.h>
-
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <gtest/gtest.h>
 #include <iostream>
+#include <qpdf/Buffer.hh>
+#include <qpdf/QPDF.hh>
+#include <qpdf/QPDFObjectHandle.hh>
+#include <qpdf/QPDFWriter.hh>
 #include <string>
 #include <vector>
 
@@ -44,13 +42,16 @@ void write_bytes(const std::filesystem::path& p, const std::vector<std::uint8_t>
 }
 
 // qpdf 로 다시 쓴다: 기본 QPDFWriter 는 트레일러에서 닿는 객체만 쓴다(미참조 객체 폐기)
-std::vector<std::uint8_t> qpdf_rewrite(const std::vector<std::uint8_t>& in, bool object_streams, bool preserve_encryption = true) {
+std::vector<std::uint8_t> qpdf_rewrite(const std::vector<std::uint8_t>& in, bool object_streams,
+                                       bool preserve_encryption = true) {
   QPDF q;
   q.processMemoryFile("in.pdf", reinterpret_cast<const char*>(in.data()), in.size());
   QPDFWriter w(q);
   w.setOutputMemory();
-  if (object_streams) w.setObjectStreamMode(qpdf_o_generate);
-  else w.setObjectStreamMode(qpdf_o_preserve);
+  if (object_streams)
+    w.setObjectStreamMode(qpdf_o_generate);
+  else
+    w.setObjectStreamMode(qpdf_o_preserve);
   w.setPreserveEncryption(preserve_encryption);
   w.write();
   auto buf = w.getBufferSharedPointer();
@@ -58,8 +59,8 @@ std::vector<std::uint8_t> qpdf_rewrite(const std::vector<std::uint8_t>& in, bool
 }
 
 struct Census {
-  int fonts = 0;        // /Type /Font 사전 수(전체)
-  int font_files = 0;   // /FontFile2 스트림 수
+  int fonts = 0;       // /Type /Font 사전 수(전체)
+  int font_files = 0;  // /FontFile2 스트림 수
   long objects = 0;
 };
 Census census(const std::vector<std::uint8_t>& in) {
@@ -84,7 +85,8 @@ std::shared_ptr<const edit::FontFace> load_font(const std::filesystem::path& p) 
   return *f;
 }
 
-edit::TextBoxSpec box(std::shared_ptr<const edit::FontFace> face, const std::string& text, double size = 24.0) {
+edit::TextBoxSpec box(std::shared_ptr<const edit::FontFace> face, const std::string& text,
+                      double size = 24.0) {
   edit::TextBoxSpec s;
   s.page = 0;
   s.origin = {72, 100};
@@ -127,7 +129,8 @@ TEST(FontCleanupSpike, UndoneTextLeavesFontAndQpdfRewriteDropsIt) {
 
   const auto t0 = std::chrono::steady_clock::now();
   const auto rewritten = qpdf_rewrite(saved, false);
-  const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  const auto ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
   const Census after = census(rewritten);
   const auto rewritten_path = dir / "rewritten.pdf";
   write_bytes(rewritten_path, rewritten);
@@ -137,9 +140,11 @@ TEST(FontCleanupSpike, UndoneTextLeavesFontAndQpdfRewriteDropsIt) {
   ASSERT_TRUE(reopened);
 
   std::cout << "[cleanup] original=" << original.size() << " saved_after_undo=" << saved.size()
-            << " (fonts=" << before.fonts << ", font_files=" << before.font_files << ", objects=" << before.objects << ")"
-            << " qpdf_rewrite=" << rewritten.size() << " (fonts=" << after.fonts << ", font_files=" << after.font_files
-            << ", objects=" << after.objects << ") " << ms << "ms, qpdf_warnings=" << check->warnings.size() << "\n";
+            << " (fonts=" << before.fonts << ", font_files=" << before.font_files
+            << ", objects=" << before.objects << ")"
+            << " qpdf_rewrite=" << rewritten.size() << " (fonts=" << after.fonts
+            << ", font_files=" << after.font_files << ", objects=" << after.objects << ") " << ms
+            << "ms, qpdf_warnings=" << check->warnings.size() << "\n";
   EXPECT_GT(saved.size(), original.size() + 2000) << "취소해도 폰트가 남는다 (현재 제한 재현)";
   EXPECT_EQ(after.font_files, 0) << "qpdf 재작성이 미참조 FontFile2 를 떨어뜨린다";
   EXPECT_LT(rewritten.size(), original.size() + 2000);
@@ -183,14 +188,16 @@ TEST(FontCleanupSpike, QpdfRewriteKeepsUsedFontAndRender) {
     ASSERT_TRUE(objs);
     EXPECT_EQ(objs->size(), 1u) << "마크 콘텐츠가 보존된다";
     const Census c = census(rewritten);
-    std::cout << "[keep] object_streams=" << object_streams << " saved=" << saved.size() << " rewritten=" << rewritten.size()
-              << " fonts=" << c.fonts << " font_files=" << c.font_files << "\n";
+    std::cout << "[keep] object_streams=" << object_streams << " saved=" << saved.size()
+              << " rewritten=" << rewritten.size() << " fonts=" << c.fonts
+              << " font_files=" << c.font_files << "\n";
     EXPECT_EQ(c.font_files, 1);
   }
 }
 
 TEST(FontCleanupSpike, EncryptedDocumentSurvivesRewrite) {
-  // 암호 문서: qpdf 는 암호를 알아야 다시 쓴다. 암호 유지(setPreserveEncryption) 로 결과도 암호 문서
+  // 암호 문서: qpdf 는 암호를 알아야 다시 쓴다. 암호 유지(setPreserveEncryption) 로 결과도 암호
+  // 문서
   const auto in = read_bytes(testdata("encrypted-aes256.pdf"));
   QPDF q;
   q.processMemoryFile("in.pdf", reinterpret_cast<const char*>(in.data()), in.size(), "user");
@@ -210,7 +217,8 @@ TEST(FontCleanupSpike, EncryptedDocumentSurvivesRewrite) {
 }
 
 TEST(FontCleanupSpike, IncrementalSaveOfSignedDocumentIsNotRewritable) {
-  // 서명 문서는 증분 저장: 폰트 사전이 남아도 재작성하면 서명이 깨진다 → 정리 대상에서 제외해야 한다 (측정만)
+  // 서명 문서는 증분 저장: 폰트 사전이 남아도 재작성하면 서명이 깨진다 → 정리 대상에서 제외해야
+  // 한다 (측정만)
   auto face = load_font(testdata("fonts") / "NotoSansKR-subset.ttf");
   ASSERT_TRUE(face);
   const auto original = read_bytes(testdata("signed-dummy.pdf"));
@@ -225,9 +233,10 @@ TEST(FontCleanupSpike, IncrementalSaveOfSignedDocumentIsNotRewritable) {
   ASSERT_TRUE(doc->save_to(p, true));
   const auto saved = read_bytes(p);
   ASSERT_TRUE(std::equal(original.begin(), original.end(), saved.begin()));
-  std::cout << "[signed] original=" << original.size() << " incremental=" << saved.size() << " (+" << saved.size() - original.size()
-            << " bytes: 폰트 포함)\n";
-  // 증분 저장은 원본 뒤에 덧붙이므로 바뀐 객체만 쓴다 — 미참조 폰트는 새 객체라 함께 붙는다. 재작성하면 원본 바이트가 바뀌어 서명 무효
+  std::cout << "[signed] original=" << original.size() << " incremental=" << saved.size() << " (+"
+            << saved.size() - original.size() << " bytes: 폰트 포함)\n";
+  // 증분 저장은 원본 뒤에 덧붙이므로 바뀐 객체만 쓴다 — 미참조 폰트는 새 객체라 함께 붙는다.
+  // 재작성하면 원본 바이트가 바뀌어 서명 무효
 }
 
 // ---------- (2) OTF(CFF)·TTC ----------
@@ -238,10 +247,12 @@ struct FontCase {
   const char* note;
 };
 
-void embed_and_verify(const std::filesystem::path& font_path, const std::string& text, const char* note) {
+void embed_and_verify(const std::filesystem::path& font_path, const std::string& text,
+                      const char* note) {
   auto face = load_font(font_path);
   if (!face) GTEST_SKIP() << "font not loadable: " << font_path;
-  std::cout << "[font] " << note << " file=" << font_path.filename() << " family=" << face->family_name() << " upem=" << face->upem()
+  std::cout << "[font] " << note << " file=" << font_path.filename()
+            << " family=" << face->family_name() << " upem=" << face->upem()
             << " missing=" << face->missing(text).size() << "\n";
   ScopedTempDir dir;
   auto doc = PdfiumDocument::open_from_memory(read_bytes(testdata("simple.pdf")));
@@ -283,17 +294,20 @@ void embed_and_verify(const std::filesystem::path& font_path, const std::string&
   auto extracted = re->load_text(0);
   ASSERT_TRUE(extracted);
   const bool text_found = extracted->all_text().find(text) != std::string::npos;
-  std::cout << "[font]   saved=" << saved.size() << " dark_px_added=" << added << " extracted=" << (text_found ? "yes" : "NO")
-            << " qpdf=" << (check ? "ok" : "fail") << "\n";
-  std::filesystem::copy_file(p, std::filesystem::temp_directory_path() / (std::string("onpdf-spike59-") + note + ".pdf"),
-                             std::filesystem::copy_options::overwrite_existing);
+  std::cout << "[font]   saved=" << saved.size() << " dark_px_added=" << added
+            << " extracted=" << (text_found ? "yes" : "NO") << " qpdf=" << (check ? "ok" : "fail")
+            << "\n";
+  std::filesystem::copy_file(
+      p, std::filesystem::temp_directory_path() / (std::string("onpdf-spike59-") + note + ".pdf"),
+      std::filesystem::copy_options::overwrite_existing);
   EXPECT_GT(added, 200) << "글자가 그려져야 한다";
   EXPECT_TRUE(text_found);
 }
 
 TEST(FontCleanupSpike, OtfCffKorean) {
   if (font_dir().empty()) GTEST_SKIP();
-  embed_and_verify(font_dir() / "NotoSerifKR-Regular.otf", "명조 OTF 한글 Serif 123", "otf-cff-serif");
+  embed_and_verify(font_dir() / "NotoSerifKR-Regular.otf", "명조 OTF 한글 Serif 123",
+                   "otf-cff-serif");
 }
 TEST(FontCleanupSpike, OtfCffSansKorean) {
   if (font_dir().empty()) GTEST_SKIP();
@@ -307,7 +321,8 @@ TEST(FontCleanupSpike, TtcGlyfLatin) {
   embed_and_verify("/System/Library/Fonts/Helvetica.ttc", "TTC glyf Helvetica 123", "ttc-glyf");
 }
 TEST(FontCleanupSpike, TtfGlyfLatinUnicode) {
-  embed_and_verify("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", "TTF glyf 한글 Arial Unicode", "ttf-glyf");
+  embed_and_verify("/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+                   "TTF glyf 한글 Arial Unicode", "ttf-glyf");
 }
 
 }  // namespace

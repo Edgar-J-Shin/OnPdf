@@ -676,7 +676,8 @@ TEST(TextLines, ReplaceKeepsWidthWithKerning) {
     const double expected = expected_width(info.text, info.font_size, info.letter_spacing);
     EXPECT_NEAR(w, expected, std::max(2.5, expected * 0.03))
         << needle << " width " << w << " expected " << expected;
-    EXPECT_NE(page_text(*doc).find(info.text), std::string::npos) << "자간이 있어도 추출은 공백을 끼우지 않는다: " << page_text(*doc);
+    EXPECT_NE(page_text(*doc).find(info.text), std::string::npos)
+        << "자간이 있어도 추출은 공백을 끼우지 않는다: " << page_text(*doc);
     auto objects = doc->text_objects(0);
     ASSERT_TRUE(objects);
     bool found = false;
@@ -745,11 +746,13 @@ TEST(TextLines, SpacingSurvivesSaveAndReopen) {
   auto reopened = PdfiumDocument::open(saved);
   ASSERT_TRUE(reopened);
   EXPECT_NEAR(box_width(*reopened, replaced->box), w0, 0.5) << "저장·다시 열기 뒤 폭 유지";
-  // 알려진 제한: 이동(GenerateContent 재생성)은 Tc 를 다시 쓰지 않아 자연 폭으로 돌아간다. 마크 ls 는 남는다 (후속: 이동 뒤 재적용)
+  // 알려진 제한: 이동(GenerateContent 재생성)은 Tc 를 다시 쓰지 않아 자연 폭으로 돌아간다. 마크 ls
+  // 는 남는다 (후속: 이동 뒤 재적용)
   auto ids = std::vector<std::string>(replaced->ids.begin(), replaced->ids.end());
   ASSERT_TRUE(reopened->move_page_objects(0, ids, {5.0, 7.0}));
   const double natural = expected_width(wide.text, wide.font_size, 0.0);
-  EXPECT_NEAR(box_width(*reopened, replaced->box), natural, std::max(2.5, natural * 0.03)) << "이동 뒤 자연 폭 (알려진 제한)";
+  EXPECT_NEAR(box_width(*reopened, replaced->box), natural, std::max(2.5, natural * 0.03))
+      << "이동 뒤 자연 폭 (알려진 제한)";
   const auto saved2 = dir / "kern2.pdf";
   ASSERT_TRUE(reopened->save_to(saved2, false));
   auto again = PdfiumDocument::open(saved2);
@@ -763,10 +766,12 @@ TEST(TextLines, SpacingSurvivesSaveAndReopen) {
   EXPECT_TRUE(check->warnings.empty());
 }
 
-// qpdf 자간 주입: Tj·TJ 모두 `<cs> Tc … 0 Tc` 로 감싸고, 추출 글은 그대로다 (TJ 커닝이었다면 "C h a r" 로 깨진다)
+// qpdf 자간 주입: Tj·TJ 모두 `<cs> Tc … 0 Tc` 로 감싸고, 추출 글은 그대로다 (TJ 커닝이었다면 "C h a
+// r" 로 깨진다)
 TEST(TextLines, SurgeryFitInjectsCharSpacingAndKeepsExtraction) {
   const auto bytes = onpdf::test::read_bytes(testdata("text-lines-kern.pdf"));
-  // 순번: 0 Kerned(TJ) 1 Char spaced(Tj, 2 Tc) 2 Trailing 3 Tightly 4 Plain(Tj) 5 Huge 6 Single array string(TJ)
+  // 순번: 0 Kerned(TJ) 1 Char spaced(Tj, 2 Tc) 2 Trailing 3 Tightly 4 Plain(Tj) 5 Huge 6 Single
+  // array string(TJ)
   ShowOpSurgery ops;
   ops.fits = {{-1, 4, 1.5}, {-1, 6, 1.5}};
   auto report = QpdfTools::remove_text_show_ops(bytes, {}, 0, ops);
@@ -781,11 +786,14 @@ TEST(TextLines, SurgeryFitInjectsCharSpacingAndKeepsExtraction) {
     ASSERT_NE(line, nullptr) << needle << ": " << page_text(*doc);
     EXPECT_NEAR(line->letter_spacing, 1.5, 0.15) << needle;
   }
-  EXPECT_NEAR(find_line(*lines, "Kerned wide gaps here")->letter_spacing, 0.4, 0.2) << "건드리지 않은 줄";
-  EXPECT_NE(page_text(*doc).find("Plain line without spacing"), std::string::npos) << "추출은 그대로";
+  EXPECT_NEAR(find_line(*lines, "Kerned wide gaps here")->letter_spacing, 0.4, 0.2)
+      << "건드리지 않은 줄";
+  EXPECT_NE(page_text(*doc).find("Plain line without spacing"), std::string::npos)
+      << "추출은 그대로";
 }
 
-// #79: 고친 상자를 다시 고쳐도(수술 경로) 마크 ls 의 자간이 새 글에 적용되고, 취소는 토큰으로 첫 상태까지
+// #79: 고친 상자를 다시 고쳐도(수술 경로) 마크 ls 의 자간이 새 글에 적용되고, 취소는 토큰으로 첫
+// 상태까지
 TEST(TextLines, BoxReeditKeepsLetterSpacing) {
   auto doc = PdfiumDocument::open(testdata("text-lines-kern.pdf"));
   ASSERT_TRUE(doc);
@@ -819,13 +827,14 @@ TEST(TextLines, BoxReeditKeepsLetterSpacing) {
   EXPECT_EQ(render(*doc).pixels, before.pixels);
 }
 
-// #81: /Contents 배열이 피연산자와 연산자 사이에서 나뉜 쪽(Word·LiveCycle) — 이어 붙여 세고 스트림별로 지운다
+// #81: /Contents 배열이 피연산자와 연산자 사이에서 나뉜 쪽(Word·LiveCycle) — 이어 붙여 세고
+// 스트림별로 지운다
 TEST(TextLines, OperatorSplitAcrossContentStreamsIsEdited) {
   auto doc = PdfiumDocument::open(testdata("text-lines-split.pdf"));
   ASSERT_TRUE(doc);
   const Bitmap before = render(*doc);
-  for (const auto& [needle, replacement] :
-       std::vector<std::pair<std::string, std::string>>{{"Split operands line", "Joined operands line"}, {"Arr ay split", "Array joined"}}) {
+  for (const auto& [needle, replacement] : std::vector<std::pair<std::string, std::string>>{
+           {"Split operands line", "Joined operands line"}, {"Arr ay split", "Array joined"}}) {
     auto lines = doc->text_lines(0);
     ASSERT_TRUE(lines);
     const TextLineInfo* line = find_line(*lines, needle);
@@ -844,7 +853,8 @@ TEST(TextLines, OperatorSplitAcrossContentStreamsIsEdited) {
     doc->drop_document_state(replaced->before);
   }
   EXPECT_EQ(render(*doc).pixels, before.pixels);
-  // 지우기도 같은 규칙: 나뉜 연산자의 앞 조각(스트림 A 의 피연산자)과 뒤 조각(스트림 B 의 Tj)이 함께 지워진다
+  // 지우기도 같은 규칙: 나뉜 연산자의 앞 조각(스트림 A 의 피연산자)과 뒤 조각(스트림 B 의 Tj)이
+  // 함께 지워진다
   auto lines = doc->text_lines(0);
   const TextLineInfo split = *find_line(*lines, "Split operands line");
   auto removed = doc->remove_text_line(0, split.id);

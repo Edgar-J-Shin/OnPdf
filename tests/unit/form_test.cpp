@@ -1,15 +1,13 @@
-// PdfiumDocument 폼 채우기 (#51): 위젯 목록, 텍스트(한글·여러 줄·MaxLen·읽기 전용), 체크·라디오, 콤보·목록,
-// 같은 이름 위젯 동기화, 저장·다시 열기, 구조 편집 뒤 유지, 회전 쪽 타일 렌더
+// PdfiumDocument 폼 채우기 (#51): 위젯 목록, 텍스트(한글·여러 줄·MaxLen·읽기 전용), 체크·라디오,
+// 콤보·목록, 같은 이름 위젯 동기화, 저장·다시 열기, 구조 편집 뒤 유지, 회전 쪽 타일 렌더
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/engine/save.h"
 
 #include "../test_support.h"
-
-#include <gtest/gtest.h>
-
 #include <algorithm>
 #include <fstream>
+#include <gtest/gtest.h>
 #include <iterator>
 
 namespace onpdf::engine {
@@ -18,8 +16,10 @@ namespace {
 using onpdf::test::ScopedTempDir;
 using onpdf::test::testdata;
 
-const FormWidgetInfo* find(const std::vector<FormWidgetInfo>& list, const std::string& name, int control = 0) {
-  for (const auto& w : list) if (w.ref.name == name && w.ref.nth == control) return &w;
+const FormWidgetInfo* find(const std::vector<FormWidgetInfo>& list, const std::string& name,
+                           int control = 0) {
+  for (const auto& w : list)
+    if (w.ref.name == name && w.ref.nth == control) return &w;
   return nullptr;
 }
 
@@ -94,7 +94,8 @@ TEST(Form, KoreanTextSyncsSharedWidgetsAndSurvivesSave) {
   EXPECT_TRUE(QpdfTools::check(saved));
   std::ifstream in(saved, std::ios::binary);
   const std::string bytes{std::istreambuf_iterator<char>(in), {}};
-  EXPECT_NE(bytes.find("Korea1"), std::string::npos) << "한글 AP 는 Adobe-Korea1 CID 글꼴 (비임베딩)";
+  EXPECT_NE(bytes.find("Korea1"), std::string::npos)
+      << "한글 AP 는 Adobe-Korea1 CID 글꼴 (비임베딩)";
   auto reopened = PdfiumDocument::open(saved);
   ASSERT_TRUE(reopened);
   EXPECT_EQ(widget(*reopened, 0, "name").value, "홍길동");
@@ -219,7 +220,9 @@ TEST(Form, RotatedPageTileMatchesFullRender) {
   for (int y = 0; y < 512; ++y)
     for (int x = 0; x < 512; ++x)
       for (int c = 0; c < 3; ++c) {
-        const auto a = full->pixels[static_cast<std::size_t>((static_cast<int>(region.y) + y) * full->stride + (static_cast<int>(region.x) + x) * 4 + c)];
+        const auto a =
+            full->pixels[static_cast<std::size_t>((static_cast<int>(region.y) + y) * full->stride +
+                                                  (static_cast<int>(region.x) + x) * 4 + c)];
         const auto b = tile->pixels[static_cast<std::size_t>(y * tile->stride + x * 4 + c)];
         dark_full += a < 128;
         big += std::abs(int(a) - int(b)) > 32;
@@ -228,8 +231,8 @@ TEST(Form, RotatedPageTileMatchesFullRender) {
   EXPECT_LT(big, 512 * 512 * 3 / 1000) << "타일 위젯이 전체 렌더와 일치";
 }
 
-// 쪽 삭제 → 취소(스냅샷에서 되살림) 뒤에도 같은 FieldRef 로 칸을 찾는다. PDFium 은 되살린 위젯을 필드에 다시 붙여
-// 컨트롤 index 가 밀리므로 정체성은 쪽 안 순서다 (#51 리뷰 W1)
+// 쪽 삭제 → 취소(스냅샷에서 되살림) 뒤에도 같은 FieldRef 로 칸을 찾는다. PDFium 은 되살린 위젯을
+// 필드에 다시 붙여 컨트롤 index 가 밀리므로 정체성은 쪽 안 순서다 (#51 리뷰 W1)
 TEST(Form, FieldRefSurvivesPageDeleteAndRestore) {
   auto doc = PdfiumDocument::open(testdata("form-fields.pdf"));
   ASSERT_TRUE(doc);

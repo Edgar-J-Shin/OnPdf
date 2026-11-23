@@ -2,23 +2,24 @@
 
 #include "qt_image.h"
 #include "ui_dispatcher.h"
-
 #include <QElapsedTimer>
 #include <QPageLayout>
 #include <QPageRanges>
 #include <QPointer>
 #include <QPrinter>
 #include <QScopedValueRollback>
-
 #include <algorithm>
 #include <memory>
 #include <utility>
 
 namespace onpdf::app {
 
-PrintJob::PrintJob(engine::DocumentHandle handle, UiDispatcher& dispatcher, QPrinter& printer, Request request,
-                   QObject* parent)
-    : QObject(parent), handle_(std::move(handle)), dispatcher_(dispatcher), printer_(printer),
+PrintJob::PrintJob(engine::DocumentHandle handle, UiDispatcher& dispatcher, QPrinter& printer,
+                   Request request, QObject* parent)
+    : QObject(parent),
+      handle_(std::move(handle)),
+      dispatcher_(dispatcher),
+      printer_(printer),
       request_(std::move(request)) {
   for (const auto& step : request_.steps) total_sheets_ += std::max(step.repeat, 1);
 }
@@ -55,7 +56,8 @@ void PrintJob::cancel() {
 }
 
 void PrintJob::pump() {
-  // 요청 → 그리기를 반복한다. 렌더 없이 준비되는 장(배치 불가)을 그려 자리가 나면 다시 요청해야 멈추지 않는다
+  // 요청 → 그리기를 반복한다. 렌더 없이 준비되는 장(배치 불가)을 그려 자리가 나면 다시 요청해야
+  // 멈추지 않는다
   while (active_) {
     request_more();
     const std::size_t drawn_before = next_draw_;
@@ -72,13 +74,15 @@ void PrintJob::request_more() {
     const int page = request_.steps[step].page;
     std::optional<view::Placement> placement;
     if (page >= 0 && static_cast<std::size_t>(page) < sizes.size()) {
-      placement = view::place_page(sizes[static_cast<std::size_t>(page)], printable_pt_, request_.scaling);
+      placement =
+          view::place_page(sizes[static_cast<std::size_t>(page)], printable_pt_, request_.scaling);
     }
     if (!placement) {
       ready_[step] = Slot{};  // 배치 불가 → 빈 장으로 기록
       continue;
     }
-    const int dpi = view::choose_print_dpi(printer_.resolution(), request_.high_quality, placement->target);
+    const int dpi =
+        view::choose_print_dpi(printer_.resolution(), request_.high_quality, placement->target);
     engine::RenderOptions options;
     options.scale = static_cast<float>(placement->scale * dpi / 72.0);
     options.rotation = placement->rotation;
@@ -103,7 +107,8 @@ void PrintJob::request_more() {
   }
 }
 
-void PrintJob::on_rendered(std::size_t step, std::uint64_t serial, onpdf::Result<onpdf::Bitmap> result) {
+void PrintJob::on_rendered(std::size_t step, std::uint64_t serial,
+                           onpdf::Result<onpdf::Bitmap> result) {
   if (!active_) return;
   QElapsedTimer handler_timer;
   handler_timer.start();
@@ -129,7 +134,8 @@ void PrintJob::on_rendered(std::size_t step, std::uint64_t serial, onpdf::Result
 }
 
 void PrintJob::drain() {
-  // 재진입 방지: 그리는 도중 진행 신호 수신자가 이벤트를 처리해 다른 결과가 끼어들어도 순서를 지킨다
+  // 재진입 방지: 그리는 도중 진행 신호 수신자가 이벤트를 처리해 다른 결과가 끼어들어도 순서를
+  // 지킨다
   if (draining_) return;
   const QScopedValueRollback guard(draining_, true);
   while (active_) {
@@ -143,7 +149,8 @@ void PrintJob::drain() {
       if (printed_sheets_ > 0) {
         QElapsedTimer page_timer;
         page_timer.start();
-        const bool ok = printer_.newPage();  // 인쇄 장치가 이전 장을 마무리(압축·전송)하는 비용 포함
+        const bool ok =
+            printer_.newPage();  // 인쇄 장치가 이전 장을 마무리(압축·전송)하는 비용 포함
         max_new_page_ms_ = std::max(max_new_page_ms_, page_timer.elapsed());
         if (!ok) {
           finish(Outcome::kFailed);
@@ -180,12 +187,14 @@ void PrintJob::finish(Outcome outcome) {
 }
 
 void PrintJob::emit_finished_later(Outcome outcome) {
-  // 다음 이벤트 턴에 보낸다: 처리기(모달 대화상자 등)가 drain·on_rendered 호출 스택 안에서 돌지 않게.
-  // 그 전에 작업이 파괴되면 이벤트도 함께 버려진다 (파괴한 쪽이 알림을 맡는다)
-  QMetaObject::invokeMethod(this, [this, outcome] { emit finished(outcome); }, Qt::QueuedConnection);
+  // 다음 이벤트 턴에 보낸다: 처리기(모달 대화상자 등)가 drain·on_rendered 호출 스택 안에서 돌지
+  // 않게. 그 전에 작업이 파괴되면 이벤트도 함께 버려진다 (파괴한 쪽이 알림을 맡는다)
+  QMetaObject::invokeMethod(
+      this, [this, outcome] { emit finished(outcome); }, Qt::QueuedConnection);
 }
 
-PrintJob::Request make_print_request(const QPrinter& printer, const engine::DocumentInfo& info, int current_page) {
+PrintJob::Request make_print_request(const QPrinter& printer, const engine::DocumentInfo& info,
+                                     int current_page) {
   PrintJob::Request request;
   const int count = info.page_count;
   std::vector<view::PageRange> ranges;
@@ -194,8 +203,10 @@ PrintJob::Request make_print_request(const QPrinter& printer, const engine::Docu
       if (current_page >= 0 && current_page < count) ranges.push_back({current_page, current_page});
       break;
     case QPrinter::PageRange: {
-      for (const auto& r : printer.pageRanges().toRangeList()) ranges.push_back({r.from - 1, r.to - 1});
-      if (ranges.empty() && printer.fromPage() > 0) ranges.push_back({printer.fromPage() - 1, printer.toPage() - 1});
+      for (const auto& r : printer.pageRanges().toRangeList())
+        ranges.push_back({r.from - 1, r.to - 1});
+      if (ranges.empty() && printer.fromPage() > 0)
+        ranges.push_back({printer.fromPage() - 1, printer.toPage() - 1});
       break;
     }
     case QPrinter::AllPages:
@@ -204,14 +215,17 @@ PrintJob::Request make_print_request(const QPrinter& printer, const engine::Docu
       break;
   }
   const int copies = printer.supportsMultipleCopies() ? 1 : std::max(printer.copyCount(), 1);
-  request.steps = view::print_sequence(view::pages_in_ranges(ranges, count), copies, printer.collateCopies());
-  request.scaling = info.print.no_scaling ? view::PrintScaling::kActualSize : view::PrintScaling::kFit;
+  request.steps =
+      view::print_sequence(view::pages_in_ranges(ranges, count), copies, printer.collateCopies());
+  request.scaling =
+      info.print.no_scaling ? view::PrintScaling::kActualSize : view::PrintScaling::kFit;
   request.grayscale = printer.colorMode() == QPrinter::GrayScale;
   request.high_quality = info.print.high_quality;
   return request;
 }
 
-void apply_print_preferences(QPrinter& printer, const view::PrintPreferences& prefs, int page_count) {
+void apply_print_preferences(QPrinter& printer, const view::PrintPreferences& prefs,
+                             int page_count) {
   printer.setCopyCount(prefs.copies);
   printer.setPageRanges(QPageRanges());
   printer.setPrintRange(QPrinter::AllPages);
@@ -226,10 +240,17 @@ void apply_print_preferences(QPrinter& printer, const view::PrintPreferences& pr
     }
   }
   switch (prefs.duplex) {
-    case view::Duplex::kSimplex: printer.setDuplex(QPrinter::DuplexNone); break;
-    case view::Duplex::kFlipShortEdge: printer.setDuplex(QPrinter::DuplexShortSide); break;
-    case view::Duplex::kFlipLongEdge: printer.setDuplex(QPrinter::DuplexLongSide); break;
-    case view::Duplex::kUndefined: break;
+    case view::Duplex::kSimplex:
+      printer.setDuplex(QPrinter::DuplexNone);
+      break;
+    case view::Duplex::kFlipShortEdge:
+      printer.setDuplex(QPrinter::DuplexShortSide);
+      break;
+    case view::Duplex::kFlipLongEdge:
+      printer.setDuplex(QPrinter::DuplexLongSide);
+      break;
+    case view::Duplex::kUndefined:
+      break;
   }
 }
 

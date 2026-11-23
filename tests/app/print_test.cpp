@@ -1,33 +1,30 @@
-#include "document_view.h"
-#include "main_window.h"
 #include "onpdf/core/engine/pdfium_worker.h"
 #include "onpdf/core/platform/path.h"
-#include "print_job.h"
-#include "ui_dispatcher.h"
 
 #include "../test_support.h"
-
-#include <gtest/gtest.h>
-
+#include "document_view.h"
+#include "main_window.h"
+#include "print_job.h"
+#include "ui_dispatcher.h"
 #include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
 #include <QDropEvent>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QMessageBox>
+#include <QMimeData>
 #include <QPageRanges>
 #include <QPageSize>
 #include <QPrinter>
 #include <QProgressDialog>
-#include <QMessageBox>
-#include <QUrl>
-#include <QMimeData>
 #include <QTemporaryDir>
 #include <QTimer>
-
+#include <QUrl>
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <gtest/gtest.h>
 #include <memory>
 #include <string>
 
@@ -65,7 +62,8 @@ template <class Pred>
 Box find_pixels(const Bitmap& bmp, Pred pred) {
   Box box;
   for (int y = 0; y < bmp.height; ++y) {
-    const auto* row = bmp.pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(bmp.stride);
+    const auto* row =
+        bmp.pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(bmp.stride);
     for (int x = 0; x < bmp.width; ++x) {
       const auto* p = row + static_cast<std::size_t>(x) * 4;
       if (pred(p[2], p[1], p[0])) {
@@ -80,9 +78,15 @@ Box find_pixels(const Bitmap& bmp, Pred pred) {
   return box;
 }
 
-bool blue(int r, int g, int b) { return b > 180 && r < 80 && g < 80; }
-bool green(int r, int g, int b) { return g > 100 && r < 80 && b < 80; }
-bool red(int r, int g, int b) { return r > 160 && g < 80 && b < 80; }
+bool blue(int r, int g, int b) {
+  return b > 180 && r < 80 && g < 80;
+}
+bool green(int r, int g, int b) {
+  return g > 100 && r < 80 && b < 80;
+}
+bool red(int r, int g, int b) {
+  return r > 160 && g < 80 && b < 80;
+}
 
 class PrintTest : public ::testing::Test {
  protected:
@@ -98,7 +102,8 @@ class PrintTest : public ::testing::Test {
   bool open(const char* name) {
     window_.open_file(QString::fromStdString(onpdf::path_to_utf8(testdata(name))));
     return spin_until([&] {
-      return window_.windowTitle().contains(QString::fromUtf8(name)) && window_.document_view()->has_document();
+      return window_.windowTitle().contains(QString::fromUtf8(name)) &&
+             window_.document_view()->has_document();
     });
   }
   std::unique_ptr<QPrinter> pdf_printer(const QString& file) {
@@ -111,11 +116,13 @@ class PrintTest : public ::testing::Test {
   // 인쇄를 끝까지 기다린다
   bool print_and_wait(QPrinter& printer) {
     if (!window_.print_with(printer)) return false;
-    return spin_until([&] { return window_.print_job() != nullptr && !window_.print_job()->active(); });
+    return spin_until(
+        [&] { return window_.print_job() != nullptr && !window_.print_job()->active(); });
   }
   // 출력 PDF 를 같은 워커로 연다
   Result<engine::DocumentHandle> open_output(const QString& file) {
-    auto f = engine::DocumentHandle::open(worker_, onpdf::path_from_utf8(dir_.filePath(file).toStdString()));
+    auto f = engine::DocumentHandle::open(worker_,
+                                          onpdf::path_from_utf8(dir_.filePath(file).toStdString()));
     return f.get();
   }
   Result<Bitmap> render(const engine::DocumentHandle& doc, int page, float scale = 0.25f) {
@@ -139,7 +146,8 @@ TEST_F(PrintTest, PrintsAllPagesFittedAndRotated) {
   EXPECT_EQ(job->printed_sheets(), 2);
   EXPECT_TRUE(job->failed_pages().empty());
   EXPECT_LE(job->max_in_flight(), PrintJob::kMaxInFlight);
-  std::printf("[print] max draw ms (300 dpi Letter): %lld\n", static_cast<long long>(job->max_draw_ms()));
+  std::printf("[print] max draw ms (300 dpi Letter): %lld\n",
+              static_cast<long long>(job->max_draw_ms()));
 
   auto out = open_output("simple.pdf");
   ASSERT_TRUE(out) << out.error().message;
@@ -221,8 +229,8 @@ TEST_F(PrintTest, PrintFlagsAnnotations) {
   ASSERT_TRUE(out);
   auto p = render(*out, 0);
   ASSERT_TRUE(p);
-  EXPECT_GT(find_pixels(*p, red).count, 50);    // 인쇄 전용 주석은 나온다
-  EXPECT_EQ(find_pixels(*p, green).count, 0);   // 화면 전용 주석은 빠진다
+  EXPECT_GT(find_pixels(*p, red).count, 50);   // 인쇄 전용 주석은 나온다
+  EXPECT_EQ(find_pixels(*p, green).count, 0);  // 화면 전용 주석은 빠진다
 }
 
 TEST_F(PrintTest, GrayscaleAndLowResolutionRequests) {
@@ -256,7 +264,8 @@ TEST_F(PrintTest, CancelLargeDocumentKeepsUiResponsive) {
   // 이벤트 루프 간격 측정
   QElapsedTimer clock;
   clock.start();
-  qint64 last = 0, worst_gap = 0, second_gap = 0;  // 가장 나쁜 간격 하나는 러너 이상치(백신·GC)일 수 있어 둘째를 본다
+  qint64 last = 0, worst_gap = 0,
+         second_gap = 0;  // 가장 나쁜 간격 하나는 러너 이상치(백신·GC)일 수 있어 둘째를 본다
   QTimer tick;
   QObject::connect(&tick, &QTimer::timeout, [&] {
     const qint64 gap = clock.elapsed() - last;
@@ -275,7 +284,8 @@ TEST_F(PrintTest, CancelLargeDocumentKeepsUiResponsive) {
   EXPECT_EQ(job->total_sheets(), 1000);
   ASSERT_TRUE(spin_until([&] { return job->printed_sheets() >= 6; }));
   bool cancelled = false;
-  QObject::connect(job, &PrintJob::finished, [&](PrintJob::Outcome o) { cancelled = o == PrintJob::Outcome::kCancelled; });
+  QObject::connect(job, &PrintJob::finished,
+                   [&](PrintJob::Outcome o) { cancelled = o == PrintJob::Outcome::kCancelled; });
   job->cancel();
   tick.stop();
   EXPECT_FALSE(job->active());
@@ -291,18 +301,22 @@ TEST_F(PrintTest, CancelLargeDocumentKeepsUiResponsive) {
 #else
   constexpr qint64 kMaxGapMs = 600;
 #endif
-  // 느린 CI 러너의 단발 이상치(626ms 등)로 플레이크하지 않게: 둘째로 나쁜 간격은 한도 안, 최악은 한도의 2배 안
+  // 느린 CI 러너의 단발 이상치(626ms 등)로 플레이크하지 않게: 둘째로 나쁜 간격은 한도 안, 최악은
+  // 한도의 2배 안
   EXPECT_LT(second_gap, kMaxGapMs) << "event loop stalled while printing";
   EXPECT_LT(worst_gap, kMaxGapMs * 2) << "event loop stalled while printing (outlier)";
-  std::printf("[print] sheets before cancel=%d worst event-loop gap=%lldms max draw=%lldms max handler=%lldms\n",
-              job->printed_sheets(), static_cast<long long>(worst_gap), static_cast<long long>(job->max_draw_ms()),
-              static_cast<long long>(job->max_handler_ms()));
+  std::printf(
+      "[print] sheets before cancel=%d worst event-loop gap=%lldms max draw=%lldms max "
+      "handler=%lldms\n",
+      job->printed_sheets(), static_cast<long long>(worst_gap),
+      static_cast<long long>(job->max_draw_ms()), static_cast<long long>(job->max_handler_ms()));
   ASSERT_TRUE(spin_until([&] { return window_.print_action()->isEnabled(); }, 3000));
   // 워커가 계속 쓸 수 있다
   ASSERT_TRUE(open("simple.pdf"));
 }
 
-// 끌기 진입 이벤트. Qt 6.8(CI)에는 QPoint 생성자만 있고 6.12 는 그것을 구식으로 표시한다 → 공통 생성자 + 경고 억제
+// 끌기 진입 이벤트. Qt 6.8(CI)에는 QPoint 생성자만 있고 6.12 는 그것을 구식으로 표시한다 → 공통
+// 생성자 + 경고 억제
 void send_drag_enter(QWidget& target, QPointF at, QMimeData& mime) {
   QT_WARNING_PUSH
   QT_WARNING_DISABLE_DEPRECATED
@@ -311,7 +325,8 @@ void send_drag_enter(QWidget& target, QPointF at, QMimeData& mime) {
   QApplication::sendEvent(&target, &enter);
 }
 
-// 인쇄 중 확인 대화상자("print_busy_question")에 자동으로 답한다. cancel_and_open=false 면 "인쇄 계속하기"
+// 인쇄 중 확인 대화상자("print_busy_question")에 자동으로 답한다. cancel_and_open=false 면 "인쇄
+// 계속하기"
 void answer_print_question(bool cancel_and_open, bool* asked) {
   auto* poll = new QTimer();
   poll->setInterval(10);
@@ -321,7 +336,8 @@ void answer_print_question(bool cancel_and_open, bool* asked) {
     *asked = true;
     for (QAbstractButton* button : box->buttons()) {
       const auto role = box->buttonRole(button);
-      if ((cancel_and_open && role == QMessageBox::AcceptRole) || (!cancel_and_open && role == QMessageBox::RejectRole)) {
+      if ((cancel_and_open && role == QMessageBox::AcceptRole) ||
+          (!cancel_and_open && role == QMessageBox::RejectRole)) {
         button->click();
         break;
       }
@@ -331,7 +347,8 @@ void answer_print_question(bool cancel_and_open, bool* asked) {
   poll->start();
 }
 
-// 인쇄 중 새 문서를 열려 하면 먼저 묻는다: "인쇄 계속하기" 면 열지 않고, "인쇄 취소하고 열기" 면 취소 후 연다 (#12)
+// 인쇄 중 새 문서를 열려 하면 먼저 묻는다: "인쇄 계속하기" 면 열지 않고, "인쇄 취소하고 열기" 면
+// 취소 후 연다 (#12)
 TEST_F(PrintTest, OpeningWhilePrintingAsksFirst) {
   ASSERT_TRUE(open("large-1000.pdf"));
   auto printer = pdf_printer("busy.pdf");
@@ -353,7 +370,8 @@ TEST_F(PrintTest, OpeningWhilePrintingAsksFirst) {
   // 2) 인쇄 취소하고 열기 → 취소 후 새 문서, 진행 창 닫힘
   asked = false;
   bool cancelled = false;
-  QObject::connect(job, &PrintJob::finished, [&](PrintJob::Outcome o) { cancelled = o == PrintJob::Outcome::kCancelled; });
+  QObject::connect(job, &PrintJob::finished,
+                   [&](PrintJob::Outcome o) { cancelled = o == PrintJob::Outcome::kCancelled; });
   answer_print_question(true, &asked);
   ASSERT_TRUE(open("bookmarks.pdf"));
   EXPECT_TRUE(asked);
@@ -374,7 +392,8 @@ TEST_F(PrintTest, DropWhilePrintingDoesNotBlockDropEvent) {
   bool asked = false;
   answer_print_question(false, &asked);  // "인쇄 계속하기"
   QMimeData mime;
-  mime.setUrls({QUrl::fromLocalFile(QString::fromStdString(onpdf::path_to_utf8(testdata("bookmarks.pdf"))))});
+  mime.setUrls({QUrl::fromLocalFile(
+      QString::fromStdString(onpdf::path_to_utf8(testdata("bookmarks.pdf"))))});
   const QPointF at(window_.width() / 2.0, window_.height() / 2.0);
   send_drag_enter(window_, at, mime);
   QDropEvent drop(at, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
@@ -394,13 +413,15 @@ TEST_F(PrintTest, DropWhilePrintingDoesNotBlockDropEvent) {
 TEST_F(PrintTest, DropWhenIdleOpensFile) {
   ASSERT_TRUE(open("simple.pdf"));
   QMimeData mime;
-  mime.setUrls({QUrl::fromLocalFile(QString::fromStdString(onpdf::path_to_utf8(testdata("bookmarks.pdf"))))});
+  mime.setUrls({QUrl::fromLocalFile(
+      QString::fromStdString(onpdf::path_to_utf8(testdata("bookmarks.pdf"))))});
   const QPointF at(window_.width() / 2.0, window_.height() / 2.0);
   send_drag_enter(window_, at, mime);
   QDropEvent drop(at, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
   QApplication::sendEvent(&window_, &drop);
   EXPECT_TRUE(drop.isAccepted());
-  ASSERT_TRUE(spin_until([&] { return window_.windowTitle().contains(QStringLiteral("bookmarks.pdf")); }));
+  ASSERT_TRUE(
+      spin_until([&] { return window_.windowTitle().contains(QStringLiteral("bookmarks.pdf")); }));
 }
 
 // 인쇄 중이 아니면 묻지 않고 바로 연다

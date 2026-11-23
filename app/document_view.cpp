@@ -1,24 +1,23 @@
 #include "document_view.h"
 
+#include "onpdf/core/view/tile.h"
+
 #include "document_tile_source.h"
 #include "form_field_editor.h"
-#include "onpdf/core/view/tile.h"
 #include "qt_image.h"
-
 #include <QApplication>
-#include <QToolTip>
-#include <QPolygonF>
-#include <QPen>
 #include <QCursor>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QNativeGestureEvent>
 #include <QPaintEvent>
 #include <QPainter>
+#include <QPen>
+#include <QPolygonF>
 #include <QResizeEvent>
 #include <QScrollBar>
+#include <QToolTip>
 #include <QWheelEvent>
-
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -35,11 +34,11 @@ const QColor kBackground(0x80, 0x80, 0x80);
 const QColor kShadowColor(0, 0, 0, 60);
 const QColor kSelectionColor(0, 120, 215, 90);
 constexpr QColor kAnnotationOutline(0, 120, 215, 255);  // 선택한 주석 테두리
-constexpr QColor kInkPreview(200, 0, 120, 200);          // 그리는 중인 펜
-constexpr double kMoveThresholdPt = 4.0;                 // 이보다 짧은 드래그는 이동이 아니다
+constexpr QColor kInkPreview(200, 0, 120, 200);         // 그리는 중인 펜
+constexpr double kMoveThresholdPt = 4.0;                // 이보다 짧은 드래그는 이동이 아니다
 const QColor kSearchHitColor(255, 220, 0, 110);
 const QColor kSearchCurrentColor(255, 140, 0, 150);
-constexpr double kLinkClickSlop = 4.0;      // 이 거리(논리 px) 미만 이동이면 클릭
+constexpr double kLinkClickSlop = 4.0;  // 이 거리(논리 px) 미만 이동이면 클릭
 constexpr int kMultiClickMs = 500;
 constexpr int kAutoscrollMs = 30;
 constexpr int kMaxCopyPages = 200;
@@ -120,7 +119,8 @@ void DocumentView::set_document(const engine::DocumentHandle& handle, UiDispatch
 
 void DocumentView::invalidate_pages(const std::vector<int>& pages, bool sizes_changed) {
   if (!layout_ || !source_) return;
-  // 진행 중인 텍스트 추출은 이전 모양 기준이다: 세대를 올려 늦은 결과를 버리고, 보이는 쪽은 다시 요청한다
+  // 진행 중인 텍스트 추출은 이전 모양 기준이다: 세대를 올려 늦은 결과를 버리고, 보이는 쪽은 다시
+  // 요청한다
   ++doc_generation_;
   for (auto& [page, task] : text_requested_) task.cancel();
   text_requested_.clear();
@@ -144,7 +144,9 @@ void DocumentView::invalidate_pages(const std::vector<int>& pages, bool sizes_ch
       line_requested_.erase(it);
     }
     if (hovered_line_ && hovered_line_->first == page) hovered_line_.reset();
-    if (selected_line_ && selected_line_->page == page) {  // 편집 뒤 줄 id 가 바뀐다 → 해제 (새 상자는 select_after_refresh 로)
+    if (selected_line_ &&
+        selected_line_->page ==
+            page) {  // 편집 뒤 줄 id 가 바뀐다 → 해제 (새 상자는 select_after_refresh 로)
       selected_line_.reset();
       emit text_line_selected(false, page, engine::TextLineInfo{});
     }
@@ -159,8 +161,8 @@ void DocumentView::invalidate_pages(const std::vector<int>& pages, bool sizes_ch
       selected_text_.reset();
     }
     if (selected_annot_ && selected_annot_->page == page) {
-      // NM 이 있는 주석은 새 목록이 오면 조용히 다시 고른다 (두께 → 불투명도처럼 연달아 바꿀 수 있게; 안내 문구를 지우지 않게
-      // 해제 신호는 내지 않는다). "#index" 는 밀릴 수 있어 해제
+      // NM 이 있는 주석은 새 목록이 오면 조용히 다시 고른다 (두께 → 불투명도처럼 연달아 바꿀 수
+      // 있게; 안내 문구를 지우지 않게 해제 신호는 내지 않는다). "#index" 는 밀릴 수 있어 해제
       const std::string id = selected_annot_->info.id;
       if (!id.empty() && id.front() != '#') {
         selected_annot_.reset();
@@ -170,7 +172,8 @@ void DocumentView::invalidate_pages(const std::vector<int>& pages, bool sizes_ch
         clear_annotation_selection();
       }
     }
-    if (!selection_.empty() && page >= selection_.start().page && page <= selection_.end().page) selection_hit = true;
+    if (!selection_.empty() && page >= selection_.start().page && page <= selection_.end().page)
+      selection_hit = true;
   }
   if (selection_hit) clear_selection();
   pending_anchor_.reset();
@@ -190,13 +193,15 @@ void DocumentView::invalidate_pages(const std::vector<int>& pages, bool sizes_ch
     scheduler_->set_layout(layout_.get());
     relayout();  // 맞춤 배율 재계산 (가장 넓은 쪽이 바뀌었을 수 있다)
     const onpdf::Rect rect = layout_->page_rect(page);
-    verticalScrollBar()->setValue(static_cast<int>(std::lround((rect.y + fraction * rect.h) / dpr())));
+    verticalScrollBar()->setValue(
+        static_cast<int>(std::lround((rect.y + fraction * rect.h) / dpr())));
   } else {
     scheduler_->set_layout(layout_.get());
   }
   schedule_update();
   request_text_indexes();  // 보이는 쪽 ±1 의 주석 목록도 다시 요청한다
-  // 재선택은 지금 요청된 쪽에서만: 보이지 않는 쪽이면 한참 뒤 스크롤할 때 갑자기 선택이 생기지 않게 포기한다
+  // 재선택은 지금 요청된 쪽에서만: 보이지 않는 쪽이면 한참 뒤 스크롤할 때 갑자기 선택이 생기지 않게
+  // 포기한다
   if (reselect_page_ >= 0 && !annot_requested_.contains(reselect_page_)) {
     reselect_page_ = -1;
     reselect_id_.clear();
@@ -336,16 +341,21 @@ void DocumentView::set_zoom(double zoom, QPointF anchor_viewport) {
 
   const onpdf::Rect r1 = layout_->page_rect(page);
   const onpdf::Point doc_after{r1.x + fx * r1.w, r1.y + fy * r1.h};
-  verticalScrollBar()->setValue(static_cast<int>(std::lround(doc_after.y / d - anchor_viewport.y())));
-  horizontalScrollBar()->setValue(
-      static_cast<int>(std::lround(doc_after.x / d - (anchor_viewport.x() - horizontal_offset_logical()))));
+  verticalScrollBar()->setValue(
+      static_cast<int>(std::lround(doc_after.y / d - anchor_viewport.y())));
+  horizontalScrollBar()->setValue(static_cast<int>(
+      std::lround(doc_after.x / d - (anchor_viewport.x() - horizontal_offset_logical()))));
   schedule_update();
   viewport()->update();
   emit zoom_changed(zoom_);
 }
 
-void DocumentView::zoom_in() { set_zoom(zoom_ * 1.25); }
-void DocumentView::zoom_out() { set_zoom(zoom_ / 1.25); }
+void DocumentView::zoom_in() {
+  set_zoom(zoom_ * 1.25);
+}
+void DocumentView::zoom_out() {
+  set_zoom(zoom_ / 1.25);
+}
 
 // ---------------------------------------------------------------- 쪽 이동
 
@@ -358,22 +368,27 @@ void DocumentView::go_to_page(int page) {
 
 void DocumentView::scroll_to_anchored(int page, double value_logical) {
   QScrollBar* bar = verticalScrollBar();
-  const int value = std::clamp(static_cast<int>(std::lround(value_logical)), bar->minimum(), bar->maximum());
-  nav_anchor_ = NavAnchor{page, value};  // 스크롤 전에 둬야 이번 이동의 쪽 변경 신호가 이 쪽을 알린다
+  const int value =
+      std::clamp(static_cast<int>(std::lround(value_logical)), bar->minimum(), bar->maximum());
+  nav_anchor_ =
+      NavAnchor{page, value};  // 스크롤 전에 둬야 이번 이동의 쪽 변경 신호가 이 쪽을 알린다
   if (bar->value() != value) bar->setValue(value);  // → scrollContentsBy → emit_page_if_changed
   emit_page_if_changed();
 }
 
 int DocumentView::current_page() const {
   if (!layout_ || layout_->page_count() == 0) return -1;
-  if (nav_anchor_ && nav_anchor_->scroll == verticalScrollBar()->value() && nav_anchor_->page < layout_->page_count()) {
+  if (nav_anchor_ && nav_anchor_->scroll == verticalScrollBar()->value() &&
+      nav_anchor_->page < layout_->page_count()) {
     return nav_anchor_->page;
   }
   const onpdf::Rect vp = viewport_doc();
   return layout_->page_at(vp.y + vp.h / 2.0);
 }
 
-int DocumentView::page_count() const { return layout_ ? layout_->page_count() : 0; }
+int DocumentView::page_count() const {
+  return layout_ ? layout_->page_count() : 0;
+}
 
 view::TileScheduler::Stats DocumentView::scheduler_stats() const {
   return scheduler_ ? scheduler_->stats() : view::TileScheduler::Stats{};
@@ -385,7 +400,9 @@ int DocumentView::pending_visible_tiles() const {
 
 // ---------------------------------------------------------------- 레이아웃
 
-double DocumentView::dpr() const { return viewport()->devicePixelRatioF(); }
+double DocumentView::dpr() const {
+  return viewport()->devicePixelRatioF();
+}
 
 onpdf::Rect DocumentView::viewport_doc() const {
   const double d = dpr();
@@ -479,7 +496,8 @@ void DocumentView::on_tile_ready(const view::TileKey& key) {
   if (!layout_) return;
   const double d = dpr();
   const onpdf::Rect page = layout_->page_rect(key.page);
-  // 어떤 배율의 타일이든 현재 배율 기준 쪽 사각형 전체를 다시 그리면 충분히 싸다(쪽은 뷰포트와 교차하는 것만)
+  // 어떤 배율의 타일이든 현재 배율 기준 쪽 사각형 전체를 다시 그리면 충분히 싸다(쪽은 뷰포트와
+  // 교차하는 것만)
   const QRectF logical(horizontal_offset_logical() + page.x / d - horizontalScrollBar()->value(),
                        page.y / d - verticalScrollBar()->value(), page.w / d, page.h / d);
   viewport()->update(logical.toAlignedRect().adjusted(-1, -1, kShadow + 1, kShadow + 1));
@@ -537,11 +555,16 @@ void DocumentView::paint_page(QPainter& painter, int page, const QRectF& page_lo
   const onpdf::Size px = view::page_pixel_size(pt, scale_q);
   const int tx0 = static_cast<int>(vis.x) / view::kTileSize;
   const int ty0 = static_cast<int>(vis.y) / view::kTileSize;
-  const int tx1 = std::min(view::tiles_across(px.w) - 1, static_cast<int>(std::ceil(vis.right()) - 1) / view::kTileSize);
-  const int ty1 = std::min(view::tiles_across(px.h) - 1, static_cast<int>(std::ceil(vis.bottom()) - 1) / view::kTileSize);
+  const int tx1 = std::min(view::tiles_across(px.w) - 1,
+                           static_cast<int>(std::ceil(vis.right()) - 1) / view::kTileSize);
+  const int ty1 = std::min(view::tiles_across(px.h) - 1,
+                           static_cast<int>(std::ceil(vis.bottom()) - 1) / view::kTileSize);
 
   // 1. 현재 배율 타일을 모으고, 빠진 것이 있는지 본다
-  struct Ready { view::TileKey key; std::shared_ptr<const onpdf::Bitmap> bitmap; };
+  struct Ready {
+    view::TileKey key;
+    std::shared_ptr<const onpdf::Bitmap> bitmap;
+  };
   std::vector<Ready> ready;
   bool missing = false;
   for (int ty = ty0; ty <= ty1; ++ty) {
@@ -567,7 +590,8 @@ void DocumentView::paint_page(QPainter& painter, int page, const QRectF& page_lo
       const onpdf::Rect src = view::tile_rect_px(key, pt);
       const onpdf::Rect in_cur{src.x * factor, src.y * factor, src.w * factor, src.h * factor};
       if (!in_cur.intersects(vis)) continue;
-      const QRectF target(page_logical.x() + in_cur.x / d, page_logical.y() + in_cur.y / d, in_cur.w / d, in_cur.h / d);
+      const QRectF target(page_logical.x() + in_cur.x / d, page_logical.y() + in_cur.y / d,
+                          in_cur.w / d, in_cur.h / d);
       painter.drawImage(target, to_qimage_shared(bitmap, 1.0));  // 복사 없음
     }
   }
@@ -610,7 +634,8 @@ void DocumentView::request_form_widgets() {
   const int keep = std::max(kTextKeepPages, last - first + 1);
   const int center = current_page();
   for (auto it = form_requested_.begin(); it != form_requested_.end();) {
-    const bool wanted = (it->first >= first && it->first <= last) || (pending_form_open_ && pending_form_open_->page == it->first);
+    const bool wanted = (it->first >= first && it->first <= last) ||
+                        (pending_form_open_ && pending_form_open_->page == it->first);
     if (!wanted) {
       it->second.cancel();
       it = form_requested_.erase(it);
@@ -637,11 +662,14 @@ void DocumentView::request_form_widgets() {
     engine::TaskHandle handle = handle_.load_form_widgets(
         page, engine::Priority::kLow,
         // 워커 스레드: 메인으로 넘기기만
-        [dispatcher, self, page, generation](onpdf::Result<std::vector<engine::FormWidgetInfo>> result) {
+        [dispatcher, self, page,
+         generation](onpdf::Result<std::vector<engine::FormWidgetInfo>> result) {
           std::shared_ptr<const std::vector<engine::FormWidgetInfo>> list;
-          const bool cancelled = !result && (result.error().code == onpdf::ErrorCode::kCancelled ||
-                                             result.error().code == onpdf::ErrorCode::kInvalidState);
-          if (result) list = std::make_shared<const std::vector<engine::FormWidgetInfo>>(std::move(*result));
+          const bool cancelled =
+              !result && (result.error().code == onpdf::ErrorCode::kCancelled ||
+                          result.error().code == onpdf::ErrorCode::kInvalidState);
+          if (result)
+            list = std::make_shared<const std::vector<engine::FormWidgetInfo>>(std::move(*result));
           dispatcher->post_to(self, [page, generation, list, cancelled](DocumentView* view) {
             view->on_form_widgets(page, generation, list, cancelled);
           });
@@ -650,12 +678,14 @@ void DocumentView::request_form_widgets() {
   }
 }
 
-void DocumentView::on_form_widgets(int page, int generation, std::shared_ptr<const std::vector<engine::FormWidgetInfo>> list,
+void DocumentView::on_form_widgets(int page, int generation,
+                                   std::shared_ptr<const std::vector<engine::FormWidgetInfo>> list,
                                    bool cancelled) {
   if (generation != doc_generation_) return;
   form_requested_.erase(page);
   if (cancelled) return;
-  form_cache_[page] = list ? std::move(list) : std::make_shared<const std::vector<engine::FormWidgetInfo>>();
+  form_cache_[page] =
+      list ? std::move(list) : std::make_shared<const std::vector<engine::FormWidgetInfo>>();
   update_page(page);
   if (pending_form_open_ && pending_form_open_->page == page) open_pending_form_editor();
 }
@@ -684,8 +714,10 @@ void DocumentView::paint_form(QPainter& painter, int page, const QRectF& page_lo
   painter.setBrush(QColor(0, 110, 230, 34));
   for (const auto& w : *list) {
     if (!engine::is_fillable(w.type) || w.read_only) continue;
-    if (form_editor_ && form_editor_->page() == page && form_editor_->widget().ref == w.ref) continue;
-    painter.drawRect(QRectF(page_logical.x() + w.rect.x * k, page_logical.y() + w.rect.y * k, w.rect.w * k, w.rect.h * k));
+    if (form_editor_ && form_editor_->page() == page && form_editor_->widget().ref == w.ref)
+      continue;
+    painter.drawRect(QRectF(page_logical.x() + w.rect.x * k, page_logical.y() + w.rect.y * k,
+                            w.rect.w * k, w.rect.h * k));
   }
   painter.setBrush(Qt::NoBrush);
 }
@@ -695,7 +727,8 @@ void DocumentView::open_form_editor(int page, const engine::FormWidgetInfo& widg
   pending_form_open_.reset();
   auto* editor = new FormFieldEditor(page, widget, viewport());  // 뷰포트가 소유 (Qt 부모)
   form_editor_ = editor;
-  connect(editor, &FormFieldEditor::committed, this, [this](int advance) { on_form_editor_done(true, advance); });
+  connect(editor, &FormFieldEditor::committed, this,
+          [this](int advance) { on_form_editor_done(true, advance); });
   connect(editor, &FormFieldEditor::cancelled, this, [this] { on_form_editor_done(false, 0); });
   place_form_editor();
   editor->show();
@@ -705,7 +738,8 @@ void DocumentView::open_form_editor(int page, const engine::FormWidgetInfo& widg
 
 void DocumentView::place_form_editor() {
   if (!form_editor_ || !layout_) return;
-  form_editor_->place(page_rect_to_viewport(form_editor_->page(), form_editor_->widget().rect), layout_->scale() / dpr());
+  form_editor_->place(page_rect_to_viewport(form_editor_->page(), form_editor_->widget().rect),
+                      layout_->scale() / dpr());
 }
 
 void DocumentView::commit_form_editor() {
@@ -721,7 +755,9 @@ void DocumentView::cancel_form_editor() {
   editor->deleteLater();
 }
 
-FormFieldEditor* DocumentView::form_editor() const { return form_editor_.data(); }
+FormFieldEditor* DocumentView::form_editor() const {
+  return form_editor_.data();
+}
 
 void DocumentView::on_form_editor_done(bool commit, int advance) {
   if (!form_editor_) return;
@@ -748,13 +784,18 @@ bool typeable(const engine::FormWidgetInfo& w) {
 }
 }  // namespace
 
-void DocumentView::go_to_adjacent_text_widget(int page, const engine::FieldRef& from, bool backward) {
-  // 같은 쪽: 주석 순서로 다음(이전) 입력 칸. 없으면 이웃 쪽의 첫(마지막) 입력 칸 (목록이 없으면 받아서 연다)
+void DocumentView::go_to_adjacent_text_widget(int page, const engine::FieldRef& from,
+                                              bool backward) {
+  // 같은 쪽: 주석 순서로 다음(이전) 입력 칸. 없으면 이웃 쪽의 첫(마지막) 입력 칸 (목록이 없으면
+  // 받아서 연다)
   if (const auto* list = form_widgets(page)) {
     std::vector<const engine::FormWidgetInfo*> order;
-    for (const auto& w : *list) if (typeable(w)) order.push_back(&w);
-    std::sort(order.begin(), order.end(), [](const auto* a, const auto* b) { return a->annot_index < b->annot_index; });
-    auto it = std::find_if(order.begin(), order.end(), [&](const auto* w) { return w->ref == from; });
+    for (const auto& w : *list)
+      if (typeable(w)) order.push_back(&w);
+    std::sort(order.begin(), order.end(),
+              [](const auto* a, const auto* b) { return a->annot_index < b->annot_index; });
+    auto it =
+        std::find_if(order.begin(), order.end(), [&](const auto* w) { return w->ref == from; });
     if (it != order.end()) {
       if (!backward && it + 1 != order.end()) {
         open_form_editor(page, **(it + 1));
@@ -786,8 +827,10 @@ void DocumentView::open_pending_form_editor() {
   if (list == nullptr) return;
   pending_form_open_.reset();
   std::vector<const engine::FormWidgetInfo*> order;
-  for (const auto& w : *list) if (typeable(w)) order.push_back(&w);
-  std::sort(order.begin(), order.end(), [](const auto* a, const auto* b) { return a->annot_index < b->annot_index; });
+  for (const auto& w : *list)
+    if (typeable(w)) order.push_back(&w);
+  std::sort(order.begin(), order.end(),
+            [](const auto* a, const auto* b) { return a->annot_index < b->annot_index; });
   if (order.empty()) {  // 입력 칸이 없는 쪽은 건너뛴다
     const int next = pending.page + (pending.backward ? -1 : 1);
     if (layout_ && next >= 0 && next < layout_->page_count()) {
@@ -847,12 +890,14 @@ void DocumentView::request_text_indexes() {
         [dispatcher, self, page, generation](onpdf::Result<view::PageTextIndex> result) {
           std::shared_ptr<const view::PageTextIndex> index;
           // 취소·문서 닫힘(kInvalidState) 은 일시적 — 캐시하지 않는다. 추출 실패만 빈 인덱스로 캐시
-          const bool cancelled = !result && (result.error().code == onpdf::ErrorCode::kCancelled ||
-                                             result.error().code == onpdf::ErrorCode::kInvalidState);
+          const bool cancelled =
+              !result && (result.error().code == onpdf::ErrorCode::kCancelled ||
+                          result.error().code == onpdf::ErrorCode::kInvalidState);
           if (result) {
             index = std::make_shared<const view::PageTextIndex>(std::move(*result));
           } else if (!cancelled) {
-            std::fprintf(stderr, "[onpdf] text index failed for page %d: %s\n", page, result.error().message.c_str());
+            std::fprintf(stderr, "[onpdf] text index failed for page %d: %s\n", page,
+                         result.error().message.c_str());
           }
           dispatcher->post_to(self, [page, generation, index, cancelled](DocumentView* v) {
             v->on_text_index(page, generation, cancelled ? nullptr : index, cancelled);
@@ -899,11 +944,14 @@ void DocumentView::request_annotations() {
     engine::TaskHandle handle = handle_.load_annotations(
         page, engine::Priority::kLow,
         // 워커 스레드: 메인으로 넘기기만
-        [dispatcher, self, page, generation](onpdf::Result<std::vector<engine::AnnotationInfo>> result) {
+        [dispatcher, self, page,
+         generation](onpdf::Result<std::vector<engine::AnnotationInfo>> result) {
           std::shared_ptr<const std::vector<engine::AnnotationInfo>> list;
-          const bool cancelled = !result && (result.error().code == onpdf::ErrorCode::kCancelled ||
-                                             result.error().code == onpdf::ErrorCode::kInvalidState);
-          if (result) list = std::make_shared<const std::vector<engine::AnnotationInfo>>(std::move(*result));
+          const bool cancelled =
+              !result && (result.error().code == onpdf::ErrorCode::kCancelled ||
+                          result.error().code == onpdf::ErrorCode::kInvalidState);
+          if (result)
+            list = std::make_shared<const std::vector<engine::AnnotationInfo>>(std::move(*result));
           dispatcher->post_to(self, [page, generation, list, cancelled](DocumentView* view) {
             view->on_annotations(page, generation, list, cancelled);
           });
@@ -912,12 +960,15 @@ void DocumentView::request_annotations() {
   }
 }
 
-void DocumentView::on_annotations(int page, int generation, std::shared_ptr<const std::vector<engine::AnnotationInfo>> list,
+void DocumentView::on_annotations(int page, int generation,
+                                  std::shared_ptr<const std::vector<engine::AnnotationInfo>> list,
                                   bool cancelled) {
   if (generation != doc_generation_) return;
   annot_requested_.erase(page);
   if (cancelled) return;
-  if (!list) list = std::make_shared<const std::vector<engine::AnnotationInfo>>();  // 실패: 빈 목록으로 재요청 방지
+  if (!list)
+    list = std::make_shared<const std::vector<engine::AnnotationInfo>>();  // 실패: 빈 목록으로
+                                                                           // 재요청 방지
   annot_cache_[page] = std::move(list);
   if (reselect_page_ == page) {
     reselect_page_ = -1;
@@ -934,7 +985,8 @@ void DocumentView::on_annotations(int page, int generation, std::shared_ptr<cons
     if (selected_annot_ && selected_annot_->page == page && selected_annot_->info.id == id) {
       emit annotation_reselected(selected_annot_->info);
     } else {
-      emit annotation_selected(false, engine::AnnotationInfo{});  // 지워졌거나 못 찾음: 버튼·메뉴 상태를 맞춘다
+      emit annotation_selected(
+          false, engine::AnnotationInfo{});  // 지워졌거나 못 찾음: 버튼·메뉴 상태를 맞춘다
     }
   }
 }
@@ -979,11 +1031,14 @@ void DocumentView::request_text_boxes() {
     engine::TaskHandle handle = handle_.load_page_objects(
         page, engine::Priority::kLow,
         // 워커 스레드: 메인으로 넘기기만
-        [dispatcher, self, page, generation](onpdf::Result<std::vector<engine::PageObjectInfo>> result) {
+        [dispatcher, self, page,
+         generation](onpdf::Result<std::vector<engine::PageObjectInfo>> result) {
           std::shared_ptr<const std::vector<engine::PageObjectInfo>> list;
-          const bool cancelled = !result && (result.error().code == onpdf::ErrorCode::kCancelled ||
-                                             result.error().code == onpdf::ErrorCode::kInvalidState);
-          if (result) list = std::make_shared<const std::vector<engine::PageObjectInfo>>(std::move(*result));
+          const bool cancelled =
+              !result && (result.error().code == onpdf::ErrorCode::kCancelled ||
+                          result.error().code == onpdf::ErrorCode::kInvalidState);
+          if (result)
+            list = std::make_shared<const std::vector<engine::PageObjectInfo>>(std::move(*result));
           dispatcher->post_to(self, [page, generation, list, cancelled](DocumentView* view) {
             view->on_text_boxes(page, generation, list, cancelled);
           });
@@ -992,7 +1047,8 @@ void DocumentView::request_text_boxes() {
   }
 }
 
-void DocumentView::on_text_boxes(int page, int generation, std::shared_ptr<const std::vector<engine::PageObjectInfo>> list,
+void DocumentView::on_text_boxes(int page, int generation,
+                                 std::shared_ptr<const std::vector<engine::PageObjectInfo>> list,
                                  bool cancelled) {
   if (generation != doc_generation_) return;
   text_box_requested_.erase(page);
@@ -1000,7 +1056,8 @@ void DocumentView::on_text_boxes(int page, int generation, std::shared_ptr<const
   auto cache = std::make_shared<ObjectCache>();
   if (list) {
     cache->objects = *list;
-    for (const auto& o : cache->objects) if (o.kind == engine::ObjectKind::kText) cache->texts.push_back(o.text);
+    for (const auto& o : cache->objects)
+      if (o.kind == engine::ObjectKind::kText) cache->texts.push_back(o.text);
   }
   text_box_cache_[page] = std::move(cache);
   if (reselect_text_page_ == page) {
@@ -1043,10 +1100,12 @@ void DocumentView::select_after_refresh(int page, const std::string& key) {
   reselect_announce_ = true;
 }
 
-std::optional<DocumentView::SelectedTextBox> DocumentView::text_box_by_id(int page, const std::string& box) const {
+std::optional<DocumentView::SelectedTextBox> DocumentView::text_box_by_id(
+    int page, const std::string& box) const {
   const auto* objects = page_objects(page);
   if (objects == nullptr) return std::nullopt;
-  // 기존 이미지("#obj<n>")는 첫 편집에서 마크 id 로 바뀌지만 쪽 객체 순서는 그대로다 → index 로도 찾는다 (재선택)
+  // 기존 이미지("#obj<n>")는 첫 편집에서 마크 id 로 바뀌지만 쪽 객체 순서는 그대로다 → index 로도
+  // 찾는다 (재선택)
   int foreign_index = -1;
   if (box.starts_with("#obj")) foreign_index = std::atoi(box.c_str() + 4);
   for (const engine::PageObjectInfo& o : *objects) {  // 이미지: id 로 바로
@@ -1082,7 +1141,8 @@ std::optional<DocumentView::SelectedTextBox> DocumentView::text_box_by_id(int pa
       out.font_name = t.font_name;
     } else {
       const double x0 = std::min(out.bbox.x, t.bbox.x), y0 = std::min(out.bbox.y, t.bbox.y);
-      const double x1 = std::max(out.bbox.right(), t.bbox.right()), y1 = std::max(out.bbox.bottom(), t.bbox.bottom());
+      const double x1 = std::max(out.bbox.right(), t.bbox.right()),
+                   y1 = std::max(out.bbox.bottom(), t.bbox.bottom());
       out.bbox = {x0, y0, x1 - x0, y1 - y0};
       out.text += "\n" + t.text;
     }
@@ -1109,14 +1169,17 @@ int DocumentView::handle_at(QPointF viewport_pos) const {
     const onpdf::Point sides[2] = {{b.x, b.y + b.h / 2}, {b.right(), b.y + b.h / 2}};
     for (int i = 0; i < 2; ++i) {
       const QPointF c = page_point_to_viewport(selected_text_->page, sides[i]);
-      if (std::abs(c.x() - viewport_pos.x()) <= 6.0 && std::abs(c.y() - viewport_pos.y()) <= 6.0) return 4 + i;
+      if (std::abs(c.x() - viewport_pos.x()) <= 6.0 && std::abs(c.y() - viewport_pos.y()) <= 6.0)
+        return 4 + i;
     }
     return -1;
   }
-  const onpdf::Point corners[4] = {{b.x, b.y}, {b.right(), b.y}, {b.x, b.bottom()}, {b.right(), b.bottom()}};
+  const onpdf::Point corners[4] = {
+      {b.x, b.y}, {b.right(), b.y}, {b.x, b.bottom()}, {b.right(), b.bottom()}};
   for (int i = 0; i < 4; ++i) {
     const QPointF c = page_point_to_viewport(selected_text_->page, corners[i]);
-    if (std::abs(c.x() - viewport_pos.x()) <= 6.0 && std::abs(c.y() - viewport_pos.y()) <= 6.0) return i;
+    if (std::abs(c.x() - viewport_pos.x()) <= 6.0 && std::abs(c.y() - viewport_pos.y()) <= 6.0)
+      return i;
   }
   return -1;
 }
@@ -1145,7 +1208,8 @@ onpdf::Rect DocumentView::resized_rect(onpdf::Point pt, bool keep_aspect) const 
   return {x, y, w, h};
 }
 
-std::optional<DocumentView::SelectedTextBox> DocumentView::text_box_at(int page, onpdf::Point pt) const {
+std::optional<DocumentView::SelectedTextBox> DocumentView::text_box_at(int page,
+                                                                       onpdf::Point pt) const {
   const std::string box = text_box_id_at(page, pt);
   return box.empty() ? std::nullopt : text_box_by_id(page, box);
 }
@@ -1213,11 +1277,14 @@ void DocumentView::request_text_lines() {
     const int generation = doc_generation_;
     engine::TaskHandle handle = handle_.load_text_lines(
         page, engine::Priority::kLow,
-        [dispatcher, self, page, generation](onpdf::Result<std::vector<engine::TextLineInfo>> result) {  // 워커 스레드
+        [dispatcher, self, page,
+         generation](onpdf::Result<std::vector<engine::TextLineInfo>> result) {  // 워커 스레드
           std::shared_ptr<const std::vector<engine::TextLineInfo>> list;
-          const bool cancelled = !result && (result.error().code == onpdf::ErrorCode::kCancelled ||
-                                             result.error().code == onpdf::ErrorCode::kInvalidState);
-          if (result) list = std::make_shared<const std::vector<engine::TextLineInfo>>(std::move(*result));
+          const bool cancelled =
+              !result && (result.error().code == onpdf::ErrorCode::kCancelled ||
+                          result.error().code == onpdf::ErrorCode::kInvalidState);
+          if (result)
+            list = std::make_shared<const std::vector<engine::TextLineInfo>>(std::move(*result));
           dispatcher->post_to(self, [page, generation, list, cancelled](DocumentView* view) {
             view->on_text_lines(page, generation, list, cancelled);
           });
@@ -1226,7 +1293,8 @@ void DocumentView::request_text_lines() {
   }
 }
 
-void DocumentView::on_text_lines(int page, int generation, std::shared_ptr<const std::vector<engine::TextLineInfo>> list,
+void DocumentView::on_text_lines(int page, int generation,
+                                 std::shared_ptr<const std::vector<engine::TextLineInfo>> list,
                                  bool cancelled) {
   if (generation != doc_generation_) return;
   line_requested_.erase(page);
@@ -1259,7 +1327,8 @@ const engine::AnnotationInfo* DocumentView::annotation_at(int page, onpdf::Point
   const auto* list = annotations(page);
   if (list == nullptr) return nullptr;
   for (auto it = list->rbegin(); it != list->rend(); ++it) {  // 뒤에 있는 것이 위에 그려진다
-    if (it->flags & (engine::kAnnotFlagHidden | engine::kAnnotFlagNoView)) continue;  // 화면에 없는 주석은 고를 수 없다
+    if (it->flags & (engine::kAnnotFlagHidden | engine::kAnnotFlagNoView))
+      continue;  // 화면에 없는 주석은 고를 수 없다
     if (it->editable && it->rect.contains(pt)) return &*it;
   }
   return nullptr;
@@ -1267,7 +1336,8 @@ const engine::AnnotationInfo* DocumentView::annotation_at(int page, onpdf::Point
 
 onpdf::Point DocumentView::clamp_to_page(int page, onpdf::Point pt) const {
   const engine::PageSize size = layout_->page_size_pt(page);
-  return {std::clamp(pt.x, 0.0, std::max(0.0, size.width)), std::clamp(pt.y, 0.0, std::max(0.0, size.height))};
+  return {std::clamp(pt.x, 0.0, std::max(0.0, size.width)),
+          std::clamp(pt.y, 0.0, std::max(0.0, size.height))};
 }
 
 void DocumentView::update_page(int page) {
@@ -1299,8 +1369,10 @@ void DocumentView::set_tool(AnnotationTool tool) {
 }
 
 onpdf::Rect DocumentView::shape_rect() const noexcept {
-  const double x0 = std::min(shape_anchor_.x, shape_corner_.x), y0 = std::min(shape_anchor_.y, shape_corner_.y);
-  const double x1 = std::max(shape_anchor_.x, shape_corner_.x), y1 = std::max(shape_anchor_.y, shape_corner_.y);
+  const double x0 = std::min(shape_anchor_.x, shape_corner_.x),
+               y0 = std::min(shape_anchor_.y, shape_corner_.y);
+  const double x1 = std::max(shape_anchor_.x, shape_corner_.x),
+               y1 = std::max(shape_anchor_.y, shape_corner_.y);
   return {x0, y0, x1 - x0, y1 - y0};
 }
 
@@ -1329,7 +1401,8 @@ std::optional<engine::AnnotationInfo> DocumentView::selected_annotation() const 
 }
 
 void DocumentView::clear_annotation_selection() {
-  const bool pending = reselect_page_ >= 0;  // 조용히 재선택을 기다리던 중이면 해제 신호는 지금 낸다
+  const bool pending =
+      reselect_page_ >= 0;  // 조용히 재선택을 기다리던 중이면 해제 신호는 지금 낸다
   reselect_page_ = -1;
   reselect_id_.clear();
   if (!selected_annot_ && !pending) return;
@@ -1345,25 +1418,35 @@ void DocumentView::paint_annotations(QPainter& painter, int page, const QRectF& 
     const onpdf::Rect& r = selected_annot_->info.rect;
     painter.setBrush(Qt::NoBrush);
     painter.setPen(QPen(kAnnotationOutline, 2));
-    painter.drawRect(QRectF(page_logical.x() + r.x * k, page_logical.y() + r.y * k, r.w * k, r.h * k).adjusted(-2, -2, 2, 2));
+    painter.drawRect(
+        QRectF(page_logical.x() + r.x * k, page_logical.y() + r.y * k, r.w * k, r.h * k)
+            .adjusted(-2, -2, 2, 2));
   }
   // 기존 줄 (#65): hover 는 점선(불가 줄은 회색), 선택은 실선 2px (핸들 없음)
-  if (hovered_line_ && hovered_line_->first == page && !(selected_line_ && selected_line_->page == page && selected_line_->info.id == hovered_line_->second)) {
+  if (hovered_line_ && hovered_line_->first == page &&
+      !(selected_line_ && selected_line_->page == page &&
+        selected_line_->info.id == hovered_line_->second)) {
     if (const auto* lines = text_lines(page)) {
       for (const auto& l : *lines) {
         if (l.id != hovered_line_->second) continue;
         const onpdf::Rect& r = l.bbox;
         painter.setBrush(Qt::NoBrush);
-        painter.setPen(QPen(l.editable ? kAnnotationOutline : QColor(128, 128, 128, 200), 1, Qt::DotLine));
-        painter.drawRect(QRectF(page_logical.x() + r.x * k, page_logical.y() + r.y * k, r.w * k, r.h * k).adjusted(-2, -2, 2, 2));
+        painter.setPen(
+            QPen(l.editable ? kAnnotationOutline : QColor(128, 128, 128, 200), 1, Qt::DotLine));
+        painter.drawRect(
+            QRectF(page_logical.x() + r.x * k, page_logical.y() + r.y * k, r.w * k, r.h * k)
+                .adjusted(-2, -2, 2, 2));
       }
     }
   }
   if (selected_line_ && selected_line_->page == page) {
     const onpdf::Rect& r = selected_line_->info.bbox;
     painter.setBrush(Qt::NoBrush);
-    painter.setPen(QPen(selected_line_->info.editable ? kAnnotationOutline : QColor(128, 128, 128, 255), 2));
-    painter.drawRect(QRectF(page_logical.x() + r.x * k, page_logical.y() + r.y * k, r.w * k, r.h * k).adjusted(-2, -2, 2, 2));
+    painter.setPen(
+        QPen(selected_line_->info.editable ? kAnnotationOutline : QColor(128, 128, 128, 255), 2));
+    painter.drawRect(
+        QRectF(page_logical.x() + r.x * k, page_logical.y() + r.y * k, r.w * k, r.h * k)
+            .adjusted(-2, -2, 2, 2));
   }
   if (selected_text_ && selected_text_->page == page) {
     const onpdf::Rect& r = selected_text_->bbox;
@@ -1379,10 +1462,13 @@ void DocumentView::paint_annotations(QPainter& painter, int page, const QRectF& 
       // 핸들 (논리 8px): 이미지 = 모서리 4개, 텍스트 상자 = 좌우 2개 (폭)
       painter.setPen(QPen(Qt::white, 1));
       painter.setBrush(kAnnotationOutline);
-      const QPointF mid_left(box.left(), box.center().y()), mid_right(box.right(), box.center().y());
+      const QPointF mid_left(box.left(), box.center().y()),
+          mid_right(box.right(), box.center().y());
       const bool image = selected_text_->kind == engine::ObjectKind::kImage;
-      const std::vector<QPointF> handles = image ? std::vector<QPointF>{box.topLeft(), box.topRight(), box.bottomLeft(), box.bottomRight()}
-                                                 : std::vector<QPointF>{mid_left, mid_right};
+      const std::vector<QPointF> handles =
+          image ? std::vector<QPointF>{box.topLeft(), box.topRight(), box.bottomLeft(),
+                                       box.bottomRight()}
+                : std::vector<QPointF>{mid_left, mid_right};
       if (!selected_object_locked()) {  // 기존 이미지는 핸들 없음 (#57)
         for (const QPointF& c : handles) painter.drawRect(QRectF(c.x() - 4, c.y() - 4, 8, 8));
       }
@@ -1390,7 +1476,8 @@ void DocumentView::paint_annotations(QPainter& painter, int page, const QRectF& 
       if (drag_ == Drag::kResize) {
         const onpdf::Rect& p = resize_preview_;
         painter.setPen(QPen(kAnnotationOutline, 1, Qt::DashLine));
-        painter.drawRect(QRectF(page_logical.x() + p.x * k, page_logical.y() + p.y * k, p.w * k, p.h * k));
+        painter.drawRect(
+            QRectF(page_logical.x() + p.x * k, page_logical.y() + p.y * k, p.w * k, p.h * k));
       }
     }
   }
@@ -1401,7 +1488,8 @@ void DocumentView::paint_annotations(QPainter& painter, int page, const QRectF& 
     painter.setPen(pen);
     painter.setBrush(Qt::NoBrush);
     QPolygonF poly;
-    for (const onpdf::Point& p : ink_points_) poly << QPointF(page_logical.x() + p.x * k, page_logical.y() + p.y * k);
+    for (const onpdf::Point& p : ink_points_)
+      poly << QPointF(page_logical.x() + p.x * k, page_logical.y() + p.y * k);
     painter.drawPolyline(poly);
   }
   if (drag_ == Drag::kShape && shape_page_ == page) {
@@ -1410,26 +1498,30 @@ void DocumentView::paint_annotations(QPainter& painter, int page, const QRectF& 
     painter.setPen(pen);
     painter.setBrush(Qt::NoBrush);
     const QRectF box(page_logical.x() + r.x * k, page_logical.y() + r.y * k, r.w * k, r.h * k);
-    if (tool_ == AnnotationTool::kCircle) painter.drawEllipse(box);
-    else painter.drawRect(box);
+    if (tool_ == AnnotationTool::kCircle)
+      painter.drawEllipse(box);
+    else
+      painter.drawRect(box);
   }
 }
 
-void DocumentView::on_text_index(int page, int generation, std::shared_ptr<const view::PageTextIndex> index,
-                                 bool cancelled) {
+void DocumentView::on_text_index(int page, int generation,
+                                 std::shared_ptr<const view::PageTextIndex> index, bool cancelled) {
   if (generation != doc_generation_) return;  // 이전 문서
   text_requested_.erase(page);
   if (cancelled) return;  // 취소된 요청은 다시 보이면 재요청된다
-  if (!index) index = std::make_shared<const view::PageTextIndex>();  // 추출 실패: 빈 인덱스로 재요청 방지
+  if (!index)
+    index = std::make_shared<const view::PageTextIndex>();  // 추출 실패: 빈 인덱스로 재요청 방지
   text_cache_[page] = std::move(index);
   resolve_pending_drag(page, *text_cache_[page]);
   emit text_index_ready(page);
   if (layout_ && page < layout_->page_count()) {
     const double d = dpr();
     const onpdf::Rect r = layout_->page_rect(page);
-    viewport()->update(QRectF(horizontal_offset_logical() + r.x / d - horizontalScrollBar()->value(),
-                              r.y / d - verticalScrollBar()->value(), r.w / d, r.h / d)
-                           .toAlignedRect());
+    viewport()->update(
+        QRectF(horizontal_offset_logical() + r.x / d - horizontalScrollBar()->value(),
+               r.y / d - verticalScrollBar()->value(), r.w / d, r.h / d)
+            .toAlignedRect());
   }
 }
 
@@ -1442,16 +1534,19 @@ const view::PageTextIndex* DocumentView::text_index(int page) const {
 
 onpdf::Point DocumentView::page_point_on(int page, QPointF viewport_pos) const {
   const double d = dpr();
-  const onpdf::Point doc{(viewport_pos.x() - horizontal_offset_logical() + horizontalScrollBar()->value()) * d,
-                         (viewport_pos.y() + verticalScrollBar()->value()) * d};
+  const onpdf::Point doc{
+      (viewport_pos.x() - horizontal_offset_logical() + horizontalScrollBar()->value()) * d,
+      (viewport_pos.y() + verticalScrollBar()->value()) * d};
   return layout_->page_px_to_pt(page, layout_->doc_to_page_px(page, doc));
 }
 
-std::optional<std::pair<int, onpdf::Point>> DocumentView::page_point_at(QPointF viewport_pos) const {
+std::optional<std::pair<int, onpdf::Point>> DocumentView::page_point_at(
+    QPointF viewport_pos) const {
   if (!layout_ || layout_->page_count() == 0) return std::nullopt;
   const double d = dpr();
-  const onpdf::Point doc{(viewport_pos.x() - horizontal_offset_logical() + horizontalScrollBar()->value()) * d,
-                         (viewport_pos.y() + verticalScrollBar()->value()) * d};
+  const onpdf::Point doc{
+      (viewport_pos.x() - horizontal_offset_logical() + horizontalScrollBar()->value()) * d,
+      (viewport_pos.y() + verticalScrollBar()->value()) * d};
   const int page = layout_->page_at(doc.y);
   if (page < 0) return std::nullopt;
   const onpdf::Point in_page = layout_->doc_to_page_px(page, doc);
@@ -1537,7 +1632,9 @@ QRegion DocumentView::selection_region() const {
     const double px = ox + pr.x / d;
     const double py = oy + pr.y / d;
     for (const onpdf::Rect& r : index->selection_rects(range)) {
-      region += QRectF(px + r.x * k, py + r.y * k, r.w * k, r.h * k).toAlignedRect().adjusted(-1, -1, 1, 1);
+      region += QRectF(px + r.x * k, py + r.y * k, r.w * k, r.h * k)
+                    .toAlignedRect()
+                    .adjusted(-1, -1, 1, 1);
     }
   }
   return region;
@@ -1618,7 +1715,8 @@ void DocumentView::paint_selection(QPainter& painter, int page, const QRectF& pa
   painter.setPen(Qt::NoPen);
   painter.setBrush(kSelectionColor);
   for (const onpdf::Rect& r : index->selection_rects(range)) {
-    painter.drawRect(QRectF(page_logical.x() + r.x * k, page_logical.y() + r.y * k, r.w * k, r.h * k));
+    painter.drawRect(
+        QRectF(page_logical.x() + r.x * k, page_logical.y() + r.y * k, r.w * k, r.h * k));
   }
 }
 
@@ -1641,7 +1739,8 @@ void DocumentView::paint_search(QPainter& painter, int page, const QRectF& page_
     const bool is_current = current && current->page == page && current->range == (*hits)[i];
     painter.setBrush(is_current ? kSearchCurrentColor : kSearchHitColor);
     for (const onpdf::Rect& r : (*rects)[i]) {
-      painter.drawRect(QRectF(page_logical.x() + r.x * k, page_logical.y() + r.y * k, r.w * k, r.h * k));
+      painter.drawRect(
+          QRectF(page_logical.x() + r.x * k, page_logical.y() + r.y * k, r.w * k, r.h * k));
     }
   }
 }
@@ -1659,12 +1758,14 @@ void DocumentView::reveal(int page, const std::vector<onpdf::Rect>& rects) {
   const QRectF vp(viewport()->rect());
   if (!vp.contains(target)) {
     if (target.top() < vp.top() || target.bottom() > vp.bottom()) {
-      verticalScrollBar()->setValue(verticalScrollBar()->value() +
-                                    static_cast<int>(std::lround(target.top() - vp.height() / 3.0)));
+      verticalScrollBar()->setValue(
+          verticalScrollBar()->value() +
+          static_cast<int>(std::lround(target.top() - vp.height() / 3.0)));
     }
     if (target.left() < vp.left() || target.right() > vp.right()) {
-      horizontalScrollBar()->setValue(horizontalScrollBar()->value() +
-                                      static_cast<int>(std::lround(target.left() - vp.width() / 4.0)));
+      horizontalScrollBar()->setValue(
+          horizontalScrollBar()->value() +
+          static_cast<int>(std::lround(target.left() - vp.width() / 4.0)));
     }
   }
   viewport()->update();
@@ -1674,8 +1775,9 @@ void DocumentView::update_hover(QPointF viewport_pos) {
   QString target;
   Qt::CursorShape cursor = Qt::ArrowCursor;
   std::optional<std::pair<int, std::string>> hover_now;
-  if (tool_ == AnnotationTool::kNote || tool_ == AnnotationTool::kPen || tool_ == AnnotationTool::kSquare ||
-      tool_ == AnnotationTool::kCircle || tool_ == AnnotationTool::kImage) {
+  if (tool_ == AnnotationTool::kNote || tool_ == AnnotationTool::kPen ||
+      tool_ == AnnotationTool::kSquare || tool_ == AnnotationTool::kCircle ||
+      tool_ == AnnotationTool::kImage) {
     cursor = Qt::CrossCursor;
   }
   if (tool_ == AnnotationTool::kText) cursor = Qt::IBeamCursor;
@@ -1685,14 +1787,22 @@ void DocumentView::update_hover(QPointF viewport_pos) {
     if (tool_ == AnnotationTool::kSelect) {
       if (const engine::AnnotationInfo* a = annotation_at(page, pt)) {
         cursor = Qt::PointingHandCursor;
-        if (a->kind == engine::AnnotationKind::kText && !a->contents.empty()) tooltip = QString::fromStdString(a->contents);
+        if (a->kind == engine::AnnotationKind::kText && !a->contents.empty())
+          tooltip = QString::fromStdString(a->contents);
       } else if (const engine::FormWidgetInfo* widget = widget_at(page, pt)) {
         const bool typing = widget->type == engine::FieldType::kText || widget->editable_combo;
-        cursor = widget->read_only ? Qt::ArrowCursor : typing ? Qt::IBeamCursor : Qt::PointingHandCursor;
+        cursor = widget->read_only ? Qt::ArrowCursor
+                 : typing          ? Qt::IBeamCursor
+                                   : Qt::PointingHandCursor;
       } else if (const int handle = text_editable_ ? handle_at(viewport_pos) : -1; handle >= 0) {
-        cursor = handle >= 4 ? Qt::SizeHorCursor : (handle == 0 || handle == 3) ? Qt::SizeFDiagCursor : Qt::SizeBDiagCursor;
-      } else if (selected_text_ && selected_text_->page == page && selected_text_->bbox.contains(pt)) {
-        cursor = text_editable_ && !selected_object_locked() ? Qt::SizeAllCursor : Qt::ArrowCursor;  // 선택한 상자 안: 끌어 옮길 수 있다 (권한 있을 때)
+        cursor = handle >= 4                    ? Qt::SizeHorCursor
+                 : (handle == 0 || handle == 3) ? Qt::SizeFDiagCursor
+                                                : Qt::SizeBDiagCursor;
+      } else if (selected_text_ && selected_text_->page == page &&
+                 selected_text_->bbox.contains(pt)) {
+        cursor = text_editable_ && !selected_object_locked()
+                     ? Qt::SizeAllCursor
+                     : Qt::ArrowCursor;  // 선택한 상자 안: 끌어 옮길 수 있다 (권한 있을 때)
       } else if (!text_box_id_at(page, pt).empty()) {  // 커서 판정은 bbox 만 (리뷰 I1)
         cursor = Qt::PointingHandCursor;
       }
@@ -1704,11 +1814,12 @@ void DocumentView::update_hover(QPointF viewport_pos) {
         hover_now = std::make_pair(page, line->id);
       }
     }
-    if (const view::PageTextIndex* index = text_index(page); index != nullptr && cursor == Qt::ArrowCursor) {
+    if (const view::PageTextIndex* index = text_index(page);
+        index != nullptr && cursor == Qt::ArrowCursor) {
       if (const view::Link* link = index->link_at(pt)) {
         cursor = Qt::PointingHandCursor;
         target = link->kind == view::LinkKind::kUri ? QString::fromStdString(link->uri)
-                                                     : tr("%1 쪽").arg(link->page + 1);
+                                                    : tr("%1 쪽").arg(link->page + 1);
       } else if (index->hit_test(pt)) {
         cursor = Qt::IBeamCursor;
       }
@@ -1762,7 +1873,8 @@ void DocumentView::resizeEvent(QResizeEvent* event) {
 
 void DocumentView::scrollContentsBy(int dx, int dy) {
   QAbstractScrollArea::scrollContentsBy(dx, dy);  // viewport()->update() 포함
-  // 사용자 스크롤·배율 변경 등으로 고정한 값에서 벗어나면 이동 고정 쪽을 버리고 중앙 기준으로 돌아간다
+  // 사용자 스크롤·배율 변경 등으로 고정한 값에서 벗어나면 이동 고정 쪽을 버리고 중앙 기준으로
+  // 돌아간다
   if (nav_anchor_ && nav_anchor_->scroll != verticalScrollBar()->value()) nav_anchor_.reset();
   schedule_update();
   emit_page_if_changed();
@@ -1782,15 +1894,20 @@ void DocumentView::keyPressEvent(QKeyEvent* event) {
   QScrollBar* v = verticalScrollBar();
   // 화살표: 선택한 객체를 1pt(Shift 10pt) 옮긴다 (#49). 선택이 없으면 기존 스크롤
   if (selected_text_ && nudge_enabled_ &&
-      (event->key() == Qt::Key_Left || event->key() == Qt::Key_Right || event->key() == Qt::Key_Up || event->key() == Qt::Key_Down)) {
+      (event->key() == Qt::Key_Left || event->key() == Qt::Key_Right ||
+       event->key() == Qt::Key_Up || event->key() == Qt::Key_Down)) {
     if (selected_object_locked()) {  // 기존 이미지: 화살표 이동 없음 (#57)
       emit locked_object_edit_attempted();
       event->accept();
       return;
     }
     const double step = (event->modifiers() & Qt::ShiftModifier) ? 10.0 : 1.0;
-    onpdf::Point delta{event->key() == Qt::Key_Left ? -step : event->key() == Qt::Key_Right ? step : 0.0,
-                       event->key() == Qt::Key_Up ? -step : event->key() == Qt::Key_Down ? step : 0.0};
+    onpdf::Point delta{event->key() == Qt::Key_Left    ? -step
+                       : event->key() == Qt::Key_Right ? step
+                                                       : 0.0,
+                       event->key() == Qt::Key_Up     ? -step
+                       : event->key() == Qt::Key_Down ? step
+                                                      : 0.0};
     const engine::PageSize size = layout_->page_size_pt(selected_text_->page);
     const onpdf::Rect& b = selected_text_->bbox;
     delta.x = std::clamp(delta.x, -b.x, std::max(-b.x, size.width - b.right()));
@@ -1833,11 +1950,13 @@ void DocumentView::keyPressEvent(QKeyEvent* event) {
     return;
   }
   if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) && selected_annot_) {
-    emit annotation_delete_requested(selected_annot_->page, QString::fromStdString(selected_annot_->info.id));
+    emit annotation_delete_requested(selected_annot_->page,
+                                     QString::fromStdString(selected_annot_->info.id));
     event->accept();
     return;
   }
-  if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) && selected_object_locked()) {
+  if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) &&
+      selected_object_locked()) {
     emit locked_object_edit_attempted();  // 기존 이미지 삭제 막음 (#57)
     event->accept();
     return;
@@ -1848,11 +1967,21 @@ void DocumentView::keyPressEvent(QKeyEvent* event) {
     return;
   }
   switch (event->key()) {
-    case Qt::Key_PageDown: v->setValue(v->value() + v->pageStep()); break;
-    case Qt::Key_PageUp: v->setValue(v->value() - v->pageStep()); break;
-    case Qt::Key_Home: v->setValue(v->minimum()); break;
-    case Qt::Key_End: v->setValue(v->maximum()); break;
-    default: QAbstractScrollArea::keyPressEvent(event); return;
+    case Qt::Key_PageDown:
+      v->setValue(v->value() + v->pageStep());
+      break;
+    case Qt::Key_PageUp:
+      v->setValue(v->value() - v->pageStep());
+      break;
+    case Qt::Key_Home:
+      v->setValue(v->minimum());
+      break;
+    case Qt::Key_End:
+      v->setValue(v->maximum());
+      break;
+    default:
+      QAbstractScrollArea::keyPressEvent(event);
+      return;
   }
   event->accept();
 }
@@ -1869,7 +1998,9 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
   press_pos_ = event->position();
   // 연속 클릭 수 (더블/트리플)
   const bool near_last = (event->position() - last_click_pos_).manhattanLength() < 6;
-  click_count_ = (click_timer_.isValid() && click_timer_.elapsed() < kMultiClickMs && near_last) ? click_count_ + 1 : 1;
+  click_count_ = (click_timer_.isValid() && click_timer_.elapsed() < kMultiClickMs && near_last)
+                     ? click_count_ + 1
+                     : 1;
   click_timer_.restart();
   last_click_pos_ = event->position();
 
@@ -1887,7 +2018,8 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
       const auto [page, pt] = *hit;
       // 기존 줄 (#65): 클릭 = 선택, 같은 줄 두 번 클릭 = 수정. 빈 곳 클릭 = 새 텍스트
       if (const engine::TextLineInfo* line = text_editable_ ? text_line_at(page, pt) : nullptr) {
-        const bool same = selected_line_ && selected_line_->page == page && selected_line_->info.id == line->id;
+        const bool same =
+            selected_line_ && selected_line_->page == page && selected_line_->info.id == line->id;
         if (!same) {
           const int previous_page = selected_line_ ? selected_line_->page : -1;
           selected_line_ = SelectedLine{page, *line};
@@ -1936,9 +2068,11 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
     if (auto hit = page_point_at(event->position())) {
       const auto [page, pt] = *hit;
       if (const engine::AnnotationInfo* a = annotation_at(page, pt)) {
-        if (selected_text_ || reselect_text_page_ >= 0) clear_text_box_selection();  // 주석과 텍스트 상자를 동시에 고르지 않는다 (리뷰 W3)
+        if (selected_text_ || reselect_text_page_ >= 0)
+          clear_text_box_selection();  // 주석과 텍스트 상자를 동시에 고르지 않는다 (리뷰 W3)
         clear_line_selection();
-        const bool same = selected_annot_ && selected_annot_->page == page && selected_annot_->info.id == a->id;
+        const bool same =
+            selected_annot_ && selected_annot_->page == page && selected_annot_->info.id == a->id;
         const int previous_page = selected_annot_ ? selected_annot_->page : -1;
         const engine::AnnotationInfo info = *a;  // 캐시가 바뀌어도 안전하게 복사
         selected_annot_ = SelectedAnnotation{page, info};
@@ -1965,8 +2099,8 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
         return;
       }
       // 선택한 상자의 두 번 클릭은 핸들보다 먼저: 폭 핸들이 상자 안쪽 가장자리와 겹친다 (#49)
-      if (click_count_ == 2 && selected_text_ && selected_text_->page == page && selected_text_->bbox.contains(pt) &&
-          selected_text_->kind == engine::ObjectKind::kText) {
+      if (click_count_ == 2 && selected_text_ && selected_text_->page == page &&
+          selected_text_->bbox.contains(pt) && selected_text_->kind == engine::ObjectKind::kText) {
         emit text_edit_requested(page, *selected_text_);
         drag_ = Drag::kNone;
         return;
@@ -1981,7 +2115,8 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
       // 선택된 상자 안을 누르면 이동 드래그, 다른 상자를 누르면 그 상자 선택, 두 번 클릭은 편집
       if (selected_text_ && selected_text_->page == page && selected_text_->bbox.contains(pt)) {
         if (click_count_ == 2) {
-          if (selected_text_->kind == engine::ObjectKind::kText) emit text_edit_requested(page, *selected_text_);
+          if (selected_text_->kind == engine::ObjectKind::kText)
+            emit text_edit_requested(page, *selected_text_);
           drag_ = Drag::kNone;
           return;
         }
@@ -2019,7 +2154,8 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
   if (auto hit = page_point_at(event->position())) {
     const auto [page, pt] = *hit;
     if (const view::PageTextIndex* index = text_index(page)) {
-      // 링크는 단일 클릭에서만 활성화 (더블클릭이 두 번 열지 않도록). 마크업 도구에서는 링크를 열지 않는다
+      // 링크는 단일 클릭에서만 활성화 (더블클릭이 두 번 열지 않도록). 마크업 도구에서는 링크를 열지
+      // 않는다
       if (const view::Link* link = index->link_at(pt);
           link != nullptr && click_count_ == 1 && tool_ == AnnotationTool::kSelect) {
         pressed_link_ = *link;
@@ -2061,15 +2197,18 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
 void DocumentView::mouseMoveEvent(QMouseEvent* event) {
   if (drag_ == Drag::kInk) {
     if (ink_page_ >= 0) {
-      // 다른 쪽 위로 나가도 시작한 쪽의 좌표로 투영한 뒤 쪽 안으로 클램프한다 (옆 쪽 좌표를 자르면 가장자리로 튄다)
+      // 다른 쪽 위로 나가도 시작한 쪽의 좌표로 투영한 뒤 쪽 안으로 클램프한다 (옆 쪽 좌표를 자르면
+      // 가장자리로 튄다)
       const onpdf::Point previous = ink_points_.back();
-      const onpdf::Point next = clamp_to_page(ink_page_, page_point_on(ink_page_, event->position()));
+      const onpdf::Point next =
+          clamp_to_page(ink_page_, page_point_on(ink_page_, event->position()));
       ink_points_.push_back(next);
       // 방금 추가된 선분 영역만 다시 그린다 (쪽 전체 갱신은 고배율에서 느리다)
       const QPointF a = page_point_to_viewport(ink_page_, previous);
       const QPointF b = page_point_to_viewport(ink_page_, next);
       const double margin = std::max(6.0, 2.0 * layout_->scale() / dpr()) + 2.0;
-      viewport()->update(QRectF(a, b).normalized().adjusted(-margin, -margin, margin, margin).toAlignedRect());
+      viewport()->update(
+          QRectF(a, b).normalized().adjusted(-margin, -margin, margin, margin).toAlignedRect());
     }
     return;
   }
@@ -2099,7 +2238,8 @@ void DocumentView::mouseMoveEvent(QMouseEvent* event) {
   }
   if (drag_ == Drag::kShape) {
     if (shape_page_ >= 0) {
-      // 이전·현재 도형 영역만 다시 그린다 (펜과 같은 이유). 시작한 쪽 좌표로 투영해 쪽 안으로 클램프
+      // 이전·현재 도형 영역만 다시 그린다 (펜과 같은 이유). 시작한 쪽 좌표로 투영해 쪽 안으로
+      // 클램프
       const onpdf::Rect before = shape_rect();
       shape_corner_ = clamp_to_page(shape_page_, page_point_on(shape_page_, event->position()));
       const onpdf::Rect after = shape_rect();
@@ -2107,7 +2247,8 @@ void DocumentView::mouseMoveEvent(QMouseEvent* event) {
       for (const onpdf::Rect& r : {before, after}) {
         const QPointF a = page_point_to_viewport(shape_page_, {r.x, r.y});
         const QPointF b = page_point_to_viewport(shape_page_, {r.right(), r.bottom()});
-        viewport()->update(QRectF(a, b).normalized().adjusted(-margin, -margin, margin, margin).toAlignedRect());
+        viewport()->update(
+            QRectF(a, b).normalized().adjusted(-margin, -margin, margin, margin).toAlignedRect());
       }
     }
     return;
@@ -2168,7 +2309,8 @@ void DocumentView::mouseReleaseEvent(QMouseEvent* event) {
       update_page(selected_text_->page);
       const onpdf::Rect& b = selected_text_->bbox;
       const onpdf::Rect& r = resize_preview_;
-      if (std::abs(r.x - b.x) >= 1 || std::abs(r.y - b.y) >= 1 || std::abs(r.w - b.w) >= 1 || std::abs(r.h - b.h) >= 1) {
+      if (std::abs(r.x - b.x) >= 1 || std::abs(r.y - b.y) >= 1 || std::abs(r.w - b.w) >= 1 ||
+          std::abs(r.h - b.h) >= 1) {
         const QString key = QString::fromStdString(selected_text_->box);
         if (handle >= 4) {
           emit text_width_requested(selected_text_->page, key, r.x, r.w);
@@ -2199,7 +2341,9 @@ void DocumentView::mouseReleaseEvent(QMouseEvent* event) {
     if (page >= 0) update_page(page);
     // 실수로 누른 클릭(4pt 미만)은 도형을 만들지 않는다
     if (page >= 0 && rect.w >= 4.0 && rect.h >= 4.0) {
-      emit shape_requested(page, tool_ == AnnotationTool::kSquare ? engine::AnnotationKind::kSquare : engine::AnnotationKind::kCircle,
+      emit shape_requested(page,
+                           tool_ == AnnotationTool::kSquare ? engine::AnnotationKind::kSquare
+                                                            : engine::AnnotationKind::kCircle,
                            rect);
     }
     return;
@@ -2218,9 +2362,10 @@ void DocumentView::mouseReleaseEvent(QMouseEvent* event) {
   if (was_text_drag && tool_ != AnnotationTool::kSelect && !selection_.empty()) {
     const MarkupItems items = selection_markup_items();
     if (!items.empty()) {
-      const engine::AnnotationKind kind = tool_ == AnnotationTool::kHighlight   ? engine::AnnotationKind::kHighlight
-                                          : tool_ == AnnotationTool::kUnderline ? engine::AnnotationKind::kUnderline
-                                                                                : engine::AnnotationKind::kStrikeOut;
+      const engine::AnnotationKind kind =
+          tool_ == AnnotationTool::kHighlight   ? engine::AnnotationKind::kHighlight
+          : tool_ == AnnotationTool::kUnderline ? engine::AnnotationKind::kUnderline
+                                                : engine::AnnotationKind::kStrikeOut;
       emit markup_requested(kind, items);
     }
   }
@@ -2240,7 +2385,8 @@ void DocumentView::leaveEvent(QEvent* event) {
 }
 
 bool DocumentView::viewportEvent(QEvent* event) {
-  // 뷰포트를 떠나면(스크롤바 위로 가도) 호버 상태를 지운다 — Leave 는 viewport 에 오고 서브클래스 leaveEvent 로 오지 않는다
+  // 뷰포트를 떠나면(스크롤바 위로 가도) 호버 상태를 지운다 — Leave 는 viewport 에 오고 서브클래스
+  // leaveEvent 로 오지 않는다
   if (event->type() == QEvent::Leave && !hovered_target_.isEmpty()) {
     hovered_target_.clear();
     emit link_hovered({});

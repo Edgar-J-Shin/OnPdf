@@ -4,19 +4,17 @@
 // 비교 허용치는 tests/test_support.h 의 expect_bitmap_matches_png 참고.
 
 #include "onpdf/core/engine/pdfium_document.h"
+#include "onpdf/core/engine/save.h"
+#include "onpdf/core/image/png_io.h"
 #include "onpdf/edit/add_text_command.h"
 #include "onpdf/edit/object_commands.h"
 #include "onpdf/edit/text_box_commands.h"
 #include "onpdf/edit/text_line_commands.h"
-#include "onpdf/core/engine/save.h"
-#include "onpdf/core/image/png_io.h"
 
 #include "../test_support.h"
-
-#include <gtest/gtest.h>
-
 #include <cstdlib>
 #include <filesystem>
+#include <gtest/gtest.h>
 #include <string>
 
 namespace onpdf {
@@ -133,7 +131,6 @@ TEST(RenderRegression, RotatedAndSavedPage) {
   onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "simple-p0-rotated-saved.png");
 }
 
-
 // 쪽 이동(마지막 쪽을 맨 앞으로) 뒤 저장한 문서의 첫 쪽: 저장이 쪽 순서를 보존한다
 TEST(RenderRegression, MovedAndSavedPage) {
   auto doc = PdfiumDocument::open(testdata("mixed-sizes.pdf"));
@@ -158,8 +155,8 @@ TEST(RenderRegression, MovedAndSavedPage) {
   onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "mixed-sizes-p0-moved-saved.png");
 }
 
-
-// 주석 5종(하이라이트·밑줄·취소선·메모·펜)을 달아 저장한 문서의 첫 쪽: PDFium 이 만든 모양이 기준과 같다
+// 주석 5종(하이라이트·밑줄·취소선·메모·펜)을 달아 저장한 문서의 첫 쪽: PDFium 이 만든 모양이 기준과
+// 같다
 TEST(RenderRegression, AnnotatedAndSavedPage) {
   auto doc = PdfiumDocument::open(testdata("simple.pdf"));
   ASSERT_TRUE(doc) << doc.error().message;
@@ -220,7 +217,8 @@ TEST(RenderRegression, AnnotatedAndSavedPage) {
   onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "simple-p0-annotated.png");
 }
 
-// 텍스트 추가(#45): 서브셋 임베딩 폰트만으로(시스템 폰트 없음) 한글·영문이 그려진다. 저장 → 다시 열어 렌더
+// 텍스트 추가(#45): 서브셋 임베딩 폰트만으로(시스템 폰트 없음) 한글·영문이 그려진다. 저장 → 다시
+// 열어 렌더
 TEST(RenderRegression, TextAddedAndSavedPage) {
   auto doc = PdfiumDocument::open(testdata("simple.pdf"));
   ASSERT_TRUE(doc) << doc.error().message;
@@ -275,7 +273,8 @@ TEST(RenderRegression, TextEditedAndSavedPage) {
   ASSERT_TRUE(add.execute(*doc));
   edit::MoveObjectsCommand move(0, add.object_ids(), {60, 40});
   ASSERT_TRUE(move.execute(*doc));
-  edit::ReplaceTextBoxCommand replace(0, add.box_id(), *face, std::string("저장 열기"), 36.0, engine::Color{200, 0, 0, 255});
+  edit::ReplaceTextBoxCommand replace(0, add.box_id(), *face, std::string("저장 열기"), 36.0,
+                                      engine::Color{200, 0, 0, 255});
   ASSERT_TRUE(replace.execute(*doc));
   onpdf::test::ScopedTempDir dir;
   const auto saved_path = dir / "text-edited.pdf";
@@ -294,8 +293,9 @@ TEST(RenderRegression, TextEditedAndSavedPage) {
   onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "simple-p0-text-edited.png");
 }
 
-// 기존 줄 수정(#65): Tc/Tw·굵게 섞인 줄은 그대로 두고 "Hello world line" 을 대체 글꼴로 고치고 "Delete me entirely" 를 지운다
-// → 저장 → 다시 열어 렌더 (원본 스트림이 재생성되지 않았음을 기준 PNG 가 증명한다)
+// 기존 줄 수정(#65): Tc/Tw·굵게 섞인 줄은 그대로 두고 "Hello world line" 을 대체 글꼴로 고치고
+// "Delete me entirely" 를 지운다 → 저장 → 다시 열어 렌더 (원본 스트림이 재생성되지 않았음을 기준
+// PNG 가 증명한다)
 TEST(RenderRegression, LineEditedAndSavedPage) {
   auto doc = PdfiumDocument::open(testdata("text-lines-basic.pdf"));
   ASSERT_TRUE(doc) << doc.error().message;
@@ -304,10 +304,13 @@ TEST(RenderRegression, LineEditedAndSavedPage) {
   auto find = [&](const char* needle) -> std::string {
     auto lines = doc->text_lines(0);
     EXPECT_TRUE(lines);
-    for (const auto& l : *lines) if (l.text.find(needle) != std::string::npos) return l.id;
+    for (const auto& l : *lines)
+      if (l.text.find(needle) != std::string::npos) return l.id;
     return {};
   };
-  edit::ReplaceTextLineCommand replace(0, find("Hello world line"), std::string("Hello edited line"), std::nullopt, std::nullopt, *face);
+  edit::ReplaceTextLineCommand replace(0, find("Hello world line"),
+                                       std::string("Hello edited line"), std::nullopt, std::nullopt,
+                                       *face);
   ASSERT_TRUE(replace.execute(*doc));
   edit::RemoveTextLineCommand remove(0, find("Delete me entirely"));
   ASSERT_TRUE(remove.execute(*doc));
@@ -325,7 +328,8 @@ TEST(RenderRegression, LineEditedAndSavedPage) {
     ASSERT_TRUE(image::write_png(*actual, expected_path));
     GTEST_SKIP() << "reference updated: " << expected_path;
   }
-  onpdf::test::expect_bitmap_matches_png(*actual, expected_path, "text-lines-basic-p0-line-edited.png");
+  onpdf::test::expect_bitmap_matches_png(*actual, expected_path,
+                                         "text-lines-basic-p0-line-edited.png");
 }
 
 // 이미지(#49): 투명 PNG(파란 사각형 위) + JPEG → 이동·크기 조절 → 저장 → 다시 열어 렌더
@@ -339,9 +343,19 @@ TEST(RenderRegression, ImageAddedAndSavedPage) {
   for (int y = 0; y < 48; ++y)
     for (int x = 0; x < 64; ++x) {
       std::uint8_t* px = alpha.bgra.data() + (y * 64 + x) * 4;
-      if (x < 32) { px[0] = 0; px[1] = 0; px[2] = 255; px[3] = 255; }
-      else if (y < 16) { px[0] = 0; px[1] = 160; px[2] = 0; px[3] = 128; }
-      else { px[0] = px[1] = px[2] = px[3] = 0; }
+      if (x < 32) {
+        px[0] = 0;
+        px[1] = 0;
+        px[2] = 255;
+        px[3] = 255;
+      } else if (y < 16) {
+        px[0] = 0;
+        px[1] = 160;
+        px[2] = 0;
+        px[3] = 128;
+      } else {
+        px[0] = px[1] = px[2] = px[3] = 0;
+      }
     }
   engine::ImageSpec png;
   png.source = alpha;
@@ -356,7 +370,10 @@ TEST(RenderRegression, ImageAddedAndSavedPage) {
   for (int y = 0; y < 60; ++y)
     for (int x = 0; x < 80; ++x) {
       std::uint8_t* px = green.pixels.data() + (y * 80 + x) * 4;
-      px[0] = static_cast<std::uint8_t>(x * 3); px[1] = 160; px[2] = static_cast<std::uint8_t>(y * 4); px[3] = 255;
+      px[0] = static_cast<std::uint8_t>(x * 3);
+      px[1] = 160;
+      px[2] = static_cast<std::uint8_t>(y * 4);
+      px[3] = 255;
     }
   auto jpeg = image::encode_jpeg(green, 90);
   ASSERT_TRUE(jpeg);
@@ -367,7 +384,8 @@ TEST(RenderRegression, ImageAddedAndSavedPage) {
   ASSERT_TRUE(add_jpg.execute(*doc));
   edit::MoveObjectsCommand move(0, {add_jpg.object_id()}, {-20, 60});
   ASSERT_TRUE(move.execute(*doc));
-  edit::ResizeObjectCommand resize(0, add_jpg.object_id(), {300, 480, 160, 120}, {300, 480, 200, 150});
+  edit::ResizeObjectCommand resize(0, add_jpg.object_id(), {300, 480, 160, 120},
+                                   {300, 480, 200, 150});
   ASSERT_TRUE(resize.execute(*doc));
   onpdf::test::ScopedTempDir dir;
   const auto saved_path = dir / "image-added.pdf";
