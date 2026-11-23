@@ -32,11 +32,23 @@ get_target_property(ONPDF_PDFIUM_SHARED_LIB pdfium IMPORTED_LOCATION)
 file(COPY "${ONPDF_PDFIUM_SHARED_LIB}" DESTINATION "${CMAKE_BINARY_DIR}/bin")
 message(STATUS "PDFium ${PDFium_VERSION} (${ONPDF_PDFIUM_PLATFORM}): ${ONPDF_PDFIUM_SHARED_LIB}")
 
-# 실행 파일이 같은 디렉터리의 libpdfium 을 찾도록 rpath 설정
+set(ONPDF_PDFIUM_LICENSES_DIR "${ONPDF_PDFIUM_DIR}/licenses")
+
+# 실행 파일이 libpdfium 을 찾도록 rpath 설정.
+#  - 맨 실행 파일: 같은 디렉터리(build/<preset>/bin)
+#  - macOS 앱 번들(#90): 빌드 트리에서는 bin/onpdf_app.app/Contents/MacOS → bin/ (세 단계 위),
+#    설치·배포본에서는 Contents/Frameworks (macdeployqt 와 같은 자리)
 function(onpdf_set_runtime_rpath target)
   if(APPLE)
-    set_target_properties(${target} PROPERTIES BUILD_RPATH "@loader_path")
+    get_target_property(_bundle ${target} MACOSX_BUNDLE)
+    if(_bundle)
+      set_target_properties(${target} PROPERTIES
+        BUILD_RPATH "@loader_path/../../.."
+        INSTALL_RPATH "@executable_path/../Frameworks")
+    else()
+      set_target_properties(${target} PROPERTIES BUILD_RPATH "@loader_path")
+    endif()
   elseif(UNIX)
-    set_target_properties(${target} PROPERTIES BUILD_RPATH "$ORIGIN")
+    set_target_properties(${target} PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
   endif()
 endfunction()

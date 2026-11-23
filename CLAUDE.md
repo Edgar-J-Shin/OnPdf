@@ -58,7 +58,10 @@ ctest --preset dev                      # unit + rendering regression + roundtri
 ./build/dev/bin/onpdf_cli check in.pdf                               # qpdf 구조 검사 (경고 출력, 오류면 1)
 ONPDF_UPDATE_REFERENCES=1 ./build/dev/bin/onpdf_render_tests   # 렌더링 기준 이미지 갱신
 cmake --preset dev-app && cmake --build --preset dev-app        # Qt 앱 포함 빌드
-./build/dev-app/bin/onpdf_app testdata/simple.pdf              # 앱 실행
+open -n build/dev-app/bin/onpdf_app.app --args "$PWD/testdata/simple.pdf"   # 앱 실행 (macOS 는 앱 번들 — 터미널에서 맨 실행 파일로 띄우면 키보드·IME 가 안 붙는다)
+build/dev-app/bin/onpdf_app.app/Contents/MacOS/onpdf_app --self-test testdata/simple.pdf   # 배포물 점검: 0 성공·1 렌더·2 글꼴·3 qpdf
+# Windows/Linux: build/dev-app/bin/onpdf_app(.exe) testdata/simple.pdf
+cmake --preset release-app && cmake --build --preset release-app && cmake --install build/release-app --prefix stage   # 배포용 설치 (#90)
 ctest --preset dev-app                                         # app 테스트(offscreen) 포함
 ```
 
@@ -184,7 +187,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 - `main`: 릴리스 브랜치. `release/x.y.z`·`hotfix/x.y.z` 만 머지하고 태그 `vx.y.z` 를 단다. 직접 push 금지
 - **작업 시작 절차**: ① GitHub 이슈 생성(제목 접두 `M0:`~`M5:`, 마일스톤 지정, 필요 시 라벨) → ② `develop` 에서 브랜치 분기 → ③ 구현 → ④ PR(base `develop`, 본문에 `Closes #N`) → ⑤ CI 통과 후 머지 커밋(`gh pr merge --merge`)
 - 브랜치 이름: `feature/<이슈번호>-<slug>`, `fix/<이슈번호>-<slug>`, `chore/<이슈번호>-<slug>`, `spike/<이슈번호>-<slug>`, `release/x.y.z`, `hotfix/x.y.z` (slug 는 영문 소문자·하이픈)
-- 릴리스: `develop` → `release/x.y.z` 분기 → 버전·CHANGELOG 정리 → `main` 머지 → 태그 → `main` 을 `develop` 에 백머지. GitHub Actions 가 태그에서 설치 파일·무설치 압축본 생성
+- 릴리스: `develop` → `release/x.y.z` 분기 → 버전·CHANGELOG 정리 → `main` 머지 → 태그 → `main` 을 `develop` 에 백머지. 태그 푸시 → `.github/workflows/release.yml`(#90) 이 Windows x64 무설치 zip(windeployqt + MSVC 런타임 DLL)·macOS arm64 DMG(macdeployqt → `packaging/finish_macos_bundle.py` 가 쓰지 않는 플러그인·프레임워크 제거·설치 이름 정리·번들 밖 의존 검사)를 만들고, 각 배포물로 `--self-test`(한글 경로 포함)를 돌려 **둘 다 통과해야** Release(본문 = `scripts/changelog_section.py` 가 꺼낸 CHANGELOG 절 + `SHA256SUMS.txt`)를 만든다. 태그와 `CMakeLists.txt` 버전이 다르면 실패. 서명은 비밀 값(`WINDOWS_CERT_*`, `MACOS_CERT_*`·`APPLE_*`)이 전부 있을 때만, 하나도 없으면 서명 없이(macOS ad-hoc), 일부만 있으면 실패. 수동 실행(`workflow_dispatch`, ref·publish)으로 브랜치 빌드만 점검할 수 있다. macOS 최소 버전은 Homebrew Qt 의 `minos`(현재 14.x)로 Info.plist 에 적는다 — 13 지원·설치기·x64 는 2단계
 - 커밋 메시지: 제목 영어 명령형 72자 이내, 본문 한국어 가능
 - 변경 기록은 `CHANGELOG.md`, 제3자 고지는 `THIRD_PARTY_NOTICES.md` (PDFium, qpdf, Qt, FreeType, HarfBuzz)
 - 커밋 금지: `build/`, `vcpkg_installed/`, PDFium/qpdf 바이너리, 라이선스 불명확한 PDF, 코드 서명 인증서
