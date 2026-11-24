@@ -987,6 +987,7 @@ Result<void> PdfiumDocument::set_annotation_border_width(int page_index, std::st
 Result<TextObjectsResult> PdfiumDocument::add_text_objects(int page_index,
                                                            const TextObjectsSpec& spec) {
   PdfiumLibrary::assert_current_thread();
+  note_regenerated(page_index);  // 자간 재적용 후보 (#87) — 실패해도 settle 은 멱등이다
   auto page = load_page(page_index);
   if (!page) return std::unexpected(page.error());
   return add_text_objects_to(page->get(), spec);
@@ -1093,6 +1094,7 @@ Result<TextObjectsResult> PdfiumDocument::add_text_objects_to(FPDF_PAGE raw_page
 Result<void> PdfiumDocument::remove_text_objects(int page_index,
                                                  const std::vector<std::string>& ids) {
   PdfiumLibrary::assert_current_thread();
+  note_regenerated(page_index);  // 자간 재적용 후보 (#87) — 실패해도 settle 은 멱등이다
   if (ids.empty()) return make_error(ErrorCode::kInvalidArgument, "no ids");
   auto page = load_page(page_index);
   if (!page) return std::unexpected(page.error());
@@ -1192,6 +1194,7 @@ Result<std::vector<TextObjectInfo>> PdfiumDocument::text_objects(int page_index)
 Result<void> PdfiumDocument::move_page_objects(int page_index, const std::vector<std::string>& ids,
                                                Point delta_pt) {
   PdfiumLibrary::assert_current_thread();
+  note_regenerated(page_index);  // 자간 재적용 후보 (#87) — 실패해도 settle 은 멱등이다
   if (ids.empty()) return make_error(ErrorCode::kInvalidArgument, "no ids");
   auto page = load_page(page_index);
   if (!page) return std::unexpected(page.error());
@@ -1234,6 +1237,7 @@ Result<void> PdfiumDocument::move_page_objects(int page_index, const std::vector
 
 Result<std::string> PdfiumDocument::add_image_object(int page_index, const ImageSpec& spec) {
   PdfiumLibrary::assert_current_thread();
+  note_regenerated(page_index);  // 자간 재적용 후보 (#87) — 실패해도 settle 은 멱등이다
   if (!(spec.rect.w > 0.0) || !(spec.rect.h > 0.0))
     return make_error(ErrorCode::kInvalidArgument, "image rect must be positive");
   auto page = load_page(page_index);
@@ -1343,6 +1347,7 @@ Result<std::vector<PageObjectInfo>> PdfiumDocument::page_objects(int page_index)
 
 Result<std::string> PdfiumDocument::mark_object(int page_index, std::string_view id) {
   PdfiumLibrary::assert_current_thread();
+  note_regenerated(page_index);  // 자간 재적용 후보 (#87) — 실패해도 settle 은 멱등이다
   if (!id.starts_with(kObjIndexPrefix)) return std::string(id);  // 이미 마크 id
   auto page = load_page(page_index);
   if (!page) return std::unexpected(page.error());
@@ -1365,6 +1370,7 @@ Result<std::string> PdfiumDocument::mark_object(int page_index, std::string_view
 
 Result<void> PdfiumDocument::set_object_rect(int page_index, std::string_view id, Rect rect_pt) {
   PdfiumLibrary::assert_current_thread();
+  note_regenerated(page_index);  // 자간 재적용 후보 (#87) — 실패해도 settle 은 멱등이다
   if (!(rect_pt.w > 0.0) || !(rect_pt.h > 0.0))
     return make_error(ErrorCode::kInvalidArgument, "rect must be positive");
   auto page = load_page(page_index);
@@ -1407,6 +1413,7 @@ Result<void> PdfiumDocument::set_object_rect(int page_index, std::string_view id
 Result<DetachedId> PdfiumDocument::detach_objects(int page_index,
                                                   const std::vector<std::string>& ids) {
   PdfiumLibrary::assert_current_thread();
+  note_regenerated(page_index);  // 자간 재적용 후보 (#87) — 실패해도 settle 은 멱등이다
   if (ids.empty()) return make_error(ErrorCode::kInvalidArgument, "no ids");
   auto page = load_page(page_index);
   if (!page) return std::unexpected(page.error());
@@ -1458,6 +1465,7 @@ Result<void> PdfiumDocument::reattach_objects(DetachedId id) {
     return make_error(ErrorCode::kInvalidArgument, "unknown detached objects");
   if (it->second.lost)
     return make_error(ErrorCode::kInvalidState, "object lost by undo of a line edit");  // #65 C1
+  note_regenerated(it->second.page);                                                    // #87
   auto page = load_page(it->second.page);
   if (!page) return std::unexpected(page.error());
   std::vector<FPDF_PAGEOBJECT> inserted;
@@ -1481,6 +1489,7 @@ Result<void> PdfiumDocument::reattach_objects(DetachedId id) {
 }
 
 void PdfiumDocument::remap_detached_pages(const std::vector<int>& new_index_of_old) {
+  spacing_pending_.clear();  // 쪽 번호가 바뀐다 — 구조 편집은 콘텐츠를 재생성하지 않는다 (#87)
   const auto remap = [&](int old) -> int {
     if (old < 0 || old >= static_cast<int>(new_index_of_old.size())) return -1;
     return new_index_of_old[static_cast<std::size_t>(old)];
@@ -2457,6 +2466,51 @@ Result<LineEditResult> PdfiumDocument::replace_text_line(int page_index, std::st
   return edit_line(page_index, line_id, &replacement);
 }
 
+namespace {
+
+// 자간(쪽 포인트, 부호 포함)을 넣을 쪽 직속 텍스트 객체들의 Tc fit (#77·#87). Tc(텍스트 공간) =
+// spacing(사용자 단위) / 가로 배율, |Tc| ≤ 0.25em. 표시 연산자가 없거나 Form 안이거나 2글자
+// 미만이면 건너뛴다
+std::vector<ShowOpFit> spacing_fits(
+    const detail::PageSpace& space, const detail::PageAnalysis& analysis,
+    const std::vector<std::pair<FPDF_PAGEOBJECT, double>>& targets) {
+  std::vector<ShowOpFit> fits;
+  const Rect unit = space.to_rect(0, 1, 0, 1);
+  const double scale = std::max(unit.w, unit.h);
+  if (!(scale > 0.0)) return fits;
+  for (const auto& [obj, spacing] : targets) {
+    if (std::abs(spacing) <= 1e-6) continue;
+    const auto it = std::find_if(analysis.objects.begin(), analysis.objects.end(),
+                                 [&](const auto& o) { return o.handle == obj; });
+    if (it == analysis.objects.end() || it->ordinal < 0 || it->container >= 0) continue;
+    float obj_size = 0;
+    FS_MATRIX m{};
+    if (!FPDFTextObj_GetFontSize(obj, &obj_size) || !FPDFPageObj_GetMatrix(obj, &m)) continue;
+    const double hx = std::hypot(m.a, m.b);  // Tc 는 텍스트 x 축을 따라 가로 배율로 움직인다
+    if (hx <= 0.0 || obj_size <= 0.0f || it->text.size() < 2) continue;
+    const double limit = 0.25 * obj_size;
+    const double tc = std::clamp((spacing / scale) / hx, -limit, limit);
+    fits.push_back({-1, it->ordinal, tc});
+  }
+  return fits;
+}
+
+// [x0,x1)×[y0,y1) 밖의 픽셀(RGB)이 모두 같은가 — 수술 뒤 줄 밖 보존 검증
+bool same_outside(const Bitmap& A, const Bitmap& B, int x0, int y0, int x1, int y1) {
+  if (A.width != B.width || A.height != B.height) return false;
+  for (int y = 0; y < A.height; ++y) {
+    for (int x = 0; x < A.width; ++x) {
+      if (x >= x0 && x < x1 && y >= y0 && y < y1) continue;
+      const std::uint8_t* pa = A.row(y) + x * 4;
+      const std::uint8_t* pb = B.row(y) + x * 4;
+      if (pa[0] != pb[0] || pa[1] != pb[1] || pa[2] != pb[2]) return false;
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
 Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_view line_id,
                                                  const LineReplacement* replacement) {
   PdfiumLibrary::assert_current_thread();
@@ -2695,24 +2749,11 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
       else
         ops.form_ordinals[it->container].insert(it->ordinal);
     }
-    // 원 줄 자간을 새 객체에 Tc 로 (#77): Tc(텍스트 공간) = spacing(사용자 단위) / 가로 배율, |Tc|
-    // ≤ 0.25em
+    // 원 줄 자간을 새 객체에 Tc 로 (#77)
     if (std::abs(line_spacing) > 1e-6) {
-      const Rect unit = space.to_rect(0, 1, 0, 1);
-      const double scale = std::max(unit.w, unit.h);
-      for (FPDF_PAGEOBJECT obj : inserted) {
-        const auto it = std::find_if(analysis.objects.begin(), analysis.objects.end(),
-                                     [&](const auto& o) { return o.handle == obj; });
-        if (it == analysis.objects.end() || it->ordinal < 0 || it->container >= 0) continue;
-        float obj_size = 0;
-        FS_MATRIX m{};
-        if (!FPDFTextObj_GetFontSize(obj, &obj_size) || !FPDFPageObj_GetMatrix(obj, &m)) continue;
-        const double hx = std::hypot(m.a, m.b);  // Tc 는 텍스트 x 축을 따라 가로 배율로 움직인다
-        if (hx <= 0.0 || obj_size <= 0.0f || it->text.size() < 2) continue;
-        const double limit = 0.25 * obj_size;
-        const double tc = std::clamp((line_spacing / scale) / hx, -limit, limit);
-        ops.fits.push_back({-1, it->ordinal, tc});
-      }
+      std::vector<std::pair<FPDF_PAGEOBJECT, double>> targets;
+      for (FPDF_PAGEOBJECT obj : inserted) targets.emplace_back(obj, line_spacing);
+      ops.fits = spacing_fits(space, analysis, targets);
     }
   }
   Result<SurgeryReport> report =
@@ -2783,26 +2824,174 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
             y0 = static_cast<int>(std::floor(verify_box.y - pad));
   const int x1 = static_cast<int>(std::ceil(verify_box.right() + pad)),
             y1 = static_cast<int>(std::ceil(verify_box.bottom() + pad));
-  const Bitmap& A = *before_render;
-  const Bitmap& B = *after_render;
-  bool same = A.width == B.width && A.height == B.height;
-  for (int y = 0; same && y < A.height; ++y) {
-    for (int x = 0; x < A.width; ++x) {
-      if (x >= x0 && x < x1 && y >= y0 && y < y1) continue;
-      const std::uint8_t* pa = A.row(y) + x * 4;
-      const std::uint8_t* pb = B.row(y) + x * 4;
-      if (pa[0] != pb[0] || pa[1] != pb[1] || pa[2] != pb[2]) {
-        same = false;
-        break;
-      }
-    }
-  }
-  if (!same)
+  if (!same_outside(*before_render, *after_render, x0, y0, x1, y1))
     return rollback(make_error(ErrorCode::kSaveVerifyFailed, "line edit changed other content"));
   if (auto unparked = unpark_detached(parked); !unparked)
     return rollback(std::unexpected(unparked.error()));
   result.before = before;
   return result;
+}
+
+// ---------------------------------------------------------------- 자간 재적용 (#87)
+
+SpacingSettleResult PdfiumDocument::settle_letter_spacing() noexcept {
+  SpacingSettleResult result;
+  std::set<int> pages;
+  pages.swap(spacing_pending_);  // 재적용 자체는 기록하지 않는다
+  for (const int page : pages) {
+    try {
+      auto reapplied = reapply_spacing(page);
+      if (!reapplied)
+        result.lost = true;
+      else if (*reapplied)
+        ++result.pages_reapplied;
+    } catch (...) {  // 할당 실패 등 — 편집은 이미 끝났다
+      result.lost = true;
+    }
+  }
+  return result;
+}
+
+Result<bool> PdfiumDocument::reapply_spacing(int page_index) {
+  PdfiumLibrary::assert_current_thread();
+  if (page_index < 0 || page_index >= FPDF_GetPageCount(doc_.get()))
+    return false;  // 실패한 편집이 남긴 범위 밖 기록
+
+  // 쪽 직속 OnPdf 텍스트 객체 가운데 마크 ls ≠ 0 → fit, PDFium 텍스트 객체 수, 대상 영역(쪽 포인트)
+  struct Plan {
+    std::vector<ShowOpFit> fits;
+    int page_text_objects = 0;
+    Rect area;
+    bool has_area = false;
+    double pad = 2.0;
+  };
+  const auto plan_of = [&]() -> Result<Plan> {
+    auto page = load_page(page_index);
+    if (!page) return std::unexpected(page.error());
+    Plan plan;
+    const detail::PageSpace space = detail::PageSpace::of(page->get());
+    std::vector<std::pair<FPDF_PAGEOBJECT, double>> targets;
+    const int count = FPDFPage_CountObjects(page->get());
+    // 마크 ls 는 상자의 첫 줄에만 있다 → 상자 id 별 자간을 먼저 모아 같은 상자의 모든 줄에 쓴다
+    // (box 마크가 없는 옛 객체는 자기 id 가 상자)
+    const auto box_of = [](FPDF_PAGEOBJECTMARK mark) {
+      std::string box = mark_string(mark, "box");
+      return box.empty() ? mark_string(mark, "id") : box;
+    };
+    std::unordered_map<std::string, double> spacing_of_box;
+    for (int i = 0; i < count; ++i) {
+      FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page->get(), i);
+      if (obj == nullptr || FPDFPageObj_GetType(obj) != FPDF_PAGEOBJ_TEXT) continue;
+      FPDF_PAGEOBJECTMARK mark = onpdf_mark_of(obj);
+      if (mark == nullptr) continue;
+      if (const std::string ls = mark_string(mark, "ls"); !ls.empty())
+        spacing_of_box[box_of(mark)] = parse_points(ls);
+    }
+    for (int i = 0; i < count && !spacing_of_box.empty(); ++i) {
+      FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page->get(), i);
+      if (obj == nullptr || FPDFPageObj_GetType(obj) != FPDF_PAGEOBJ_TEXT) continue;
+      FPDF_PAGEOBJECTMARK mark = onpdf_mark_of(obj);
+      if (mark == nullptr) continue;
+      const auto found = spacing_of_box.find(box_of(mark));
+      if (found == spacing_of_box.end() || std::abs(found->second) <= 1e-6) continue;
+      targets.emplace_back(obj, found->second);
+      float l = 0, b = 0, r = 0, t = 0;
+      if (FPDFPageObj_GetBounds(obj, &l, &b, &r, &t)) {
+        const Rect box = space.to_rect(l, r, b, t);
+        if (!plan.has_area) {
+          plan.area = box;
+          plan.has_area = true;
+        } else {
+          const double x0 = std::min(plan.area.x, box.x), y0 = std::min(plan.area.y, box.y);
+          const double x1 = std::max(plan.area.right(), box.right()),
+                       y1 = std::max(plan.area.bottom(), box.bottom());
+          plan.area = {x0, y0, x1 - x0, y1 - y0};
+        }
+        plan.pad = std::max(plan.pad, 0.35 * std::min(box.h, 200.0));
+      }
+    }
+    if (targets.empty()) return plan;
+    ScopedTextPage text_page(FPDFText_LoadPage(page->get()));
+    if (!text_page) return make_error(ErrorCode::kInvalidState, "FPDFText_LoadPage failed");
+    const detail::PageAnalysis analysis = detail::analyze_page(page->get(), text_page.get());
+    plan.page_text_objects = analysis.page_text_objects;
+    plan.fits = spacing_fits(space, analysis, targets);
+    return plan;
+  };
+
+  // 1. 미리 보기: 떼어 둔 객체 없이 저장한 바이트에서 고칠 것이 있는지만 본다 (대부분 여기서
+  // 끝난다)
+  {
+    auto plan = plan_of();
+    if (!plan) return std::unexpected(plan.error());
+    if (plan->fits.empty()) return false;
+    auto bytes = save_to_memory();
+    if (!bytes) return std::unexpected(bytes.error());
+    ShowOpSurgery ops;
+    ops.fits = plan->fits;
+    auto dry = QpdfTools::remove_text_show_ops(*bytes, password_, page_index, ops);
+    if (!dry) return std::unexpected(dry.error());
+    if (dry->fitted == 0) return false;
+  }
+
+  // 2. 수술: 떼어 둔 객체를 맨 뒤에 붙인 바이트(기존 순번 불변)로 → 다시 열기 → 대상 밖 픽셀 검증
+  auto parked = park_detached();
+  if (!parked) return std::unexpected(parked.error());
+  const auto fail = [&](Error error) -> Result<bool> {
+    (void)unpark_detached(*parked);
+    return std::unexpected(std::move(error));
+  };
+  auto plan = plan_of();
+  if (!plan) return fail(plan.error());
+  RenderOptions render;
+  render.scale = 1.0f;
+  render.render_annotations = false;
+  auto before_render = render_page(page_index, render);
+  if (!before_render) return fail(before_render.error());
+  auto pre = save_to_memory();
+  if (!pre) return fail(pre.error());
+  ShowOpSurgery ops;
+  ops.fits = plan->fits;
+  auto report = QpdfTools::remove_text_show_ops(*pre, password_, page_index, ops);
+  if (!report) return fail(report.error());
+  if (report->page_show_ops != plan->page_text_objects)
+    return fail(Error{ErrorCode::kUnsupported, "content stream does not match page objects"});
+  if (report->fitted == 0) {
+    (void)unpark_detached(*parked);
+    return false;
+  }
+  if (auto replaced = replace_bytes(std::move(report->bytes)); !replaced)
+    return fail(replaced.error());  // 옛 문서가 그대로 살아 있다
+  const auto rollback = [&](Error error) -> Result<bool> {
+    (void)replace_bytes(*pre);       // 실패해도 수술한 문서는 쓸 수 있다 (자간만 다르다)
+    (void)unpark_detached(*parked);  // 마크 id 로 다시 뗀다 — 어느 바이트든
+    return std::unexpected(std::move(error));
+  };
+  auto after_render = render_page(page_index, render);
+  if (!after_render) return rollback(after_render.error());
+  Rect area = plan->area;
+  double pad = plan->pad;
+  if (auto after_plan = plan_of(); after_plan && after_plan->has_area) {
+    const Rect& box = after_plan->area;
+    if (plan->has_area) {
+      const double x0 = std::min(area.x, box.x), y0 = std::min(area.y, box.y);
+      const double x1 = std::max(area.right(), box.right()),
+                   y1 = std::max(area.bottom(), box.bottom());
+      area = {x0, y0, x1 - x0, y1 - y0};
+    } else {
+      area = box;
+    }
+    pad = std::max(pad, after_plan->pad);
+  }
+  const int x0 = static_cast<int>(std::floor(area.x - pad)),
+            y0 = static_cast<int>(std::floor(area.y - pad));
+  const int x1 = static_cast<int>(std::ceil(area.right() + pad)),
+            y1 = static_cast<int>(std::ceil(area.bottom() + pad));
+  if (!same_outside(*before_render, *after_render, x0, y0, x1, y1))
+    return rollback(Error{ErrorCode::kSaveVerifyFailed, "letter spacing changed other content"});
+  if (auto unparked = unpark_detached(*parked); !unparked) return rollback(unparked.error());
+  ++spacing_reapplications_;
+  return true;
 }
 
 Result<void> PdfiumDocument::replace_bytes(std::vector<std::uint8_t> bytes) {

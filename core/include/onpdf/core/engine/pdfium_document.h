@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -140,6 +141,12 @@ class PdfiumDocument final : public EditableDocument {
     return static_cast<int>(states_.size());
   }  // 테스트용
   void set_state_byte_limit(std::size_t bytes) noexcept { state_byte_limit_ = bytes; }  // 테스트용
+  // 자간 재적용 (#87): 이번 편집에서 재생성한 쪽의 OnPdf 객체 가운데 Tc 를 잃은 것에 마크 ls 로
+  // 다시 넣는다 (qpdf 유효 Tc 추적으로 멱등, 고칠 것이 없으면 다시 열지 않는다)
+  [[nodiscard]] SpacingSettleResult settle_letter_spacing() noexcept override;
+  [[nodiscard]] int spacing_reapplications() const noexcept {
+    return spacing_reapplications_;
+  }  // 테스트용: 실제로 수술·다시 열기를 한 횟수
   // 현재 문서를 메모리에 저장 (FPDF_SaveAsCopy, 비증분). 수술·상태 토큰용
   [[nodiscard]] Result<std::vector<std::uint8_t>> save_to_memory() const;
 
@@ -214,6 +221,10 @@ class PdfiumDocument final : public EditableDocument {
   void remap_detached_pages(const std::vector<int>& new_index_of_old);
   // 상태 토큰 저장 (상한을 넘으면 오래된 것부터 폐기)
   DocumentStateId store_state(std::vector<std::uint8_t> bytes);
+  // 쪽 콘텐츠를 재생성할 수 있는 편집이 이 쪽을 건드렸다 (#87, settle 대상)
+  void note_regenerated(int page_index) { spacing_pending_.insert(page_index); }
+  // 한 쪽의 자간 재적용. true = 수술·다시 열기를 했다, false = 할 일 없음. 오류면 문서는 그대로
+  [[nodiscard]] Result<bool> reapply_spacing(int page_index);
 
   // 보조 문서: 삭제 취소용 쪽 사본 또는 삽입 소스 파일. data 가 doc 보다 오래 살아야 한다 (선언
   // 순서)
@@ -256,6 +267,8 @@ class PdfiumDocument final : public EditableDocument {
   std::size_t state_bytes_ = 0;
   std::size_t state_byte_limit_ = static_cast<std::size_t>(256) << 20;
   DocumentStateId next_state_ = 1;
+  std::set<int> spacing_pending_;   // 자간 재적용 후보 쪽 (#87)
+  int spacing_reapplications_ = 0;  // 테스트용 카운터
   std::unordered_map<int, std::unordered_set<std::string>>
       dropped_marks_;  // 쪽 → drop_detached 로 버린 마크 id (복원 뒤 되살아나면 지운다)
   // 폼 필 환경 (#51). 마지막에 선언 → 가장 먼저 소멸 (FPDFDOC_ExitFormFillEnvironment 는 문서를

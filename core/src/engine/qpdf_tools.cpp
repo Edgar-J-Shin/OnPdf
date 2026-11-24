@@ -25,6 +25,7 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <exception>
@@ -550,7 +551,8 @@ std::optional<std::string> fitted_operands(const ContentOp& op, std::string_view
 RewriteResult rewrite_content(QPDF& owner, const std::string& data, const std::set<int>& ordinals,
                               int ordinal_base, int& needs_displacement,
                               std::vector<std::string>* do_names,
-                              const std::vector<ShowOpFit>& fits = {}, int* fitted = nullptr) {
+                              const std::vector<ShowOpFit>& fits = {}, int* fitted = nullptr,
+                              int* already = nullptr) {
   CollectOps c;
   auto stream = QPDFObjectHandle::newStream(
       &owner, data);  // 파서용 임시 객체 (트레일러에서 닿지 않아 쓰이진 않는다)
@@ -568,6 +570,30 @@ RewriteResult rewrite_content(QPDF& owner, const std::string& data, const std::s
     }
   }
   r.show_ops = n - ordinal_base;
+  // 연산자 시점의 유효 Tc (텍스트 상태는 BT/ET 를 넘어 유지되고 q/Q 로 저장·복원된다) — fit 의 멱등
+  // 판정용 (#87)
+  std::vector<double> tc_at(c.ops.size(), 0.0);
+  if (!fits.empty()) {
+    double tc = 0.0;
+    std::vector<double> saved;
+    const auto number = [](const QPDFObjectHandle& h, double fallback) {
+      return h.isNumber() ? h.getNumericValue() : fallback;
+    };
+    for (std::size_t i = 0; i < c.ops.size(); ++i) {
+      tc_at[i] = tc;  // 표시 연산자 자신이 바꾸는 값(")은 그 글자에 적용되지만 fit 대상이 아니다
+      const ContentOp& op = c.ops[i];
+      if (op.name == "q") {
+        saved.push_back(tc);
+      } else if (op.name == "Q") {
+        tc = saved.empty() ? 0.0 : saved.back();
+        if (!saved.empty()) saved.pop_back();
+      } else if (op.name == "Tc" && !op.operands.empty()) {
+        tc = number(op.operands.back(), tc);
+      } else if (op.name == "\"" && op.operands.size() >= 3) {
+        tc = number(op.operands[op.operands.size() - 2], tc);
+      }
+    }
+  }
   // 앞 스트림에서 넘어온 밀림 검사: 이 스트림 첫머리에서 ET·위치 연산자 전에 남는 표시 연산자가
   // 오면 밀린다
   auto follower_shifts = [&](std::size_t from) {
@@ -585,6 +611,10 @@ RewriteResult rewrite_content(QPDF& owner, const std::string& data, const std::s
       const auto fit = std::find_if(fits.begin(), fits.end(),
                                     [&](const ShowOpFit& f) { return f.ordinal == ordinal_of[i]; });
       if (fit == fits.end()) continue;
+      if (std::abs(tc_at[i] - fit->char_space) < 1e-3) {
+        if (already != nullptr) ++*already;
+        continue;
+      }
       const auto replaced = fitted_operands(
           c.ops[i], std::string_view(data).substr(c.ops[i].start, c.ops[i].end - c.ops[i].start),
           *fit);
@@ -664,7 +694,7 @@ Result<SurgeryReport> QpdfTools::remove_text_show_ops(const std::vector<std::uin
       joined += data;
     }
     RewriteResult r = rewrite_content(q, joined, ops.page_ordinals, 0, report.needs_displacement,
-                                      &do_names, page_fits, &report.fitted);
+                                      &do_names, page_fits, &report.fitted, &report.already_fitted);
     if (r.dangling)
       return make_error(ErrorCode::kUnsupported, "content stream ends inside an operator");
     for (std::size_t k = 0; k < streams.size(); ++k) {

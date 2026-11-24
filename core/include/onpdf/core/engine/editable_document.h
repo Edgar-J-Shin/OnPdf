@@ -28,6 +28,13 @@ struct ChangeSet {
       -1;  // 구조 변경 뒤 보여 줄 쪽 (옮긴 블록·삽입 자리·지운 자리). -1 = 현재 쪽 유지
   std::vector<int>
       selected_pages;  // 구조 변경 뒤 썸네일에서 선택할 쪽 (옮긴·넣은·되살린 쪽). 비면 선택 없음
+  bool spacing_lost = false;  // 자간 재적용 실패(#87): 편집은 됐고 고친 줄이 자연 폭으로 남았다
+};
+
+// settle_letter_spacing 결과 (#87)
+struct SpacingSettleResult {
+  int pages_reapplied = 0;  // 자간을 다시 넣은 쪽 수
+  bool lost = false;        // 어느 쪽에서 다시 넣지 못했다 (문서는 편집 결과 그대로, 자연 폭)
 };
 
 struct EditPermissions {
@@ -182,6 +189,11 @@ class EditableDocument {
   // 콤보·목록 선택 (선택지 index). 다중 선택이 아니면 하나만
   [[nodiscard]] virtual Result<std::vector<int>> set_form_selection(
       int page_index, const FieldRef& ref, const std::vector<int>& indices) = 0;
+
+  // ---- 자간 재적용 (#87). 쪽 재생성(PDFium 은 Tc 를 쓰지 않는다)으로 잃은 OnPdf 객체의 자간을
+  // 마크 ls 로 되살린다. Command 실행·취소 뒤 한 번 부른다 (편집 중 기록한 쪽만 본다). 실패는 편집
+  // 실패가 아니다 ----
+  [[nodiscard]] virtual SpacingSettleResult settle_letter_spacing() noexcept { return {}; }
 };
 
 }  // namespace onpdf::engine

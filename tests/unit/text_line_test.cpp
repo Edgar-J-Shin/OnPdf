@@ -5,6 +5,7 @@
 #include "onpdf/core/engine/save.h"
 #include "onpdf/edit/add_text_command.h"
 #include "onpdf/edit/font_face.h"
+#include "onpdf/edit/object_commands.h"
 #include "onpdf/edit/text_box_commands.h"
 
 #include "../test_support.h"
@@ -746,13 +747,18 @@ TEST(TextLines, SpacingSurvivesSaveAndReopen) {
   auto reopened = PdfiumDocument::open(saved);
   ASSERT_TRUE(reopened);
   EXPECT_NEAR(box_width(*reopened, replaced->box), w0, 0.5) << "저장·다시 열기 뒤 폭 유지";
-  // 알려진 제한: 이동(GenerateContent 재생성)은 Tc 를 다시 쓰지 않아 자연 폭으로 돌아간다. 마크 ls
-  // 는 남는다 (후속: 이동 뒤 재적용)
+  // 이동(GenerateContent 재생성)은 Tc 를 쓰지 않아 자연 폭이 되지만, 편집 뒤 정산이 마크 ls 로 다시
+  // 넣는다 (#87)
   auto ids = std::vector<std::string>(replaced->ids.begin(), replaced->ids.end());
   ASSERT_TRUE(reopened->move_page_objects(0, ids, {5.0, 7.0}));
   const double natural = expected_width(wide.text, wide.font_size, 0.0);
   EXPECT_NEAR(box_width(*reopened, replaced->box), natural, std::max(2.5, natural * 0.03))
-      << "이동 뒤 자연 폭 (알려진 제한)";
+      << "정산 전에는 자연 폭 (PDFium 재생성)";
+  const SpacingSettleResult settled = reopened->settle_letter_spacing();
+  EXPECT_FALSE(settled.lost);
+  EXPECT_EQ(settled.pages_reapplied, 1);
+  EXPECT_NEAR(box_width(*reopened, replaced->box), w0, w0 * 0.01) << "정산 뒤 원래 폭 ±1%";
+  EXPECT_NE(page_text(*reopened).find(wide.text), std::string::npos) << "추출에 공백이 끼지 않는다";
   const auto saved2 = dir / "kern2.pdf";
   ASSERT_TRUE(reopened->save_to(saved2, false));
   auto again = PdfiumDocument::open(saved2);
@@ -761,6 +767,8 @@ TEST(TextLines, SpacingSurvivesSaveAndReopen) {
   ASSERT_TRUE(objects);
   ASSERT_EQ(objects->size(), 1u);
   EXPECT_NEAR((*objects)[0].letter_spacing, wide.letter_spacing, 0.01) << "마크 ls 는 남는다";
+  EXPECT_NEAR(box_width(*again, replaced->box), w0, w0 * 0.01)
+      << "옮긴 뒤 저장·다시 열기에도 폭 유지";
   auto check = QpdfTools::check(saved2);
   ASSERT_TRUE(check);
   EXPECT_TRUE(check->warnings.empty());
@@ -863,6 +871,141 @@ TEST(TextLines, OperatorSplitAcrossContentStreamsIsEdited) {
   EXPECT_NE(page_text(*doc).find("Arr ay split"), std::string::npos) << "뒤 줄은 그대로";
   auto check = QpdfTools::check(testdata("text-lines-split.pdf"));
   ASSERT_TRUE(check);
+}
+
+// ---- 자간 재적용 (#87) ----
+
+// 객체 하나의 잉크 폭 (쪽 포인트)
+double object_width(const PdfiumDocument& doc, const std::string& id) {
+  auto objects = doc.text_objects(0);
+  EXPECT_TRUE(objects);
+  for (const auto& o : *objects) {
+    if (o.id == id) return o.bbox.w;
+  }
+  ADD_FAILURE() << "object not found: " << id;
+  return 0.0;
+}
+
+// qpdf 가 유효 Tc 를 추적해 이미 목표 값인 연산자는 건드리지 않는다 (두 번 적용해도 한 번)
+TEST(SpacingReapply, SurgeryFitIsIdempotent) {
+  const auto bytes = onpdf::test::read_bytes(testdata("text-lines-kern.pdf"));
+  // 순번 1 = "Char spaced line here" (원본이 2 Tc) → 목표 2 는 이미 적용됨
+  ShowOpSurgery already;
+  already.fits = {{-1, 1, 2.0}};
+  auto r0 = QpdfTools::remove_text_show_ops(bytes, {}, 0, already);
+  ASSERT_TRUE(r0) << r0.error().message;
+  EXPECT_EQ(r0->fitted, 0);
+  EXPECT_EQ(r0->already_fitted, 1);
+  // 순번 4 = Plain (Tc 0): 처음엔 감싸고, 결과에 다시 돌리면 건너뛴다
+  ShowOpSurgery ops;
+  ops.fits = {{-1, 4, 1.5}};
+  auto r1 = QpdfTools::remove_text_show_ops(bytes, {}, 0, ops);
+  ASSERT_TRUE(r1) << r1.error().message;
+  EXPECT_EQ(r1->fitted, 1);
+  auto r2 = QpdfTools::remove_text_show_ops(r1->bytes, {}, 0, ops);
+  ASSERT_TRUE(r2) << r2.error().message;
+  EXPECT_EQ(r2->fitted, 0);
+  EXPECT_EQ(r2->already_fitted, 1);
+  // 다른 값이면 다시 감싼다 (바깥 Tc 를 안쪽이 덮는다)
+  ShowOpSurgery other;
+  other.fits = {{-1, 4, 0.5}};
+  auto r3 = QpdfTools::remove_text_show_ops(r1->bytes, {}, 0, other);
+  ASSERT_TRUE(r3) << r3.error().message;
+  EXPECT_EQ(r3->fitted, 1);
+}
+
+// 자간 없는 줄을 고치고 옮겨도 정산은 수술·다시 열기를 하지 않는다
+TEST(SpacingReapply, SettleIsNoOpWithoutSpacing) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-kern.pdf"));
+  ASSERT_TRUE(doc);
+  const TextLineInfo plain = *find_line(*doc->text_lines(0), "Plain line without spacing");
+  LineReplacement same{plain.text, fallback_for(plain, plain.text), std::nullopt, std::nullopt};
+  auto replaced = doc->replace_text_line(0, plain.id, same);
+  ASSERT_TRUE(replaced) << replaced.error().message;
+  EXPECT_FALSE(replaced->fitted);
+  ASSERT_TRUE(doc->move_page_objects(0, replaced->ids, {3.0, 3.0}));
+  const SpacingSettleResult settled = doc->settle_letter_spacing();
+  EXPECT_FALSE(settled.lost);
+  EXPECT_EQ(settled.pages_reapplied, 0);
+  EXPECT_EQ(doc->spacing_reapplications(), 0);
+  EXPECT_EQ(doc->settle_letter_spacing().pages_reapplied, 0) << "기록이 비면 할 일 없음";
+}
+
+// 여러 줄 상자: ls 는 첫 줄에만 있지만 모든 줄에 자간이 들어가고, 같은 스트림의 형제를 지워
+// 스트림이 재생성돼도 남은 줄이 되살아난다. 대체 글꼴 상자 추가(ReplaceTextBoxCommand 경로)도
+// 처음부터 자간
+TEST(SpacingReapply, MultiLineBoxAndSiblingRemoval) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-kern.pdf"));
+  ASSERT_TRUE(doc);
+  const TextLineInfo plain = *find_line(*doc->text_lines(0), "Plain line without spacing");
+  TextObjectsSpec spec = fallback_for(plain, "Alpha line one\nBravo line two");
+  ASSERT_EQ(spec.lines.size(), 2u);
+  spec.letter_spacing = 1.5;
+  auto added = doc->add_text_objects(0, spec);
+  ASSERT_TRUE(added) << added.error().message;
+  ASSERT_EQ(added->ids.size(), 2u);
+  const double natural0 = expected_width("Alpha line one", plain.font_size, 0.0);
+  const double natural1 = expected_width("Bravo line two", plain.font_size, 0.0);
+  EXPECT_NEAR(object_width(*doc, added->ids[0]), natural0, natural0 * 0.03) << "정산 전 자연 폭";
+  const SpacingSettleResult settled = doc->settle_letter_spacing();
+  EXPECT_FALSE(settled.lost);
+  EXPECT_EQ(settled.pages_reapplied, 1);
+  const double spaced0 = expected_width("Alpha line one", plain.font_size, 1.5);
+  const double spaced1 = expected_width("Bravo line two", plain.font_size, 1.5);
+  const double w0 = object_width(*doc, added->ids[0]);
+  EXPECT_NEAR(w0, spaced0, std::max(2.0, spaced0 * 0.03)) << "첫 줄";
+  EXPECT_NEAR(object_width(*doc, added->ids[1]), spaced1, std::max(2.0, spaced1 * 0.03))
+      << "둘째 줄 (마크 ls 는 첫 줄에만)";
+  EXPECT_GT(spaced1 - natural1, 10.0) << "픽스처가 자간 차이를 볼 만큼 크다";
+  // 형제 삭제 → 같은 스트림 재생성 → 정산
+  ASSERT_TRUE(doc->remove_text_objects(0, {added->ids[1]}));
+  EXPECT_NEAR(object_width(*doc, added->ids[0]), natural0, natural0 * 0.03)
+      << "형제 삭제가 스트림을 다시 써서 자간이 사라진다";
+  EXPECT_EQ(doc->settle_letter_spacing().pages_reapplied, 1);
+  EXPECT_NEAR(object_width(*doc, added->ids[0]), w0, w0 * 0.01);
+  EXPECT_NE(page_text(*doc).find("Alpha line one"), std::string::npos);
+  EXPECT_EQ(doc->spacing_reapplications(), 2);
+}
+
+// Command 실행 → 취소 → 재실행: 각 단계 뒤 정산(EditController 와 같다)하면 폭이 같다
+TEST(SpacingReapply, CommandsKeepWidthThroughUndoRedo) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-kern.pdf"));
+  ASSERT_TRUE(doc);
+  const TextLineInfo wide = *find_line(*doc->text_lines(0), "Kerned wide gaps here");
+  LineReplacement same{wide.text, fallback_for(wide, wide.text), std::nullopt, std::nullopt};
+  auto replaced = doc->replace_text_line(0, wide.id, same);
+  ASSERT_TRUE(replaced) << replaced.error().message;
+  ASSERT_TRUE(replaced->fitted);
+  const std::string box = replaced->box;
+  const double w0 = box_width(*doc, box);
+  const auto step = [&](const char* what, Result<ChangeSet> r) {
+    ASSERT_TRUE(r) << what << ": " << r.error().message;
+    const SpacingSettleResult s = doc->settle_letter_spacing();
+    EXPECT_FALSE(s.lost) << what;
+    EXPECT_NEAR(box_width(*doc, box), w0, w0 * 0.01) << what;
+  };
+  edit::MoveObjectsCommand move(0, replaced->ids, {12.0, -4.0});
+  step("move", move.execute(*doc));
+  step("move undo", move.undo(*doc));
+  step("move redo", move.execute(*doc));
+  // 대체 글꼴 상자의 색 변경 (삭제 + 재생성) — 이전에는 처음부터 자연 폭이었다
+  edit::ReplaceTextBoxCommand recolor(0, box, bundled_face(), std::nullopt, std::nullopt,
+                                      Color{200, 20, 20, 255});
+  step("recolor", recolor.execute(*doc));
+  step("recolor undo", recolor.undo(*doc));
+  step("recolor redo", recolor.execute(*doc));
+  // 삭제 → 취소(떼어 둔 객체를 되붙임)
+  auto objects = doc->text_objects(0);
+  ASSERT_TRUE(objects);
+  std::vector<std::string> ids;
+  for (const auto& o : *objects) {
+    if (o.box == box) ids.push_back(o.id);
+  }
+  edit::RemoveObjectsCommand remove(0, ids);
+  ASSERT_TRUE(remove.execute(*doc));
+  EXPECT_FALSE(doc->settle_letter_spacing().lost);
+  step("remove undo", remove.undo(*doc));
+  EXPECT_NE(page_text(*doc).find(wide.text), std::string::npos);
 }
 }  // namespace
 }  // namespace onpdf::engine
