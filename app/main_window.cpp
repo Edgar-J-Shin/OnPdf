@@ -2172,6 +2172,10 @@ void MainWindow::on_document_changed(const onpdf::engine::ChangeSet& change) {
     view_->set_tool(AnnotationTool::kSelect);
     view_->select_after_refresh(page, id);
   }
+  if (change.spacing_lost) {
+    // 편집은 됐지만 PDFium 재생성으로 사라진 자간을 다시 넣지 못했다 (#87)
+    statusBar()->showMessage(tr("자간을 되살리지 못해 고친 글이 기본 간격으로 표시됩니다"), 6000);
+  }
   refresh_status();
 }
 

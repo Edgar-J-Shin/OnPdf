@@ -61,7 +61,11 @@ bool EditController::dispatch(std::shared_ptr<edit::Command> command, Op op) {
   // 실행된다
   handle_.modify(
       [command, op](engine::EditableDocument& doc) {
-        return op == Op::kUndo ? command->undo(doc) : command->execute(doc);
+        auto result = op == Op::kUndo ? command->undo(doc) : command->execute(doc);
+        // 쪽 재생성으로 잃은 자간을 되살린다 (#87). 실패한 명령도 보상 단계에서 재생성했을 수 있다
+        const engine::SpacingSettleResult spacing = doc.settle_letter_spacing();
+        if (result && spacing.lost) result->spacing_lost = true;
+        return result;
       },
       // 워커 스레드: 메인으로 넘기기만
       [dispatcher, self, op, command, generation](Result<engine::ChangeSet> result) {
