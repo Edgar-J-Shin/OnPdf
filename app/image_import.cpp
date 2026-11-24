@@ -105,7 +105,7 @@ QString image_file_filter() {
       patterns << QStringLiteral("*.") + QString::fromLatin1(f);
   }
   patterns.removeDuplicates();
-  return QObject::tr("이미지 (%1)").arg(patterns.join(QLatin1Char(' ')));
+  return QObject::tr("Images (%1)").arg(patterns.join(QLatin1Char(' ')));
 }
 
 bool looks_like_image_file(const QString& path) {
