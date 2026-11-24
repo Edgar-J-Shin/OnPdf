@@ -39,7 +39,7 @@ OutlinePanel::OutlinePanel(QWidget* parent) : QWidget(parent) {
   tree_->setTextElideMode(Qt::ElideRight);
   tree_->header()->setStretchLastSection(true);
 
-  empty_label_ = new QLabel(tr("목차가 없습니다"), stack_);
+  empty_label_ = new QLabel(tr("No outline"), stack_);
   empty_label_->setAlignment(Qt::AlignCenter);
   empty_label_->setWordWrap(true);
   empty_label_->setEnabled(false);  // 흐린 글씨
@@ -48,7 +48,8 @@ OutlinePanel::OutlinePanel(QWidget* parent) : QWidget(parent) {
   stack_->addWidget(empty_label_);
   stack_->setCurrentWidget(empty_label_);
 
-  notice_label_ = new QLabel(tr("목차가 손상되었거나 너무 커서 일부만 표시합니다"), this);
+  notice_label_ =
+      new QLabel(tr("The outline is damaged or too large, so only part of it is shown"), this);
   notice_label_->setWordWrap(true);
   notice_label_->setContentsMargins(6, 4, 6, 4);
   notice_label_->hide();
@@ -82,7 +83,7 @@ void OutlinePanel::set_outline(std::shared_ptr<const view::Outline> outline) {
     const auto& item = outline_->items[to_size(i)];
     QString title = QString::fromUtf8(item.title.data(), static_cast<qsizetype>(item.title.size()))
                         .simplified();
-    if (title.isEmpty()) title = tr("(제목 없음)");
+    if (title.isEmpty()) title = tr("(Untitled)");
     auto* row = new QStandardItem(title);
     row->setData(i, kItemRole);
     row->setToolTip(title);

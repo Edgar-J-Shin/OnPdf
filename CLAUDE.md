@@ -27,7 +27,7 @@ Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜
 - 배포 타깃: Windows x64(MSVC 2022) 와 macOS 13+(Apple Clang, arm64·x64). 개발 머신은 macOS. Linux 는 `core`·`cli`·`tests` CI 빌드만. 플랫폼 분기는 최소화하고 Qt 에 맡긴다. 설치 파일: Windows 설치기 + macOS DMG(공증) — M5
 - PDF 엔진: PDFium (`bblanchon/pdfium-binaries` 사전 빌드, Chromium 브랜치 번호로 버전 고정 — `third_party/` 스크립트)
 - 구조 작업: qpdf 12 (vcpkg, 라이브러리만·내장 암호 공급자) — 병합·분할·구조 검사. 헤더는 `core/src/engine/qpdf_tools.cpp` 에서만. 암호화 설정·복구 저장은 후속
-- UI: Qt 6 Widgets, **동적 링크**(LGPL 준수)
+- UI: Qt 6.7+ Widgets(+ LinguistTools), **동적 링크**(LGPL 준수). UI 원문은 영어, 한국어는 번역(#8)
 - 글자 배치·서브셋: HarfBuzz(vcpkg, `default-features: false`, `harfbuzz::harfbuzz-subset`) — **edit 에만** 링크. FreeType 은 쓰지 않는다(PDFium 공유 라이브러리가 `FT_*` 154개를 내보내 Linux 에서 충돌 위험). 번들 글꼴 Noto Sans KR(OFL)은 `third_party/fetch_fonts.py` 로 받아 앱 빌드가 `bin/fonts/` 로 복사한다(저장소에 없음)
 - 테스트: GoogleTest + 렌더링 이미지 비교
 - CI: GitHub Actions — `windows-latest`·`macos-latest` 는 Qt 앱·app 테스트까지(`dev-app`), `ubuntu-latest` 는 core(`dev`) + testdata 결정성 검사
@@ -62,7 +62,8 @@ open -n build/dev-app/bin/onpdf_app.app --args "$PWD/testdata/simple.pdf"   # �
 build/dev-app/bin/onpdf_app.app/Contents/MacOS/onpdf_app --self-test testdata/simple.pdf   # 배포물 점검: 0 성공·1 렌더·2 글꼴·3 qpdf
 # Windows/Linux: build/dev-app/bin/onpdf_app(.exe) testdata/simple.pdf
 cmake --preset release-app && cmake --build --preset release-app && cmake --install build/release-app --prefix stage   # 배포용 설치 (#90)
-ctest --preset dev-app                                         # app 테스트(offscreen) 포함
+ctest --preset dev-app                                         # app 테스트(offscreen) + i18n_check 포함
+cmake --build --preset dev-app --target update_translations    # tr() 를 바꾼 뒤 app/i18n/*.ts 갱신 → 한국어 번역 채우기 (#8)
 ```
 
 - 테스트 PDF: `python3 testdata/gen/make_all.py` 로 전부 생성(표준 라이브러리만, 결정적). `--check` 가 CI 에서 커밋본과 비교. 파일별 기대값은 `testdata/manifest.tsv`, 절차는 `testdata/README.md`. 왕복 테스트의 구조 검사는 qpdf **라이브러리**(`QpdfTools::check`)라 외부 명령이 없어도 돈다
@@ -74,7 +75,7 @@ ctest --preset dev-app                                         # app 테스트(o
 # Architecture
 
 ```text
-app/          Qt UI (Qt 의존). onpdf_app_lib(UiDispatcher·DocumentSession·qt_image·DocumentTileSource·DocumentView·SearchBar·ThumbnailPanel·OutlinePanel·PrintJob·EditController·AnnotationDialog·FormFieldEditor·StructureJob·MainWindow) + onpdf_app(main 만)
+app/          Qt UI (Qt 의존). onpdf_app_lib(UiDispatcher·DocumentSession·qt_image·DocumentTileSource·DocumentView·SearchBar·ThumbnailPanel·OutlinePanel·PrintJob·EditController·AnnotationDialog·FormFieldEditor·StructureJob·MainWindow·i18n) + onpdf_app(main 만)
 edit/         Command(execute/undo/discard, EditableDocument 로만 문서 변경)·UndoStack(저장 지점, push 가 밀려난 명령 반환)
               RotatePageCommand(여러 쪽)·DeletePagesCommand(스냅샷으로 취소)·MovePagesCommand(역순열 취소)·InsertPagesCommand(파일 스냅샷)
               annotation_commands(AddAnnotations·RemoveAnnotation·SetAnnotationColor·SetAnnotationContents — /NM 과 값만 보관)
@@ -163,7 +164,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 4. **텍스트는 UTF-8**: 유니코드 매핑 오류 글자와 유니코드 스칼라가 아닌 값은 U+FFFD(`view::sanitize_text_code`). 내부 문자열은 UTF-8 `std::string`. PDFium 의 UTF-16LE 와는 core/engine 경계에서만 변환. 한글(CID 폰트) 경로는 항상 테스트를 함께 만든다. 글자 좌표는 PDFium 사용자 좌표(좌하단, 회전 전)가 아니라 `TextPage` 가 `FPDF_PageToDevice`(×1000 트릭)로 바꾼 "쪽 포인트"(좌상단, 회전 반영)를 쓴다.
 5. **플랫폼 분기 최소화**: `#ifdef _WIN32` 는 `core/platform/`, `app/`, `cli/main.cpp`(wmain) 에만. 경로는 `std::filesystem::path` 이되 **UTF-8 문자열에서 만들 때는 반드시 `onpdf::path_from_utf8`**(`core/platform/path.h`) 를 쓴다 — Windows 는 `path(std::string)` 을 코드 페이지로 해석해 한글 경로가 깨진다. 오류 메시지 등 역변환은 `path_to_utf8`.
 6. **스타일**: `.clang-format`(Google, 100열) 준수 — 저장소 전체가 정리돼 있다(#85). 커밋 전 바꾼 파일에만 `clang-format -i`. 서식 전용 커밋은 `.git-blame-ignore-revs` 에 등록한다(로컬: `git config blame.ignoreRevsFile .git-blame-ignore-revs`). 클래스 `PascalCase`, 함수·변수 `snake_case`, 멤버 `name_`, 상수 `kName`. 헤더는 `#pragma once`. 주석·문서는 한국어, 식별자·커밋 메시지 제목은 영어.
-7. **i18n**: 사용자 노출 문자열은 `tr()` 로 감싸고 `app/i18n/` 에 ko/en 둘 다 추가. 하드코딩 금지.
+7. **i18n(#8)**: 사용자 노출 문자열은 **영어 원문** `tr()`(문맥은 클래스 — `window->tr(...)` 처럼 포인터로 부르면 lupdate 가 못 찾으므로 `MainWindow::tr`, 익명 이름공간의 표는 `QT_TRANSLATE_NOOP("onpdf::app::MainWindow", …)`). 개수가 붙으면 `tr("%n file(s)", nullptr, n)`. 새 문자열은 `cmake --build --preset dev-app --target update_translations` 로 `app/i18n/onpdf_ko.ts`(한국어)·`onpdf_en.ts`(영어 복수형만)를 갱신하고 번역을 채운다 — ctest `i18n_check`(`scripts/check_translations.py`)가 누락·미완료를 잡는다. `.qm` 과 Qt 표준 문구 `qtbase_ko.qm` 은 `onpdf_app_lib` 리소스(`:/i18n/`)에 들어간다. 앱 언어: `--lang ko|en` → `ONPDF_LANG` → 시스템 선호 언어(ko 외 영어), 시작 때 한 번(`app/i18n.h` `set_language`). 앱 테스트는 진입점이 한국어를 설치하고 돈다(한국어 문구 비교). 하드코딩 금지.
 8. **Simplicity**: 보일러플레이트 최소화, 기존 패턴 우선. 새 의존성은 `vcpkg.json` 추가 전에 상의.
 
 # Testing Strategy

@@ -1,6 +1,6 @@
 # Qt 6 Widgets UI. ONPDF_BUILD_APP=ON (preset dev-app) 일 때만 빌드한다.
 # 사전 준비: export QT_ROOT=$(brew --prefix qt)   (preset 이 CMAKE_PREFIX_PATH 로 넘긴다)
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets PrintSupport)
+find_package(Qt6 6.7 REQUIRED COMPONENTS Core Gui Widgets PrintSupport LinguistTools)  # 6.7: qt_add_translations 의 SOURCE_TARGETS·PLURALS_TS_FILE (#8)
 qt_standard_project_setup()
 # .ui 파일을 쓰지 않는다. AUTOUIC 가 켜져 있으면 "ui_*.h" 헤더를 uic 산출물로 오해한다.
 set(CMAKE_AUTOUIC OFF)
@@ -24,6 +24,7 @@ add_library(onpdf_app_lib STATIC
   font_catalog_loader.h font_catalog_loader.cpp
   main_window.h main_window.cpp
   file_open_filter.h
+  i18n.h i18n.cpp
 )
 target_include_directories(onpdf_app_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(onpdf_app_lib PUBLIC onpdf::core onpdf::edit Qt6::Core Qt6::Gui Qt6::Widgets Qt6::PrintSupport)
@@ -43,6 +44,27 @@ set_target_properties(onpdf_app PROPERTIES
   MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
   MACOSX_BUNDLE_COPYRIGHT "OnPdf contributors. Apache License 2.0")
 target_link_libraries(onpdf_app PRIVATE onpdf_app_lib Qt6::Widgets)
+
+# 번역 (#8): 원문은 영어, 한국어는 onpdf_ko.ts, 영어 복수형은 onpdf_en.ts. .qm 은 정적 라이브러리
+# 리소스(:/i18n/)로 들어가 앱과 앱 테스트가 함께 쓴다. 새 문자열은 update_translations 타깃으로
+# .ts 를 갱신하고 한국어를 채운다 (i18n_check 테스트가 누락을 잡는다)
+qt_add_translations(onpdf_app_lib
+  TS_FILES ${CMAKE_CURRENT_SOURCE_DIR}/i18n/onpdf_ko.ts
+  PLURALS_TS_FILE ${CMAKE_CURRENT_SOURCE_DIR}/i18n/onpdf_en.ts
+  SOURCE_TARGETS onpdf_app_lib onpdf_app
+  RESOURCE_PREFIX "/i18n"
+  LUPDATE_OPTIONS -no-obsolete -locations none)
+# Qt 표준 문구(QMessageBox 단추·파일 대화상자)의 한국어. 배포 도구(windeployqt --no-translations,
+# macdeployqt)와 무관하게 실행 파일에 넣는다. 없으면 표준 단추만 영어로 남는다
+set(_onpdf_qt_translations "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_TRANSLATIONS}")
+if(EXISTS "${_onpdf_qt_translations}/qtbase_ko.qm")
+  qt_add_resources(onpdf_app_lib "onpdf_qt_translations"
+    PREFIX "/i18n"
+    BASE "${_onpdf_qt_translations}"
+    FILES "${_onpdf_qt_translations}/qtbase_ko.qm")
+else()
+  message(WARNING "qtbase_ko.qm not found in ${_onpdf_qt_translations}: Qt standard dialogs stay English in Korean UI")
+endif()
 target_compile_definitions(onpdf_app PRIVATE ONPDF_VERSION="${PROJECT_VERSION}")
 onpdf_set_warnings(onpdf_app)
 onpdf_set_runtime_rpath(onpdf_app)

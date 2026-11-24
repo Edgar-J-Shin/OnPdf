@@ -1819,7 +1819,7 @@ void DocumentView::update_hover(QPointF viewport_pos) {
       if (const view::Link* link = index->link_at(pt)) {
         cursor = Qt::PointingHandCursor;
         target = link->kind == view::LinkKind::kUri ? QString::fromStdString(link->uri)
-                                                    : tr("%1 쪽").arg(link->page + 1);
+                                                    : tr("Page %1").arg(link->page + 1);
       } else if (index->hit_test(pt)) {
         cursor = Qt::IBeamCursor;
       }
