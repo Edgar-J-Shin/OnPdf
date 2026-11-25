@@ -21,6 +21,7 @@
 #include "form_field_editor.h"
 #include "image_import.h"
 #include "outline_panel.h"
+#include "print_preview_dialog.h"
 #include "search_bar.h"
 #include "thumbnail_panel.h"
 #include <QAction>
@@ -366,6 +367,7 @@ void MainWindow::continue_open(const QString& path) {
     return;
   }
   show_transient(tr("Opening: %1").arg(QFileInfo(path).fileName()));
+  print_unlock_.reset();
   session_.open(path);
 }
 
@@ -385,6 +387,7 @@ void MainWindow::on_opened(const QString& path, int page_count) {
     show_transient(tr("XFA forms are not supported (only the AcroForm part is shown)"));
   }
   if (page_count <= 0) {
+    print_unlock_.reset();
     if (!screenshot_path_.isEmpty()) {
       fail_screenshot(QStringLiteral("no pages"));
       return;
@@ -425,6 +428,18 @@ void MainWindow::on_opened(const QString& path, int page_count) {
     on_search_query(search_bar_->query(), search_bar_->options());
   }
   refresh_status();
+  if (print_unlock_) {  // 권한 암호로 다시 열었다 (#23)
+    const PendingPrintUnlock unlock = *print_unlock_;
+    print_unlock_.reset();
+    if (unlock.page > 0) view_->go_to_page(unlock.page);
+    if (session_.handle().info().print.allowed) {
+      show_transient(tr("Printing unlocked"));
+      if (auto_print_after_unlock_)
+        QTimer::singleShot(0, this, &MainWindow::on_print);  // 바로 인쇄 대화상자로
+    } else {
+      prompt_print_unlock_password(tr("That is not the permissions password."));
+    }
+  }
 }
 
 // ---------------------------------------------------------------- 편집·저장
@@ -2322,8 +2337,10 @@ void MainWindow::update_print_action() {
                          session_.handle().info().page_count > 0;
   const bool allowed = has_pages && session_.handle().info().print.allowed;
   const bool busy = print_job_ && print_job_->active();
-  print_action_->setEnabled(allowed && !busy);
-  const QString tip = has_pages && !allowed ? tr("This document does not allow printing")
+  // 금지 문서도 켜 둔다: Cmd+P 가 권한 암호 해제 안내로 이어진다 (#23)
+  print_action_->setEnabled(has_pages && !busy);
+  const QString tip = has_pages && !allowed ? tr("This document does not allow printing. You can "
+                                                 "unlock it with its permissions password")
                                             : tr("Print the document");
   print_action_->setStatusTip(tip);
   print_action_->setToolTip(tip);
@@ -2331,24 +2348,84 @@ void MainWindow::update_print_action() {
 }
 
 void MainWindow::on_print() {
-  if (!print_action_->isEnabled()) return;
+  if (!print_action_->isEnabled() || !session_.has_document()) return;
+  if (!session_.handle().info().print.allowed) {  // 권한 암호로 해제할 수 있다 (#23)
+    offer_print_unlock();
+    return;
+  }
   if (!printer_) printer_ = std::make_unique<QPrinter>(QPrinter::HighResolution);
   const auto& info = session_.handle().info();
   if (!print_prefs_applied_) {
     apply_print_preferences(*printer_, info.print, info.page_count);
     print_prefs_applied_ = true;
   }
-  QPrintDialog dialog(printer_.get(), this);
-  dialog.setWindowTitle(tr("Print"));
-  dialog.setOptions(QAbstractPrintDialog::PrintPageRange | QAbstractPrintDialog::PrintCurrentPage |
-                    QAbstractPrintDialog::PrintCollateCopies | QAbstractPrintDialog::PrintToFile |
-                    QAbstractPrintDialog::PrintShowPageSize);
-  dialog.setMinMax(1, info.page_count);
+  const int current = std::max(0, view_->current_page());
+  const auto run_dialog = [&](QWidget* parent) {
+    QPrintDialog dialog(printer_.get(), parent);
+    dialog.setWindowTitle(tr("Print"));
+    dialog.setOptions(QAbstractPrintDialog::PrintPageRange |
+                      QAbstractPrintDialog::PrintCurrentPage |
+                      QAbstractPrintDialog::PrintCollateCopies | QAbstractPrintDialog::PrintToFile |
+                      QAbstractPrintDialog::PrintShowPageSize);
+    dialog.setMinMax(1, session_.handle().info().page_count);
+    return dialog.exec() == QDialog::Accepted;
+  };
+  if (!run_dialog(this)) return;
+  // 미리보기(#23): 용지 배치를 보고 배율·흑백을 고른다. 범위·용지를 바꾸려면 "설정…" 으로
+  // 대화상자를 다시 연다 (선택한 배율·흑백은 유지)
+  PrintPreviewDialog preview(session_.handle(), dispatcher_, *printer_,
+                             make_print_request(*printer_, session_.handle().info(), current),
+                             this);
+  connect(&preview, &PrintPreviewDialog::settings_requested, &preview, [&] {
+    if (!run_dialog(&preview)) return;
+    PrintJob::Request again = make_print_request(*printer_, session_.handle().info(), current);
+    again.scaling = preview.request().scaling;
+    again.grayscale = preview.request().grayscale;
+    preview.set_request(std::move(again));
+  });
+  if (preview.exec() != QDialog::Accepted) return;
+  print_with(*printer_, preview.request());
+}
+
+void MainWindow::offer_print_unlock() {
+  QMessageBox box(QMessageBox::Question, tr("Printing Not Allowed"),
+                  tr("This document does not allow printing.\nIf you know its permissions (owner) "
+                     "password, you can unlock printing."),
+                  QMessageBox::NoButton, this);
+  box.setObjectName(QStringLiteral("print_unlock_question"));
+  QPushButton* enter = box.addButton(tr("Enter Permissions Password…"), QMessageBox::AcceptRole);
+  QPushButton* cancel = box.addButton(tr("Cancel"), QMessageBox::RejectRole);
+  box.setDefaultButton(enter);
+  box.setEscapeButton(cancel);
+  box.exec();
+  if (box.clickedButton() != enter) return;
+  // 다시 열면 편집 기록이 사라진다 → 분할과 같은 규칙으로 먼저 저장 여부를 묻는다
+  maybe_save([this] { prompt_print_unlock_password(QString()); });
+}
+
+void MainWindow::prompt_print_unlock_password(const QString& note) {
+  if (!session_.has_document()) return;
+  QInputDialog dialog(this);
+  dialog.setObjectName(QStringLiteral("print_unlock_password"));
+  dialog.setWindowTitle(tr("Permissions Password"));
+  dialog.setLabelText(
+      (note.isEmpty() ? QString() : note + QLatin1Char('\n')) +
+      tr("Permissions password for %1:").arg(QFileInfo(session_.path()).fileName()));
+  dialog.setTextEchoMode(QLineEdit::Password);
   if (dialog.exec() != QDialog::Accepted) return;
-  print_with(*printer_);
+  // 같은 파일을 그 암호로 다시 연다. 소유자 암호면 PDFium 이 권한 비트를 전부 켠다. 틀리면 세션이
+  // 기존 문서를 유지한 채 password_required 를, 사용자 암호면 opened 를 보낸다
+  print_unlock_ = PendingPrintUnlock{std::max(0, view_->current_page())};
+  session_.open(session_.path(), dialog.textValue());
 }
 
 bool MainWindow::print_with(QPrinter& printer) {
+  if (!session_.has_document() || !session_.handle().valid()) return false;
+  return print_with(printer, make_print_request(printer, session_.handle().info(),
+                                                std::max(0, view_->current_page())));
+}
+
+bool MainWindow::print_with(QPrinter& printer, PrintJob::Request request) {
   if (!session_.has_document() || !session_.handle().valid()) return false;
   if (print_job_ && print_job_->active()) return false;
   settle_form_edits();  // 입력 중인 칸 값으로 인쇄한다 (#51)
@@ -2361,8 +2438,6 @@ bool MainWindow::print_with(QPrinter& printer) {
     show_transient(tr("This document does not allow printing"));
     return false;
   }
-  PrintJob::Request request =
-      make_print_request(printer, handle.info(), std::max(0, view_->current_page()));
   if (request.steps.empty()) {
     show_transient(tr("There are no pages to print"));
     return false;
@@ -2665,6 +2740,11 @@ void MainWindow::on_password_required(const QString& path) {
     fail_screenshot(QStringLiteral("password required"));
     return;
   }
+  if (print_unlock_) {  // 권한 암호가 틀렸다 — 기존 문서는 그대로다 (#23)
+    print_unlock_.reset();
+    prompt_print_unlock_password(tr("Wrong password."));
+    return;
+  }
   bool ok = false;
   const QString password =
       QInputDialog::getText(this, tr("Password Required"),
@@ -2678,6 +2758,7 @@ void MainWindow::on_password_required(const QString& path) {
 }
 
 void MainWindow::on_open_failed(const QString& path, const QString& message) {
+  print_unlock_.reset();
   if (!screenshot_path_.isEmpty()) {
     fail_screenshot(message);
     return;

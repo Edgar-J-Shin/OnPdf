@@ -75,7 +75,7 @@ cmake --build --preset dev-app --target update_translations    # tr() 를 바꾼
 # Architecture
 
 ```text
-app/          Qt UI (Qt 의존). onpdf_app_lib(UiDispatcher·DocumentSession·qt_image·DocumentTileSource·DocumentView·SearchBar·ThumbnailPanel·OutlinePanel·PrintJob·EditController·AnnotationDialog·FormFieldEditor·StructureJob·MainWindow·i18n) + onpdf_app(main 만)
+app/          Qt UI (Qt 의존). onpdf_app_lib(UiDispatcher·DocumentSession·qt_image·DocumentTileSource·DocumentView·SearchBar·ThumbnailPanel·OutlinePanel·PrintJob·EditController·AnnotationDialog·FormFieldEditor·StructureJob·PrintPreviewDialog·MainWindow·i18n) + onpdf_app(main 만)
 edit/         Command(execute/undo/discard, EditableDocument 로만 문서 변경)·UndoStack(저장 지점, push 가 밀려난 명령 반환)
               RotatePageCommand(여러 쪽)·DeletePagesCommand(스냅샷으로 취소)·MovePagesCommand(역순열 취소)·InsertPagesCommand(파일 스냅샷)
               annotation_commands(AddAnnotations·RemoveAnnotation·SetAnnotationColor·SetAnnotationContents — /NM 과 값만 보관)
@@ -155,7 +155,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 - 배율은 `quantize_scale(zoom × dpr)` 로 1/64 단위. 맞춤 배율은 내림(`fit_*_scale_q`) 이라 문서가 뷰포트를 넘지 않는다
 - 타일 경계는 AGG 클리핑 때문에 전체 렌더와 픽셀 단위로 완전히 같지는 않다(0.03% 수준). `tile_stitch_test` 가 0.1% 상한으로 검증
 - 사이드바(F4): `ThumbnailPanel` 은 보이는 행 ±4 쪽만 `render_page`(kLow, 동시 8) → `QCache` 64MB, 문서 교체·폭 32px 이상 변화·화면 배율 변경(`DevicePixelRatioChange`) 시 세대 증가로 늦은 결과를 버린다. 스크롤바를 끄는 동안은 요청하지 않는다. 목차 강조·상태 표시줄 통계는 스로틀(100ms·1초)로 갱신. `OutlinePanel` 은 `load_outline`(kNormal) 스냅샷을 표시하고, /XYZ 이동은 `resolve_location`(kHigh) → `scroll_to_page_point`. 현재 항목은 `DocumentView::reading_position` + `Outline::item_at`
-- 인쇄(Ctrl/Cmd+P): 래스터 인쇄. `PrintJob` 이 쪽을 `render_page`(kNormal, `printing=true`, 렌더 중+대기 비트맵 ≤2장)로 그려 메인 스레드에서 쪽 순서대로 `QPrinter` 에 `drawImage`. 권한(비트 3·12)·`/PrintScaling`·`/NumCopies`·`/PrintPageRange`(1 기준)·`/Duplex` 반영. 진행 창은 비모달(모달 `QProgressDialog::setValue` 는 이벤트를 재진입 처리). `finished` 는 다음 이벤트 턴에 보낸다. 인쇄 중 다른 문서를 열면 먼저 묻는다("인쇄 취소하고 열기" / "인쇄 계속하기"), 계속하기면 열지 않는다. 앱 테스트는 `QPrinter::PdfFormat` 출력을 다시 열어 검증
+- 인쇄(Ctrl/Cmd+P): 네이티브 `QPrintDialog`(프린터·용지·범위·매수) → **`PrintPreviewDialog`(#23, 모달)**: 용지 위 배치를 인쇄와 같은 `place_page` 로 그리고(인쇄 가능 영역 밖은 회색 = 잘림), 배율(맞춤/실제 크기/큰 쪽만 축소)·흑백을 고른다 → `print_with(printer, request)`. 미리보기 이미지는 보이는 장 ±1 만 워커 `render_page`(kLow, `printing=true`, 동시 8, 64MB `QCache`)로, 배율 모드와 무관한 고정 해상도(확대 × dpr, 150dpi 상한, 1/64 양자화 — 바뀌면 세대↑)라 모드를 바꿔도 재렌더하지 않는다(회전은 쪽·용지 방향으로만 정해져 렌더 때 적용). "설정…" 은 대화상자를 다시 열어 `set_request`(배율·흑백 유지). **인쇄 금지 문서**는 인쇄 동작을 켜 두고 Cmd+P 가 권한 암호 해제 안내(`offer_print_unlock`) → `maybe_save` → `QInputDialog` → `DocumentSession::open(path, pw)` 로 **같은 파일을 다시 연다**(소유자 암호면 PDFium 이 권한을 전부 켠다; `print_unlock_` 가 현재 쪽을 되살리고 허용되면 바로 `on_print`, 사용자 암호면 "권한 암호가 아닙니다" 재질문, 틀리면 세션이 기존 문서를 유지하고 `password_required` → 재질문). 앱 테스트는 `set_auto_print_after_unlock(false)`(offscreen 의 네이티브 인쇄 대화상자는 닫을 수 없다). 래스터 인쇄. `PrintJob` 이 쪽을 `render_page`(kNormal, `printing=true`, 렌더 중+대기 비트맵 ≤2장)로 그려 메인 스레드에서 쪽 순서대로 `QPrinter` 에 `drawImage`. 권한(비트 3·12)·`/PrintScaling`·`/NumCopies`·`/PrintPageRange`(1 기준)·`/Duplex` 반영. 진행 창은 비모달(모달 `QProgressDialog::setValue` 는 이벤트를 재진입 처리). `finished` 는 다음 이벤트 턴에 보낸다. 인쇄 중 다른 문서를 열면 먼저 묻는다("인쇄 취소하고 열기" / "인쇄 계속하기"), 계속하기면 열지 않는다. 앱 테스트는 `QPrinter::PdfFormat` 출력을 다시 열어 검증
 
 # Coding Guidelines
 1. **Safety First**: 모든 PDFium 반환값(nullptr, FALSE, 음수)을 검사한다. 파일 I/O 와 외부 라이브러리 호출은 `std::expected` 또는 명시적 에러 타입으로 전파하고, 예외는 경계(UI·CLI)에서만 잡는다.

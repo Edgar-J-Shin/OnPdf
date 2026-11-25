@@ -46,4 +46,14 @@
         </translation>
     </message>
 </context>
+<context>
+    <name>onpdf::app::PrintPreviewDialog</name>
+    <message numerus="yes">
+        <source>%n sheet(s)</source>
+        <translation>
+            <numerusform>%n sheet</numerusform>
+            <numerusform>%n sheets</numerusform>
+        </translation>
+    </message>
+</context>
 </TS>
