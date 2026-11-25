@@ -17,12 +17,13 @@
   #define OutputDir "."
 #endif
 #define AppName "OnPdf"
+; 고정 GUID — 바꾸면 이전 설치를 다른 앱으로 보아 업그레이드가 안 된다. AppId 와 제거 키({GUID}_is1) 가 같이 쓴다
+#define AppGuid "6F5FEE03-64B4-45E4-A23D-1AC76FAB33AC"
 #define AppExe "onpdf_app.exe"
 #define ProgId "OnPdf.Document"
 
 [Setup]
-; 고정 GUID — 바꾸면 이전 설치를 다른 앱으로 보아 업그레이드가 안 된다
-AppId={{6F5FEE03-64B4-45E4-A23D-1AC76FAB33AC}
+AppId={{{#AppGuid}}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
@@ -100,7 +101,8 @@ function PreviousUninstaller(var Path: String): Boolean;
 var
   Key: String;
 begin
-  Key := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#SetupSetting("AppId")}_is1';
+  // SetupSetting("AppId") 는 이스케이프된 '{{GUID}' 를 돌려줘 키 이름과 다르다 → GUID 로 직접 만든다
+  Key := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{{#AppGuid}}_is1';
   Result := RegQueryStringValue(HKEY_AUTO, Key, 'UninstallString', Path);
   if not Result then
     Result := RegQueryStringValue(HKEY_CURRENT_USER, Key, 'UninstallString', Path);

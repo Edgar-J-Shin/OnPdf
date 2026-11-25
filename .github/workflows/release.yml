@@ -231,7 +231,7 @@ jobs:
           $p2 = Start-Process -FilePath (Resolve-Path $env:SETUP) -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$log.upgrade") -PassThru
           if (-not $p2.WaitForExit(180000)) { $p2.Kill(); Get-Content "$log.upgrade"; Write-Output "::error::silent upgrade timed out"; exit 1 }
           if ($p2.ExitCode -ne 0) { Get-Content "$log.upgrade"; Write-Output "::error::silent upgrade failed: $($p2.ExitCode)"; exit 1 }
-          if (Test-Path $stale) { Write-Output "::error::stale file survived the upgrade"; exit 1 }
+          if (Test-Path $stale) { Get-Content "$log.upgrade" | Select-String -Pattern "Uninstall|previous|PrepareToInstall" ; Write-Output "::error::stale file survived the upgrade"; exit 1 }
           if (-not (Test-Path $exe)) { Get-Content "$log.upgrade"; Write-Output "::error::exe missing after upgrade"; exit 1 }
           $t2 = Start-Process -FilePath $exe -ArgumentList @('--self-test', "`"$(Join-Path $dir '한글 파일명.pdf')`"") -PassThru
           if (-not $t2.WaitForExit(120000)) { $t2.Kill(); Write-Output "::error::self-test after upgrade timed out"; exit 1 }
