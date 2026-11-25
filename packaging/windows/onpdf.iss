@@ -45,7 +45,11 @@ UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
 ChangesAssociations=yes
 OutputDir={#OutputDir}
+#ifdef OutputBase
+OutputBaseFilename={#OutputBase}
+#else
 OutputBaseFilename=OnPdf-{#AppVersion}-windows-x64-setup
+#endif
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern

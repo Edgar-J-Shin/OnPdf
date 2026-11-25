@@ -189,6 +189,15 @@ jobs:
           $setup = "OnPdf-$env:VERSION-windows-x64-setup.exe"
           Get-Item $setup | Select-Object Name, Length
           "SETUP=$setup" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # 업그레이드 점검용 "이전 버전" 설치기 (#101): 새 버전에 없는 파일(plugins\stale.dll)을 하나 더 싣는다.
+          # 제거기는 자기가 설치한 파일만 지우므로, 이 파일이 업그레이드 뒤 사라져야 이전 설치 정리가 동작한 것이다
+          $old = Join-Path $env:RUNNER_TEMP "stage-old"
+          Copy-Item $stage $old -Recurse
+          New-Item -ItemType Directory -Force -Path (Join-Path $old "plugins") | Out-Null
+          Set-Content -Path (Join-Path $old "plugins\stale.dll") -Value "stale"
+          & $iscc "/DAppVersion=$env:VERSION" "/DStageDir=$old" "/DRepoDir=$PWD" "/DOutputDir=$env:RUNNER_TEMP" "/DOutputBase=old-setup" packaging/windows/onpdf.iss | Select-Object -Last 1
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          "OLD_SETUP=$(Join-Path $env:RUNNER_TEMP 'old-setup.exe')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Sign the installer (optional)
         shell: pwsh
         env:
@@ -205,14 +214,23 @@ jobs:
       - name: Self-test the installer
         shell: pwsh
         run: |
-          # 조용한 사용자별 설치(기본 앱 작업 포함) → 설치된 exe 로 한글 경로 self-test → 레지스트리 확인 → 조용한 제거 → 잔여 검사
-          $log = Join-Path $env:RUNNER_TEMP "install.log"
-          $p = Start-Process -FilePath (Resolve-Path $env:SETUP) -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/TASKS=pdfdefault', "/LOG=$log") -PassThru
-          if (-not $p.WaitForExit(120000)) { $p.Kill(); Get-Content $log; Write-Output "::error::silent install timed out"; exit 1 }
-          if ($p.ExitCode -ne 0) { Get-Content $log; Write-Output "::error::silent install failed: $($p.ExitCode)"; exit 1 }
+          # "이전 버전"(stale.dll 포함) 조용한 설치 → 실제 설치기로 업그레이드(이전 설치 정리로 stale.dll 이 사라져야 함)
+          # → 설치된 exe 로 한글 경로 self-test → 레지스트리 확인 → 조용한 제거 → 잔여 검사
           $appdir = Join-Path $env:LOCALAPPDATA "Programs\OnPdf"
           $exe = Join-Path $appdir "onpdf_app.exe"
-          if (-not (Test-Path $exe)) { Get-Content $log; Write-Output "::error::installed exe not found: $exe"; exit 1 }
+          $stale = Join-Path $appdir "plugins\stale.dll"
+          $oldlog = Join-Path $env:RUNNER_TEMP "install-old.log"
+          $p0 = Start-Process -FilePath $env:OLD_SETUP -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$oldlog") -PassThru
+          if (-not $p0.WaitForExit(120000)) { $p0.Kill(); Get-Content $oldlog; Write-Output "::error::old-version install timed out"; exit 1 }
+          if ($p0.ExitCode -ne 0) { Get-Content $oldlog; Write-Output "::error::old-version install failed: $($p0.ExitCode)"; exit 1 }
+          if (-not (Test-Path $stale)) { Write-Output "::error::old-version install did not place plugins\stale.dll"; exit 1 }
+          $log = Join-Path $env:RUNNER_TEMP "install.log"
+          $p = Start-Process -FilePath (Resolve-Path $env:SETUP) -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/TASKS=pdfdefault', "/LOG=$log") -PassThru
+          if (-not $p.WaitForExit(180000)) { $p.Kill(); Get-Content $log; Write-Output "::error::silent upgrade timed out"; exit 1 }
+          if ($p.ExitCode -ne 0) { Get-Content $log; Write-Output "::error::silent upgrade failed: $($p.ExitCode)"; exit 1 }
+          if (Test-Path $stale) { Get-Content $log | Select-String -Pattern "previous|Uninstall" | Select-Object -First 10; Write-Output "::error::stale file from the previous version survived the upgrade"; exit 1 }
+          if (-not (Test-Path $exe)) { Get-Content $log; Write-Output "::error::installed exe not found after upgrade: $exe"; exit 1 }
+          Write-Output "upgrade removed the previous version's stale file"
           $dir = Join-Path $env:RUNNER_TEMP "설치 점검"
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
           Copy-Item "testdata/한글 파일명.pdf" $dir
@@ -224,19 +242,6 @@ jobs:
           if ($null -eq $openwith -or $null -eq $openwith.PSObject.Properties['OnPdf.Document']) { Write-Output "::error::OpenWithProgids registration missing"; exit 1 }
           $default = (Get-ItemProperty -Path "HKCU:\Software\Classes\.pdf" -ErrorAction SilentlyContinue).'(default)'
           if ($default -ne 'OnPdf.Document') { Write-Output "::error::pdfdefault task did not set the .pdf default (got '$default')"; exit 1 }
-          # 업그레이드 경로 (#101): 이전 설치에만 있던 파일을 심고 같은 설치기를 다시 돌리면 사라져야 한다
-          $stale = Join-Path $appdir "plugins\stale.dll"
-          New-Item -ItemType Directory -Force -Path (Split-Path $stale) | Out-Null
-          Set-Content -Path $stale -Value "stale"
-          $p2 = Start-Process -FilePath (Resolve-Path $env:SETUP) -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$log.upgrade") -PassThru
-          if (-not $p2.WaitForExit(180000)) { $p2.Kill(); Get-Content "$log.upgrade"; Write-Output "::error::silent upgrade timed out"; exit 1 }
-          if ($p2.ExitCode -ne 0) { Get-Content "$log.upgrade"; Write-Output "::error::silent upgrade failed: $($p2.ExitCode)"; exit 1 }
-          if (Test-Path $stale) { Get-Content "$log.upgrade" | Select-String -Pattern "Uninstall|previous|PrepareToInstall" ; Write-Output "::error::stale file survived the upgrade"; exit 1 }
-          if (-not (Test-Path $exe)) { Get-Content "$log.upgrade"; Write-Output "::error::exe missing after upgrade"; exit 1 }
-          $t2 = Start-Process -FilePath $exe -ArgumentList @('--self-test', "`"$(Join-Path $dir '한글 파일명.pdf')`"") -PassThru
-          if (-not $t2.WaitForExit(120000)) { $t2.Kill(); Write-Output "::error::self-test after upgrade timed out"; exit 1 }
-          Write-Output "self-test after upgrade -> $($t2.ExitCode)"
-          if ($t2.ExitCode -ne 0) { exit 1 }
           $unins = Get-ChildItem $appdir -Filter "unins*.exe" | Select-Object -First 1
           if ($null -eq $unins) { Write-Output "::error::uninstaller not found"; exit 1 }
           $u = Start-Process -FilePath $unins.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -PassThru
