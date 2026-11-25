@@ -171,6 +171,69 @@ jobs:
             Write-Output "self-test $pdf -> $($p.ExitCode)"
             if ($p.ExitCode -ne 0) { exit 1 }
           }
+      - name: Build the installer (Inno Setup)
+        shell: pwsh
+        run: |
+          # zip 과 같은 stage 폴더가 입력이다 (#99). 러너에 Inno Setup 6 가 없으면 choco 로 받는다
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y; if ($LASTEXITCODE -ne 0) { exit 1 } }
+          if (-not (Test-Path $iscc)) { Write-Output "::error::ISCC.exe not found"; exit 1 }
+          $korean = Join-Path (Split-Path $iscc) "Languages\Korean.isl"
+          Write-Output "Korean.isl present: $(Test-Path $korean)"
+          $stage = (Resolve-Path $env:STAGE).Path
+          & $iscc "/DAppVersion=$env:VERSION" "/DStageDir=$stage" "/DRepoDir=$PWD" "/DOutputDir=$PWD" packaging/windows/onpdf.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $setup = "OnPdf-$env:VERSION-windows-x64-setup.exe"
+          Get-Item $setup | Select-Object Name, Length
+          "SETUP=$setup" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Sign the installer (optional)
+        shell: pwsh
+        env:
+          CERT: ${{ secrets.WINDOWS_CERT_PFX }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          if (-not $env:CERT -and -not $env:CERT_PASSWORD) { Write-Output "::warning::Windows 서명 비밀이 없어 설치기도 서명 없이 배포한다"; exit 0 }
+          if (-not $env:CERT -or -not $env:CERT_PASSWORD) { Write-Output "::error::Windows 서명 비밀이 일부만 있다"; exit 1 }
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP/cert.pfx", [Convert]::FromBase64String($env:CERT))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin" -Recurse -Filter signtool.exe | Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          & $signtool.FullName sign /f "$env:RUNNER_TEMP/cert.pfx" /p $env:CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $env:SETUP
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Remove-Item "$env:RUNNER_TEMP/cert.pfx"
+      - name: Self-test the installer
+        shell: pwsh
+        run: |
+          # 조용한 사용자별 설치(기본 앱 작업 포함) → 설치된 exe 로 한글 경로 self-test → 레지스트리 확인 → 조용한 제거 → 잔여 검사
+          $log = Join-Path $env:RUNNER_TEMP "install.log"
+          $p = Start-Process -FilePath (Resolve-Path $env:SETUP) -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/TASKS=pdfdefault', "/LOG=$log") -PassThru
+          if (-not $p.WaitForExit(120000)) { $p.Kill(); Get-Content $log; Write-Output "::error::silent install timed out"; exit 1 }
+          if ($p.ExitCode -ne 0) { Get-Content $log; Write-Output "::error::silent install failed: $($p.ExitCode)"; exit 1 }
+          $appdir = Join-Path $env:LOCALAPPDATA "Programs\OnPdf"
+          $exe = Join-Path $appdir "onpdf_app.exe"
+          if (-not (Test-Path $exe)) { Get-Content $log; Write-Output "::error::installed exe not found: $exe"; exit 1 }
+          $dir = Join-Path $env:RUNNER_TEMP "설치 점검"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Copy-Item "testdata/한글 파일명.pdf" $dir
+          $t = Start-Process -FilePath $exe -ArgumentList @('--self-test', "`"$(Join-Path $dir '한글 파일명.pdf')`"") -PassThru
+          if (-not $t.WaitForExit(120000)) { $t.Kill(); Write-Output "::error::installed self-test timed out"; exit 1 }
+          Write-Output "installed self-test -> $($t.ExitCode)"
+          if ($t.ExitCode -ne 0) { exit 1 }
+          $openwith = Get-ItemProperty -Path "HKCU:\Software\Classes\.pdf\OpenWithProgids" -ErrorAction SilentlyContinue
+          if ($null -eq $openwith -or $null -eq $openwith.PSObject.Properties['OnPdf.Document']) { Write-Output "::error::OpenWithProgids registration missing"; exit 1 }
+          $default = (Get-ItemProperty -Path "HKCU:\Software\Classes\.pdf" -ErrorAction SilentlyContinue).'(default)'
+          if ($default -ne 'OnPdf.Document') { Write-Output "::error::pdfdefault task did not set the .pdf default (got '$default')"; exit 1 }
+          $unins = Get-ChildItem $appdir -Filter "unins*.exe" | Select-Object -First 1
+          if ($null -eq $unins) { Write-Output "::error::uninstaller not found"; exit 1 }
+          $u = Start-Process -FilePath $unins.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -PassThru
+          if (-not $u.WaitForExit(120000)) { $u.Kill(); Write-Output "::error::silent uninstall timed out"; exit 1 }
+          if ($u.ExitCode -ne 0) { Write-Output "::error::silent uninstall failed: $($u.ExitCode)"; exit 1 }
+          # 제거기는 자기 자신을 지우려고 비동기로 끝난다 → 잠시 기다린다
+          $gone = $false
+          for ($i = 0; $i -lt 30; $i++) { if (-not (Test-Path $appdir)) { $gone = $true; break }; Start-Sleep -Seconds 1 }
+          if (-not $gone) { Get-ChildItem $appdir -Recurse | Select-Object FullName; Write-Output "::error::install folder remains after uninstall"; exit 1 }
+          if (Test-Path "HKCU:\Software\Classes\OnPdf.Document") { Write-Output "::error::ProgId remains after uninstall"; exit 1 }
+          $default = (Get-ItemProperty -Path "HKCU:\Software\Classes\.pdf" -ErrorAction SilentlyContinue).'(default)'
+          if ($default -eq 'OnPdf.Document') { Write-Output "::error::.pdf default still points to OnPdf after uninstall"; exit 1 }
+          Write-Output "installer self-test OK"
       - name: Archive
         shell: pwsh
         run: |
@@ -180,7 +243,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64
-          path: OnPdf-*-windows-x64.zip
+          path: |
+            OnPdf-*-windows-x64.zip
+            OnPdf-*-windows-x64-setup.exe
           if-no-files-found: error
 
   macos-arm64:
