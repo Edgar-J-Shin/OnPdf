@@ -10,7 +10,10 @@
 
 #include "../test_support.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <gtest/gtest.h>
 
 namespace onpdf::engine {
@@ -1006,6 +1009,140 @@ TEST(SpacingReapply, CommandsKeepWidthThroughUndoRedo) {
   EXPECT_FALSE(doc->settle_letter_spacing().lost);
   step("remove undo", remove.undo(*doc));
   EXPECT_NE(page_text(*doc).find(wide.text), std::string::npos);
+}
+
+// ---- 정산 비용·영구 실패 (#94) ----
+
+// 자간 객체의 스트림을 건드리지 않는 편집은 폭 캐시로 저장·qpdf 없이 끝나고, 건드리면 다시 넣는다
+TEST(SpacingReapply, SettleSkipsWhenSpacingObjectsAreUntouched) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-kern.pdf"));
+  ASSERT_TRUE(doc);
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines);
+  const TextLineInfo wide = *find_line(*lines, "Kerned wide gaps here");
+  const TextLineInfo plain = *find_line(*lines, "Plain line without spacing");
+  LineReplacement same{wide.text, fallback_for(wide, wide.text), std::nullopt, std::nullopt};
+  auto replaced = doc->replace_text_line(0, wide.id, same);
+  ASSERT_TRUE(replaced) << replaced.error().message;
+  ASSERT_TRUE(replaced->fitted);
+  const std::string box = replaced->box;
+  const double w0 = box_width(*doc, box);
+  // 무관한 상자(자간 없음, 자기 스트림) 추가 → 첫 정산은 미리 보기 한 번으로 "고칠 것 없음" + 폭
+  // 기록
+  auto other = doc->add_text_objects(0, fallback_for(plain, "Unrelated box"));
+  ASSERT_TRUE(other) << other.error().message;
+  EXPECT_FALSE(doc->settle_letter_spacing().lost);
+  EXPECT_EQ(doc->spacing_previews(), 1);
+  EXPECT_EQ(doc->spacing_reapplications(), 0);
+  // 무관한 상자 이동 → 자간 상자의 폭이 그대로 → 캐시로 끝 (저장·qpdf 없음)
+  ASSERT_TRUE(doc->move_page_objects(0, other->ids, {4.0, 4.0}));
+  EXPECT_FALSE(doc->settle_letter_spacing().lost);
+  EXPECT_EQ(doc->spacing_previews(), 1) << "폭 캐시가 맞으면 미리 보기를 하지 않는다";
+  EXPECT_EQ(doc->spacing_reapplications(), 0);
+  EXPECT_NEAR(box_width(*doc, box), w0, w0 * 0.01);
+  // 자간 상자 자체를 옮기면 Tc 를 잃어 폭이 달라진다 → 미리 보기 → 재적용 → 폭 복원
+  ASSERT_TRUE(doc->move_page_objects(0, replaced->ids, {6.0, 0.0}));
+  const SpacingSettleResult settled = doc->settle_letter_spacing();
+  EXPECT_FALSE(settled.lost);
+  EXPECT_EQ(settled.pages_reapplied, 1);
+  EXPECT_EQ(doc->spacing_previews(), 2);
+  EXPECT_EQ(doc->spacing_reapplications(), 1);
+  EXPECT_NEAR(box_width(*doc, box), w0, w0 * 0.01);
+  // 다시 무관한 편집 → 재적용 뒤 기록한 폭으로 캐시 적중
+  ASSERT_TRUE(doc->move_page_objects(0, other->ids, {-4.0, 0.0}));
+  EXPECT_FALSE(doc->settle_letter_spacing().lost);
+  EXPECT_EQ(doc->spacing_previews(), 2);
+  EXPECT_EQ(doc->spacing_reapplications(), 1);
+}
+
+// Tf 없이 Tj 만 있는 쪽: PDFium 은 텍스트 객체를 만들지 않지만 qpdf 는 표시 연산자로 센다 → 순번이
+// 맞지 않아 재적용이 구조적으로 불가능하다
+std::vector<std::uint8_t> pdf_with_unfonted_text() {
+  const std::string content = "BT 72 700 Td (Hello) Tj ET";
+  std::string pdf = "%PDF-1.4\n";
+  std::vector<std::size_t> offsets;
+  const auto object = [&](const std::string& body) {
+    offsets.push_back(pdf.size());
+    pdf += std::to_string(offsets.size()) + " 0 obj\n" + body + "\nendobj\n";
+  };
+  object("<< /Type /Catalog /Pages 2 0 R >>");
+  object("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+  object(
+      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << >> >>");
+  object("<< /Length " + std::to_string(content.size()) + " >>\nstream\n" + content +
+         "\nendstream");
+  const std::size_t xref = pdf.size();
+  pdf += "xref\n0 " + std::to_string(offsets.size() + 1) + "\n0000000000 65535 f \n";
+  for (const std::size_t offset : offsets) {
+    char line[32];
+    std::snprintf(line, sizeof line, "%010zu 00000 n \n", offset);
+    pdf += line;
+  }
+  pdf += "trailer\n<< /Size " + std::to_string(offsets.size() + 1) +
+         " /Root 1 0 R >>\nstartxref\n" + std::to_string(xref) + "\n%%EOF\n";
+  return {pdf.begin(), pdf.end()};
+}
+
+TEST(SpacingReapply, PermanentFailureIsReportedOnce) {
+  auto doc = PdfiumDocument::open_from_memory(pdf_with_unfonted_text());
+  ASSERT_TRUE(doc) << doc.error().message;
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines);
+  EXPECT_TRUE(lines->empty()) << "PDFium 은 글꼴 없는 Tj 로 객체를 만들지 않는다";
+  TextLineInfo anchor;
+  anchor.bbox = {72, 100, 200, 14};
+  anchor.font_size = 12;
+  anchor.color = {0, 0, 0, 255};
+  TextObjectsSpec spec = fallback_for(anchor, "Spaced box");
+  spec.letter_spacing = 1.5;
+  auto added = doc->add_text_objects(0, spec);
+  ASSERT_TRUE(added) << added.error().message;
+  const SpacingSettleResult first = doc->settle_letter_spacing();
+  EXPECT_TRUE(first.lost) << "순번 불일치는 한 번 알린다";
+  EXPECT_EQ(first.pages_reapplied, 0);
+  EXPECT_EQ(doc->spacing_reapplications(), 0);
+  const int previews = doc->spacing_previews();
+  EXPECT_GE(previews, 1);
+  // 같은 쪽의 다음 편집: 다시 알리지 않고 비용도 없다 (문서 바이트가 같으면 결과도 같다)
+  ASSERT_TRUE(doc->move_page_objects(0, added->ids, {3.0, 0.0}));
+  const SpacingSettleResult second = doc->settle_letter_spacing();
+  EXPECT_FALSE(second.lost);
+  EXPECT_EQ(second.pages_reapplied, 0);
+  EXPECT_EQ(doc->spacing_previews(), previews);
+  EXPECT_NE(page_text(*doc).find("Spaced box"), std::string::npos) << "편집 자체는 성공";
+}
+
+// 수동 측정용 (#94): ONPDF_BENCH_PDF=<첫 쪽이 text-lines-kern 인 큰 문서> 로 돌린다
+TEST(SpacingReapply, DISABLED_Bench) {
+  const char* path = std::getenv("ONPDF_BENCH_PDF");
+  if (path == nullptr) GTEST_SKIP();
+  auto doc = PdfiumDocument::open(path);
+  ASSERT_TRUE(doc);
+  auto lines = doc->text_lines(0);
+  const TextLineInfo wide = *find_line(*lines, "Kerned wide gaps here");
+  const TextLineInfo plain = *find_line(*lines, "Plain line without spacing");
+  LineReplacement same{wide.text, fallback_for(wide, wide.text), std::nullopt, std::nullopt};
+  auto replaced = doc->replace_text_line(0, wide.id, same);
+  ASSERT_TRUE(replaced) << replaced.error().message;
+  auto other = doc->add_text_objects(0, fallback_for(plain, "Unrelated box"));
+  ASSERT_TRUE(other);
+  const auto timed = [&](const char* what) {
+    const auto t0 = std::chrono::steady_clock::now();
+    const SpacingSettleResult r = doc->settle_letter_spacing();
+    const auto ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("%-32s %8.1f ms  reapplied=%d lost=%d previews=%d\n", what, ms, r.pages_reapplied,
+                r.lost, doc->spacing_previews());
+  };
+  timed("first settle (preview)");
+  ASSERT_TRUE(doc->move_page_objects(0, other->ids, {4.0, 4.0}));
+  timed("unrelated move (cache)");
+  ASSERT_TRUE(doc->move_page_objects(0, other->ids, {4.0, 4.0}));
+  timed("unrelated move (cache)");
+  ASSERT_TRUE(doc->move_page_objects(0, replaced->ids, {6.0, 0.0}));
+  timed("spaced move (reapply)");
+  ASSERT_TRUE(doc->move_page_objects(0, other->ids, {4.0, 4.0}));
+  timed("unrelated move (cache)");
 }
 }  // namespace
 }  // namespace onpdf::engine

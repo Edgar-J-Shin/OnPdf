@@ -1490,6 +1490,8 @@ Result<void> PdfiumDocument::reattach_objects(DetachedId id) {
 
 void PdfiumDocument::remap_detached_pages(const std::vector<int>& new_index_of_old) {
   spacing_pending_.clear();  // 쪽 번호가 바뀐다 — 구조 편집은 콘텐츠를 재생성하지 않는다 (#87)
+  spacing_widths_.clear();
+  spacing_failed_pages_.clear();
   const auto remap = [&](int old) -> int {
     if (old < 0 || old >= static_cast<int>(new_index_of_old.size())) return -1;
     return new_index_of_old[static_cast<std::size_t>(old)];
@@ -2495,6 +2497,17 @@ std::vector<ShowOpFit> spacing_fits(
   return fits;
 }
 
+// 폭 캐시와 현재 폭이 객체 집합·값 모두 같은가 (#94)
+bool widths_match(const std::unordered_map<std::string, double>& cached,
+                  const std::unordered_map<std::string, double>& current) {
+  if (cached.size() != current.size()) return false;
+  for (const auto& [id, width] : current) {
+    const auto it = cached.find(id);
+    if (it == cached.end() || std::abs(it->second - width) > 1e-3) return false;
+  }
+  return true;
+}
+
 // [x0,x1)×[y0,y1) 밖의 픽셀(RGB)이 모두 같은가 — 수술 뒤 줄 밖 보존 검증
 bool same_outside(const Bitmap& A, const Bitmap& B, int x0, int y0, int x1, int y1) {
   if (A.width != B.width || A.height != B.height) return false;
@@ -2856,6 +2869,13 @@ Result<bool> PdfiumDocument::reapply_spacing(int page_index) {
   PdfiumLibrary::assert_current_thread();
   if (page_index < 0 || page_index >= FPDF_GetPageCount(doc_.get()))
     return false;  // 실패한 편집이 남긴 범위 밖 기록
+  if (spacing_failed_pages_.count(page_index) > 0)
+    return false;  // 문서 구조 때문에 불가능한 쪽 — 이미 한 번 알렸다 (#94)
+  // 구조적 실패(kUnsupported)는 같은 바이트에서 다시 해도 같다 → 기억해 두고 건너뛴다
+  const auto remember_if_permanent = [&](Error error) {
+    if (error.code == ErrorCode::kUnsupported) spacing_failed_pages_.insert(page_index);
+    return error;
+  };
 
   // 쪽 직속 OnPdf 텍스트 객체 가운데 마크 ls ≠ 0 → fit, PDFium 텍스트 객체 수, 대상 영역(쪽 포인트)
   struct Plan {
@@ -2864,6 +2884,7 @@ Result<bool> PdfiumDocument::reapply_spacing(int page_index) {
     Rect area;
     bool has_area = false;
     double pad = 2.0;
+    std::unordered_map<std::string, double> widths;  // 대상 객체 id → 폭 (캐시용, #94)
   };
   const auto plan_of = [&]() -> Result<Plan> {
     auto page = load_page(page_index);
@@ -2897,6 +2918,7 @@ Result<bool> PdfiumDocument::reapply_spacing(int page_index) {
       targets.emplace_back(obj, found->second);
       float l = 0, b = 0, r = 0, t = 0;
       if (FPDFPageObj_GetBounds(obj, &l, &b, &r, &t)) {
+        plan.widths[mark_string(mark, "id")] = static_cast<double>(r) - l;
         const Rect box = space.to_rect(l, r, b, t);
         if (!plan.has_area) {
           plan.area = box;
@@ -2925,13 +2947,23 @@ Result<bool> PdfiumDocument::reapply_spacing(int page_index) {
     auto plan = plan_of();
     if (!plan) return std::unexpected(plan.error());
     if (plan->fits.empty()) return false;
+    // 폭 캐시 (#94): 마지막 정산 때의 폭과 전부 같으면 Tc 가 남아 있다 (무관한 편집은 이 객체의
+    // 스트림을 다시 쓰지 않는다) → 문서 저장·qpdf 없이 끝낸다
+    if (const auto cached = spacing_widths_.find(page_index);
+        cached != spacing_widths_.end() && widths_match(cached->second, plan->widths)) {
+      return false;
+    }
+    ++spacing_previews_;
     auto bytes = save_to_memory();
     if (!bytes) return std::unexpected(bytes.error());
     ShowOpSurgery ops;
     ops.fits = plan->fits;
     auto dry = QpdfTools::remove_text_show_ops(*bytes, password_, page_index, ops);
-    if (!dry) return std::unexpected(dry.error());
-    if (dry->fitted == 0) return false;
+    if (!dry) return std::unexpected(remember_if_permanent(dry.error()));
+    if (dry->fitted == 0) {
+      spacing_widths_[page_index] = std::move(plan->widths);
+      return false;
+    }
   }
 
   // 2. 수술: 떼어 둔 객체를 맨 뒤에 붙인 바이트(기존 순번 불변)로 → 다시 열기 → 대상 밖 픽셀 검증
@@ -2954,8 +2986,10 @@ Result<bool> PdfiumDocument::reapply_spacing(int page_index) {
   ops.fits = plan->fits;
   auto report = QpdfTools::remove_text_show_ops(*pre, password_, page_index, ops);
   if (!report) return fail(report.error());
-  if (report->page_show_ops != plan->page_text_objects)
-    return fail(Error{ErrorCode::kUnsupported, "content stream does not match page objects"});
+  if (report->page_show_ops != plan->page_text_objects) {
+    return fail(remember_if_permanent(
+        Error{ErrorCode::kUnsupported, "content stream does not match page objects"}));
+  }
   if (report->fitted == 0) {
     (void)unpark_detached(*parked);
     return false;
@@ -2971,7 +3005,8 @@ Result<bool> PdfiumDocument::reapply_spacing(int page_index) {
   if (!after_render) return rollback(after_render.error());
   Rect area = plan->area;
   double pad = plan->pad;
-  if (auto after_plan = plan_of(); after_plan && after_plan->has_area) {
+  auto after_plan = plan_of();
+  if (after_plan && after_plan->has_area) {
     const Rect& box = after_plan->area;
     if (plan->has_area) {
       const double x0 = std::min(area.x, box.x), y0 = std::min(area.y, box.y);
@@ -2990,6 +3025,7 @@ Result<bool> PdfiumDocument::reapply_spacing(int page_index) {
   if (!same_outside(*before_render, *after_render, x0, y0, x1, y1))
     return rollback(Error{ErrorCode::kSaveVerifyFailed, "letter spacing changed other content"});
   if (auto unparked = unpark_detached(*parked); !unparked) return rollback(unparked.error());
+  if (after_plan) spacing_widths_[page_index] = std::move(after_plan->widths);  // 다시 연 뒤의 폭
   ++spacing_reapplications_;
   return true;
 }
@@ -3001,6 +3037,8 @@ Result<void> PdfiumDocument::replace_bytes(std::vector<std::uint8_t> bytes) {
   form_.reset();
   fonts_.clear();
   field_pages_.clear();
+  spacing_widths_.clear();  // 새 바이트의 폭은 정산이 다시 잰다 (#94)
+  spacing_failed_pages_.clear();
   field_pages_ready_ = false;
   for (auto& [id, d] : detached_) d.objects.clear();  // 혹시 남은 것은 옛 문서와 함께 버린다
   doc_.reset();
