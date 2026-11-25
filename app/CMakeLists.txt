@@ -34,6 +34,10 @@ onpdf_set_warnings(onpdf_app_lib)
 qt_add_executable(onpdf_app
   main.cpp
 )
+if(WIN32)
+  # 실행 파일 아이콘 (#99): packaging/windows/make_icon.py 가 만든 onpdf.ico. 설치기·PDF 연결 아이콘도 이 exe 를 가리킨다
+  target_sources(onpdf_app PRIVATE onpdf.rc)
+endif()
 # macOS 는 앱 번들(onpdf_app.app — 배포 워크플로우가 OnPdf.app 으로 이름을 바꾼다, #90), Windows 는 콘솔 없는 GUI 실행 파일
 set(ONPDF_MACOS_MIN "13.0" CACHE STRING "Info.plist LSMinimumSystemVersion (배포 워크플로우가 Qt 의 실제 최소 버전으로 넘긴다)")
 set_target_properties(onpdf_app PROPERTIES
