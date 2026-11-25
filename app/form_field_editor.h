@@ -1,7 +1,8 @@
 #pragma once
 
 // 폼 텍스트 칸 오버레이 편집기 (#51). 칸 위에 Qt 입력 위젯을 띄우고 확정 때 한 번만 문서를 바꾼다 —
-// IME(한글 조합)·커서·선택·복사는 Qt 가 맡는다. 확정: Enter(한 줄)·Ctrl/Cmd+Enter(여러 줄)·Tab·포커스 잃음, 취소: Esc
+// IME(한글 조합)·커서·선택·복사는 Qt 가 맡는다. 확정: Enter(한 줄)·Ctrl/Cmd+Enter(여러
+// 줄)·Tab·포커스 잃음, 취소: Esc
 
 #include "onpdf/core/engine/form.h"
 

@@ -169,7 +169,7 @@ PDF에는 문단이 없고 글자 조각이 좌표에 놓여 있을 뿐입니다
 - **라이선스**: Apache 2.0을 권장합니다. PDFium·qpdf와 같은 계열이라 충돌이 없고, 특허 조항이 있습니다. Qt는 동적 링크로 LGPL 조건을 지킵니다.
 - **공개 시점**: M0부터 공개 저장소로 시작합니다. 완성된 뒤 공개하는 것보다 초기 피드백을 받기 좋습니다.
 - **문서**: README(스크린샷, 빌드 방법), CONTRIBUTING, 아키텍처 문서, `good first issue` 라벨
-- **릴리스**: 마일스톤마다 버전을 올리고 변경 기록을 남깁니다. Windows 는 설치 파일 + 무설치 압축본, macOS 는 DMG 를 배포합니다. M5 전까지는 두 플랫폼 모두 "개발자용 압축본" 만 냅니다.
+- **릴리스**: 마일스톤마다 버전을 올리고 변경 기록을 남깁니다. Windows 는 설치 파일 + 무설치 압축본, macOS 는 DMG 를 배포합니다. M5 1단계(#90): 태그 푸시 때 Windows x64 무설치 zip·macOS arm64 DMG 를 자동으로 만들어 각 배포물의 자체 점검(`--self-test`)을 통과하면 GitHub Release 에 올립니다(서명은 인증서가 생기면 비밀 값만 넣으면 켜진다). 2단계: Windows 설치기, macOS x64·13 지원, 서명·공증.
 - **제3자 고지**: 설치 파일에 PDFium, qpdf, Qt, FreeType, HarfBuzz의 라이선스 고지를 포함합니다.
 - **코드 서명**: Windows 는 서명이 없으면 SmartScreen 경고가 뜨고, macOS 는 Developer ID 서명 + 공증이 없으면 Gatekeeper 가 실행 자체를 막습니다(우회는 있으나 일반 사용자에겐 사실상 배포 불가). 1.0 시점에 Windows 인증서와 Apple Developer Program(연 99달러) 가입을 결정합니다. macOS 가 더 필수적이므로 하나만 산다면 Apple 쪽입니다.
 

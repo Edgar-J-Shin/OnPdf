@@ -2,10 +2,8 @@
 #include "onpdf/edit/font_face.h"
 
 #include "../test_support.h"
-
-#include <gtest/gtest.h>
-
 #include <algorithm>
+#include <gtest/gtest.h>
 #include <set>
 
 namespace onpdf::edit {
@@ -38,14 +36,20 @@ TEST(FontFace, ShapesKoreanAndLatinWithAdvances) {
   EXPECT_EQ(shaped.glyphs[2].text, U" ");
   EXPECT_EQ(shaped.glyphs[3].text, U"A");
   for (const auto& g : shaped.glyphs) EXPECT_NE(g.gid, 0u) << "모두 글리프가 있다";
-  EXPECT_GT(shaped.glyphs[0].x_advance, 15.0);  // 한글 전각 ≈ 24pt
+  EXPECT_GT(shaped.glyphs[0].x_advance, 15.0);                        // 한글 전각 ≈ 24pt
   EXPECT_LT(shaped.glyphs[2].x_advance, shaped.glyphs[0].x_advance);  // 공백은 좁다
-  EXPECT_NEAR(shaped.width, shaped.glyphs[0].x_advance + shaped.glyphs[1].x_advance + shaped.glyphs[2].x_advance +
-                                shaped.glyphs[3].x_advance + shaped.glyphs[4].x_advance + shaped.glyphs[5].x_advance, 1e-6);
+  EXPECT_NEAR(shaped.width,
+              shaped.glyphs[0].x_advance + shaped.glyphs[1].x_advance + shaped.glyphs[2].x_advance +
+                  shaped.glyphs[3].x_advance + shaped.glyphs[4].x_advance +
+                  shaped.glyphs[5].x_advance,
+              1e-6);
   EXPECT_GT(shaped.ascent, 15.0);
   EXPECT_GT(shaped.descent, 1.0);
   // 공백과 NBSP 는 같은 글리프여도 코드 포인트가 유지된다 (ToUnicode 가 입력 코드를 쓰도록)
-  const ShapedText nbsp = face->shape("a\xC2\xA0" "b", 12.0);
+  const ShapedText nbsp = face->shape(
+      "a\xC2\xA0"
+      "b",
+      12.0);
   ASSERT_EQ(nbsp.glyphs.size(), 3u);
   EXPECT_EQ(nbsp.glyphs[1].text, U"\u00A0") << "NBSP 코드 유지";
   EXPECT_TRUE(face->shape("", 12.0).glyphs.empty());
@@ -106,9 +110,11 @@ TEST(FontFace, SubsetRemapsGlyphsAndShrinks) {
 }
 
 TEST(FontFace, ToUnicodeCmapFormat) {
-  const std::string cmap = make_to_unicode_cmap({{3, U"글"}, {1, U"한"}, {1, U"\u00A0"}, {5, U"\U0001F600"}, {7, U"\u1112\u1161\u11AB"}});
+  const std::string cmap = make_to_unicode_cmap(
+      {{3, U"글"}, {1, U"한"}, {1, U"\u00A0"}, {5, U"\U0001F600"}, {7, U"\u1112\u1161\u11AB"}});
   EXPECT_NE(cmap.find("begincodespacerange\n<0000> <FFFF>"), std::string::npos);
-  EXPECT_NE(cmap.find("4 beginbfchar\n<0001> <D55C>\n<0003> <AE00>\n<0005> <D83DDE00>\n<0007> <1112116111AB>\nendbfchar"),
+  EXPECT_NE(cmap.find("4 beginbfchar\n<0001> <D55C>\n<0003> <AE00>\n<0005> <D83DDE00>\n<0007> "
+                      "<1112116111AB>\nendbfchar"),
             std::string::npos)
       << cmap;  // 정렬, 중복 CID 는 먼저 나온 문자열, 서로게이트 쌍, 다중 코드 dst
   EXPECT_NE(cmap.find("/CMapName /OnPdf-Identity def"), std::string::npos);
@@ -122,7 +128,6 @@ TEST(FontFace, DecodesUtf8) {
   EXPECT_EQ(s[2], U'😀');
   EXPECT_EQ(s[3], U'�');
 }
-
 
 // #73: TTC 면 선택·CFF 판별·CFF 서브셋이 OTTO
 TEST(FontFace, LoadsTtcFaceByIndexAndDetectsCff) {
@@ -140,7 +145,8 @@ TEST(FontFace, LoadsTtcFaceByIndexAndDetectsCff) {
   auto out_of_range = FontFace::load(ttc, 2);
   ASSERT_FALSE(out_of_range);
   EXPECT_EQ(out_of_range.error().code, ErrorCode::kInvalidFormat);
-  EXPECT_FALSE(FontFace::load(testdata("fonts") / "NotoSansKR-subset.ttf", 1)) << "단일 글꼴은 면 0 만";
+  EXPECT_FALSE(FontFace::load(testdata("fonts") / "NotoSansKR-subset.ttf", 1))
+      << "단일 글꼴은 면 0 만";
   // 면 1 의 서브셋은 그 면의 이름을 가진 독립 글꼴이다
   const auto shaped = (*face1)->shape("한글", 12.0);
   std::vector<std::uint32_t> gids;
@@ -163,7 +169,8 @@ TEST(FontFace, LoadsTtcFaceByIndexAndDetectsCff) {
   auto cff_subset = (*cff)->subset(gids);
   ASSERT_TRUE(cff_subset) << cff_subset.error().message;
   ASSERT_GE(cff_subset->ttf.size(), 4u);
-  EXPECT_EQ(std::string(cff_subset->ttf.begin(), cff_subset->ttf.begin() + 4), "OTTO") << "CFF 서브셋은 OpenType(OTTO)";
+  EXPECT_EQ(std::string(cff_subset->ttf.begin(), cff_subset->ttf.begin() + 4), "OTTO")
+      << "CFF 서브셋은 OpenType(OTTO)";
   EXPECT_NE(cff_subset->key, subset->key);
 }
 }  // namespace

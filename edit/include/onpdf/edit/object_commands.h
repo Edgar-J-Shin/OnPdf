@@ -1,8 +1,9 @@
 #pragma once
 
-// 쪽 객체(텍스트 상자 줄·이미지) 공용 Command (#49): 이미지 추가, 이동(키보드 연속 이동 병합), 이미지 크기, 삭제.
-// 삭제·추가 취소는 객체를 다시 만들지 않고 문서가 떼어 보관한 객체를 다시 붙인다 (Command 는 DetachedId 만 쥔다).
-// 다른 프로그램이 넣은 이미지("#obj<index>")는 첫 실행에서 mark_object 로 마크를 붙이고 그 id 로 바꿔 쥔다
+// 쪽 객체(텍스트 상자 줄·이미지) 공용 Command (#49): 이미지 추가, 이동(키보드 연속 이동 병합),
+// 이미지 크기, 삭제. 삭제·추가 취소는 객체를 다시 만들지 않고 문서가 떼어 보관한 객체를 다시 붙인다
+// (Command 는 DetachedId 만 쥔다). 다른 프로그램이 넣은 이미지("#obj<index>")는 첫 실행에서
+// mark_object 로 마크를 붙이고 그 id 로 바꿔 쥔다
 
 #include "onpdf/core/engine/page_object.h"
 #include "onpdf/edit/command.h"
@@ -12,7 +13,8 @@
 
 namespace onpdf::edit {
 
-// 이미지 추가: 첫 실행은 픽셀/JPEG 를 넣고(그 뒤 데이터를 버린다), 취소는 떼어 보관, 재실행은 다시 붙인다
+// 이미지 추가: 첫 실행은 픽셀/JPEG 를 넣고(그 뒤 데이터를 버린다), 취소는 떼어 보관, 재실행은 다시
+// 붙인다
 class AddImageCommand final : public Command {
  public:
   AddImageCommand(int page, engine::ImageSpec spec);

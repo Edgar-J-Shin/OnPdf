@@ -157,7 +157,8 @@ class MainWindow : public QMainWindow {
   bool save_to(const QString& path);
   // 대화상자 없이 이 프린터 설정으로 인쇄를 시작한다 (파일 > 인쇄 의 뒷부분, 테스트용). 시작하면
   // true
-  bool print_with(QPrinter& printer);
+  bool print_with(QPrinter& printer);  // 프린터 설정으로 요청을 만들어 인쇄 (테스트용 진입점)
+  bool print_with(QPrinter& printer, PrintJob::Request request);
   // 첫 쪽이 그려지면 창을 PNG 로 저장하고 앱을 종료한다 (QA·CI 스크린샷용, --screenshot 옵션).
   void screenshot_after_render(const QString& png_path);
 
@@ -256,6 +257,16 @@ class MainWindow : public QMainWindow {
   bool warn_signature_once();      // 서명 문서의 첫 구조 편집: 계속하면 true
   void on_thumbnail_context_menu(const QPoint& global_pos, const std::vector<int>& pages);
   void on_print();
+  // 인쇄 금지 문서의 권한(소유자) 암호 해제 (#23): 안내 → maybe_save → 암호 → 같은 파일을 다시 연다
+  void offer_print_unlock();
+
+ public:
+  // 테스트용: 권한 암호 해제 뒤 인쇄 대화상자를 자동으로 열지 않는다 (macOS offscreen 의 네이티브
+  // QPrintDialog 는 닫을 수 없다)
+  void set_auto_print_after_unlock(bool on) noexcept { auto_print_after_unlock_ = on; }
+
+ private:
+  void prompt_print_unlock_password(const QString& note);
   void on_print_finished(PrintJob::Outcome outcome);
   void cancel_print();
   // 인쇄 중 새 문서를 열려 할 때 확인. "인쇄 취소하고 열기" 면 인쇄를 취소하고 true
@@ -385,6 +396,11 @@ class MainWindow : public QMainWindow {
   bool saving_ = false;
   bool allow_close_ = false;  // 저장 확인을 거쳐 닫기로 했다
   QProgressDialog* print_progress_ = nullptr;
+  struct PendingPrintUnlock {
+    int page = 0;  // 다시 연 뒤 되살릴 현재 쪽
+  };
+  std::optional<PendingPrintUnlock> print_unlock_;  // 권한 암호로 다시 여는 중 (#23)
+  bool auto_print_after_unlock_ = true;
   bool print_prefs_applied_ =
       false;  // 문서마다 처음 인쇄할 때 문서 인쇄 기본값을 대화상자에 넣는다
   QTimer* outline_highlight_timer_ = nullptr;

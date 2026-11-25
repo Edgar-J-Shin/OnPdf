@@ -30,7 +30,8 @@ struct Rect {
     return p.x >= x && p.x < right() && p.y >= y && p.y < bottom();
   }
   [[nodiscard]] bool intersects(const Rect& o) const noexcept {
-    return !empty() && !o.empty() && x < o.right() && o.x < right() && y < o.bottom() && o.y < bottom();
+    return !empty() && !o.empty() && x < o.right() && o.x < right() && y < o.bottom() &&
+           o.y < bottom();
   }
   // 교집합. 비어 있으면 {0,0,0,0}
   [[nodiscard]] Rect intersected(const Rect& o) const noexcept {
@@ -41,7 +42,9 @@ struct Rect {
     if (nr <= nx || nb <= ny) return {};
     return {nx, ny, nr - nx, nb - ny};
   }
-  [[nodiscard]] Rect translated(double dx, double dy) const noexcept { return {x + dx, y + dy, w, h}; }
+  [[nodiscard]] Rect translated(double dx, double dy) const noexcept {
+    return {x + dx, y + dy, w, h};
+  }
   [[nodiscard]] bool operator==(const Rect&) const = default;
 };
 

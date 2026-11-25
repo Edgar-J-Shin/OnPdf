@@ -32,8 +32,10 @@ Result<engine::ChangeSet> AddTextCommand::execute(engine::EditableDocument& doc)
 }
 
 Result<engine::ChangeSet> AddTextCommand::undo(engine::EditableDocument& doc) {
-  if (!executed_ || ids_.empty()) return make_error(ErrorCode::kInvalidState, "undo before execute");
-  if (auto removed = doc.remove_text_objects(spec_.page, ids_); !removed) return std::unexpected(removed.error());
+  if (!executed_ || ids_.empty())
+    return make_error(ErrorCode::kInvalidState, "undo before execute");
+  if (auto removed = doc.remove_text_objects(spec_.page, ids_); !removed)
+    return std::unexpected(removed.error());
   return page_change(spec_.page);
 }
 

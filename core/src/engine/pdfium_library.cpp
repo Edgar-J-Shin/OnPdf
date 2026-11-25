@@ -43,7 +43,9 @@ PdfiumLibrary::~PdfiumLibrary() {
   g_instances.fetch_sub(1);
 }
 
-bool PdfiumLibrary::is_initialized() noexcept { return g_instances.load() > 0; }
+bool PdfiumLibrary::is_initialized() noexcept {
+  return g_instances.load() > 0;
+}
 
 void PdfiumLibrary::assert_current_thread() noexcept {
   assert(is_initialized() && "PdfiumLibrary 가 초기화되지 않았다");

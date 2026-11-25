@@ -1,14 +1,13 @@
-// PdfiumDocument 이미지·쪽 객체 API (#49): 픽셀(+SMask)·JPEG(DCT) 추가, 목록(기존 이미지 #obj), 마크 부여, 이동·크기, 분리 보관
+// PdfiumDocument 이미지·쪽 객체 API (#49): 픽셀(+SMask)·JPEG(DCT) 추가, 목록(기존 이미지 #obj),
+// 마크 부여, 이동·크기, 분리 보관
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/engine/save.h"
 #include "onpdf/core/image/png_io.h"
 
 #include "../test_support.h"
-
-#include <gtest/gtest.h>
-
 #include <fstream>
+#include <gtest/gtest.h>
 #include <iterator>
 
 namespace onpdf::engine {
@@ -26,9 +25,19 @@ ImagePixels alpha_pixels() {
   for (int y = 0; y < 48; ++y) {
     for (int x = 0; x < 64; ++x) {
       std::uint8_t* px = p.bgra.data() + (y * 64 + x) * 4;
-      if (x < 32) { px[0] = 0; px[1] = 0; px[2] = 255; px[3] = 255; }
-      else if (y < 16) { px[0] = 255; px[1] = 0; px[2] = 0; px[3] = 128; }
-      else { px[0] = px[1] = px[2] = px[3] = 0; }
+      if (x < 32) {
+        px[0] = 0;
+        px[1] = 0;
+        px[2] = 255;
+        px[3] = 255;
+      } else if (y < 16) {
+        px[0] = 255;
+        px[1] = 0;
+        px[2] = 0;
+        px[3] = 128;
+      } else {
+        px[0] = px[1] = px[2] = px[3] = 0;
+      }
     }
   }
   return p;
@@ -43,7 +52,10 @@ JpegBytes test_jpeg() {
   for (int y = 0; y < 60; ++y)
     for (int x = 0; x < 80; ++x) {
       std::uint8_t* px = bmp.pixels.data() + (y * 80 + x) * 4;
-      px[0] = 40; px[1] = 160; px[2] = 40; px[3] = 255;  // 초록
+      px[0] = 40;
+      px[1] = 160;
+      px[2] = 40;
+      px[3] = 255;  // 초록
     }
   auto bytes = image::encode_jpeg(bmp);
   EXPECT_TRUE(bytes);
@@ -54,7 +66,9 @@ double fraction(const Bitmap& b, Rect r, bool (*pred)(int, int, int)) {
   int hit = 0, total = 0;
   for (int y = static_cast<int>(r.y); y < static_cast<int>(r.bottom()); ++y)
     for (int x = static_cast<int>(r.x); x < static_cast<int>(r.right()); ++x) {
-      const auto* p = b.pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(b.stride) + static_cast<std::size_t>(x) * 4;
+      const auto* p = b.pixels.data() +
+                      static_cast<std::size_t>(y) * static_cast<std::size_t>(b.stride) +
+                      static_cast<std::size_t>(x) * 4;
       ++total;
       hit += pred(p[2], p[1], p[0]) ? 1 : 0;
     }
@@ -83,7 +97,8 @@ TEST(PageObjects, AlphaPixelsShowContentBelowAndJpegStaysDct) {
   auto list = doc->page_objects(0);
   ASSERT_TRUE(list);
   std::vector<PageObjectInfo> images;
-  for (const auto& o : *list) if (o.kind == ObjectKind::kImage) images.push_back(o);
+  for (const auto& o : *list)
+    if (o.kind == ObjectKind::kImage) images.push_back(o);
   ASSERT_EQ(images.size(), 2u);
   EXPECT_EQ(images[0].id, *png_id);
   EXPECT_TRUE(images[0].marked);
@@ -104,13 +119,20 @@ TEST(PageObjects, AlphaPixelsShowContentBelowAndJpegStaysDct) {
   auto r = reopened->render_page(0, o);
   ASSERT_TRUE(r);
   // 오른쪽 아래(투명) → 아래 파란 사각형이 보인다, 왼쪽 → 빨강
-  EXPECT_GT(fraction(*r, {182, 222, 80, 60}, [](int R, int G, int B) { return B > 200 && R < 60 && G < 60; }), 0.95);
-  EXPECT_GT(fraction(*r, {82, 222, 80, 60}, [](int R, int G, int B) { return R > 200 && G < 60 && B < 60; }), 0.95);
-  EXPECT_GT(fraction(*r, {330, 410, 140, 100}, [](int R, int G, int B) { return G > 120 && R < 90 && B < 90; }), 0.9);
+  EXPECT_GT(fraction(*r, {182, 222, 80, 60},
+                     [](int R, int G, int B) { return B > 200 && R < 60 && G < 60; }),
+            0.95);
+  EXPECT_GT(fraction(*r, {82, 222, 80, 60},
+                     [](int R, int G, int B) { return R > 200 && G < 60 && B < 60; }),
+            0.95);
+  EXPECT_GT(fraction(*r, {330, 410, 140, 100},
+                     [](int R, int G, int B) { return G > 120 && R < 90 && B < 90; }),
+            0.9);
   EXPECT_TRUE(QpdfTools::check(saved));
   EXPECT_EQ(reopened->page_objects(0)->size(), list->size()) << "마크가 남아 저장 검증 통과";
   std::string png_filter;
-  for (const auto& obj : *reopened->page_objects(0)) if (obj.id == *png_id) png_filter = obj.filter;
+  for (const auto& obj : *reopened->page_objects(0))
+    if (obj.id == *png_id) png_filter = obj.filter;
   EXPECT_EQ(png_filter, "FlateDecode") << "픽셀 이미지는 저장 때 압축된다";
   // 잘못된 입력
   ImageSpec bad = png;
@@ -150,7 +172,8 @@ TEST(PageObjects, ExistingImagesListMarkAndKeepRendering) {
   auto after = doc->render_page(0, o);
   ASSERT_TRUE(after);
   int diff = 0;
-  for (std::size_t k = 0; k < before->pixels.size(); ++k) diff += before->pixels[k] != after->pixels[k];
+  for (std::size_t k = 0; k < before->pixels.size(); ++k)
+    diff += before->pixels[k] != after->pixels[k];
   EXPECT_EQ(diff, 0) << "마크 부여 + 콘텐츠 재생성 뒤 렌더 불변";
   auto marked = doc->page_objects(0);
   EXPECT_TRUE(marked->front().marked);
@@ -169,7 +192,8 @@ TEST(PageObjects, MoveAndResizeOnAnyRotation) {
     auto id = doc->add_image_object(0, spec);
     ASSERT_TRUE(id) << "rotation " << rotation;
     auto bbox = [&] {
-      for (const auto& o : *doc->page_objects(0)) if (o.id == *id) return o.bbox;
+      for (const auto& o : *doc->page_objects(0))
+        if (o.id == *id) return o.bbox;
       return Rect{};
     };
     EXPECT_NEAR(bbox().x, 100, 0.5) << "rotation " << rotation;
@@ -218,7 +242,8 @@ TEST(PageObjects, DetachReattachKeepsOrderAndRender) {
   }
   auto after = doc->render_page(0, o);
   int diff = 0;
-  for (std::size_t k = 0; k < before->pixels.size(); ++k) diff += before->pixels[k] != after->pixels[k];
+  for (std::size_t k = 0; k < before->pixels.size(); ++k)
+    diff += before->pixels[k] != after->pixels[k];
   EXPECT_EQ(diff, 0);
   // 여러 개 동시 + drop
   auto both = doc->detach_objects(0, {*first, *second});
@@ -230,18 +255,23 @@ TEST(PageObjects, DetachReattachKeepsOrderAndRender) {
   EXPECT_FALSE(doc->detach_objects(0, {"onpdf-image-ffffffffffffffff"}));
 }
 
-// 다른 프로그램이 뒤집어 넣은 이미지 (cm 의 d < 0): 1×2 회색, 저장 순서로 위 검정·아래 흰색 → 화면에서는 위 흰색·아래 검정
+// 다른 프로그램이 뒤집어 넣은 이미지 (cm 의 d < 0): 1×2 회색, 저장 순서로 위 검정·아래 흰색 →
+// 화면에서는 위 흰색·아래 검정
 std::vector<std::uint8_t> flipped_image_pdf() {
   std::vector<std::string> objects = {
       "<< /Type /Catalog /Pages 2 0 R >>",
       "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>",
+      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im0 5 0 R "
+      ">> >> /Contents 4 0 R >>",
   };
   const std::string content = "q 100 0 0 -200 100 600 cm /Im0 Do Q";
-  objects.push_back("<< /Length " + std::to_string(content.size()) + " >>\nstream\n" + content + "\nendstream");
+  objects.push_back("<< /Length " + std::to_string(content.size()) + " >>\nstream\n" + content +
+                    "\nendstream");
   const std::string pixels("\x00\xff", 2);
-  objects.push_back("<< /Type /XObject /Subtype /Image /Width 1 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 2 >>\nstream\n" +
-                    pixels + "\nendstream");
+  objects.push_back(
+      "<< /Type /XObject /Subtype /Image /Width 1 /Height 2 /ColorSpace /DeviceGray "
+      "/BitsPerComponent 8 /Length 2 >>\nstream\n" +
+      pixels + "\nendstream");
   std::string pdf = "%PDF-1.7\n";
   std::vector<std::size_t> offsets;
   for (std::size_t i = 0; i < objects.size(); ++i) {
@@ -255,11 +285,13 @@ std::vector<std::uint8_t> flipped_image_pdf() {
     std::snprintf(line, sizeof line, "%010zu 00000 n \n", off);
     pdf += line;
   }
-  pdf += "trailer\n<< /Size " + std::to_string(objects.size() + 1) + " /Root 1 0 R >>\nstartxref\n" + std::to_string(xref) + "\n%%EOF\n";
+  pdf += "trailer\n<< /Size " + std::to_string(objects.size() + 1) +
+         " /Root 1 0 R >>\nstartxref\n" + std::to_string(xref) + "\n%%EOF\n";
   return {pdf.begin(), pdf.end()};
 }
 
-// 크기 조절은 기존 행렬의 회전·뒤집기를 유지하고, 이전 사각형으로 되돌리면 렌더가 원래와 같다 (리뷰 W2)
+// 크기 조절은 기존 행렬의 회전·뒤집기를 유지하고, 이전 사각형으로 되돌리면 렌더가 원래와 같다 (리뷰
+// W2)
 TEST(PageObjects, ResizeKeepsForeignFlipAndUndoRestoresRender) {
   auto doc = PdfiumDocument::open_from_memory(flipped_image_pdf());
   ASSERT_TRUE(doc) << doc.error().message;
@@ -277,20 +309,23 @@ TEST(PageObjects, ResizeKeepsForeignFlipAndUndoRestoresRender) {
   const PageObjectInfo image = list->front();
   EXPECT_NEAR(image.bbox.x, 100, 0.5);
   EXPECT_NEAR(image.bbox.y, 192, 0.5);
-  // 기준: 같은 사각형으로 한 번 (콘텐츠 재생성 뒤 렌더 — 원본 스트림과 경계 보간이 1px 다를 수 있다)
+  // 기준: 같은 사각형으로 한 번 (콘텐츠 재생성 뒤 렌더 — 원본 스트림과 경계 보간이 1px 다를 수
+  // 있다)
   ASSERT_TRUE(doc->set_object_rect(0, image.id, image.bbox));
   before = doc->render_page(0, o);
   ASSERT_TRUE(before);
   ASSERT_TRUE(doc->set_object_rect(0, image.id, {300, 100, 200, 300}));
   auto resized = doc->render_page(0, o);
   ASSERT_TRUE(resized);
-  EXPECT_GT(fraction(*resized, {310, 260, 180, 130}, dark), 0.95) << "뒤집기 유지: 아래 절반이 검정";
+  EXPECT_GT(fraction(*resized, {310, 260, 180, 130}, dark), 0.95)
+      << "뒤집기 유지: 아래 절반이 검정";
   EXPECT_GT(fraction(*resized, {310, 110, 180, 130}, light), 0.95);
   ASSERT_TRUE(doc->set_object_rect(0, image.id, image.bbox));
   auto restored = doc->render_page(0, o);
   ASSERT_TRUE(restored);
   int diff = 0;
-  for (std::size_t k = 0; k < before->pixels.size(); ++k) diff += before->pixels[k] != restored->pixels[k];
+  for (std::size_t k = 0; k < before->pixels.size(); ++k)
+    diff += before->pixels[k] != restored->pixels[k];
   EXPECT_EQ(diff, 0) << "이전 사각형으로 되돌리면 원래 렌더";
 }
 

@@ -2,10 +2,9 @@
 
 #include "onpdf/core/engine/pdfium_library.h"
 
-#include <gtest/gtest.h>
-
 #include <chrono>
 #include <future>
+#include <gtest/gtest.h>
 #include <latch>
 #include <mutex>
 #include <stdexcept>
@@ -69,7 +68,9 @@ TEST(PdfiumWorker, InitializesLibraryOnWorkerThread) {
 }
 
 TEST(PdfiumWorker, DestructorReleasesLibrary) {
-  { PdfiumWorker worker; }
+  {
+    PdfiumWorker worker;
+  }
   EXPECT_FALSE(PdfiumLibrary::is_initialized());
 }
 
@@ -139,9 +140,8 @@ TEST(PdfiumWorker, SubmitReturnsValue) {
 
 TEST(PdfiumWorker, SubmitPropagatesResultError) {
   PdfiumWorker worker;
-  auto f = worker.submit([]() -> Result<int> {
-    return make_error(ErrorCode::kInvalidArgument, "nope");
-  });
+  auto f = worker.submit(
+      []() -> Result<int> { return make_error(ErrorCode::kInvalidArgument, "nope"); });
   auto r = get_or_fail(f);
   ASSERT_FALSE(r);
   EXPECT_EQ(r.error().code, ErrorCode::kInvalidArgument);

@@ -1,11 +1,11 @@
 #include "search_bar.h"
 
 #include <QHBoxLayout>
-#include <QPalette>
-#include <QStyle>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPalette>
+#include <QStyle>
 #include <QToolButton>
 
 namespace onpdf::app {
@@ -16,7 +16,7 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
   layout->setSpacing(4);
 
   edit_ = new QLineEdit(this);
-  edit_->setPlaceholderText(tr("문서에서 찾기"));
+  edit_->setPlaceholderText(tr("Find in document"));
   edit_->setClearButtonEnabled(true);
   edit_->setMinimumWidth(220);
   edit_->installEventFilter(this);
@@ -30,13 +30,13 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
     b->setAutoRaise(true);
     return b;
   };
-  prev_ = make_button(QStringLiteral("‹"), tr("이전 결과 (Shift+Enter)"));
-  next_ = make_button(QStringLiteral("›"), tr("다음 결과 (Enter)"));
-  case_ = make_button(QStringLiteral("Aa"), tr("대소문자 구분"), true);
-  word_ = make_button(tr("단어"), tr("단어 단위로 찾기"), true);
-  close_ = make_button(QStringLiteral("✕"), tr("닫기 (Esc)"));
+  prev_ = make_button(QStringLiteral("‹"), tr("Previous result (Shift+Enter)"));
+  next_ = make_button(QStringLiteral("›"), tr("Next result (Enter)"));
+  case_ = make_button(QStringLiteral("Aa"), tr("Match case"), true);
+  word_ = make_button(tr("Word"), tr("Match whole words"), true);
+  close_ = make_button(QStringLiteral("✕"), tr("Close (Esc)"));
 
-  layout->addWidget(new QLabel(tr("찾기"), this));
+  layout->addWidget(new QLabel(tr("Find"), this));
   layout->addWidget(edit_, 1);
   layout->addWidget(status_);
   layout->addWidget(prev_);
@@ -67,7 +67,9 @@ void SearchBar::open_with(const QString& initial) {
   edit_->selectAll();
 }
 
-QString SearchBar::query() const { return edit_->text(); }
+QString SearchBar::query() const {
+  return edit_->text();
+}
 
 view::SearchOptions SearchBar::options() const {
   view::SearchOptions o;
@@ -76,7 +78,9 @@ view::SearchOptions SearchBar::options() const {
   return o;
 }
 
-QString SearchBar::status_text() const { return status_->text(); }
+QString SearchBar::status_text() const {
+  return status_->text();
+}
 
 void SearchBar::emit_query() {
   debounce_.stop();
@@ -100,29 +104,31 @@ void SearchBar::set_no_match(bool no_match) {
   edit_->setPalette(no_match ? palette : QPalette());
 }
 
-void SearchBar::set_status(std::size_t ordinal, std::size_t total, bool searching, bool truncated, bool no_text) {
+void SearchBar::set_status(std::size_t ordinal, std::size_t total, bool searching, bool truncated,
+                           bool no_text) {
   if (edit_->text().trimmed().isEmpty()) {
     status_->clear();
     set_no_match(false);
     return;
   }
   if (no_text) {
-    status_->setText(tr("텍스트 없음"));
-    status_->setToolTip(tr("이 문서에는 검색할 텍스트가 없습니다 (스캔본일 수 있음)"));
+    status_->setText(tr("No text"));
+    status_->setToolTip(tr("This document has no searchable text (it may be a scan)"));
     set_no_match(true);
     return;
   }
   status_->setToolTip({});
   if (total == 0) {
-    status_->setText(searching ? tr("검색 중…") : tr("결과 없음"));
+    status_->setText(searching ? tr("Searching…") : tr("No results"));
     set_no_match(!searching);
     return;
   }
   set_no_match(false);
   // 시작 쪽이 아직 검색 중이면 현재 결과가 정해지지 않았다
-  QString text = ordinal == 0 ? QStringLiteral("– / %1").arg(total) : QStringLiteral("%1 / %2").arg(ordinal).arg(total);
+  QString text = ordinal == 0 ? QStringLiteral("– / %1").arg(total)
+                              : QStringLiteral("%1 / %2").arg(ordinal).arg(total);
   if (truncated) {
-    text += tr("+ (너무 많음)");
+    text += tr("+ (too many)");
   } else if (searching) {
     text += QStringLiteral("+");
   }

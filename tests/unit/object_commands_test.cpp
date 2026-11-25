@@ -1,15 +1,15 @@
-// 쪽 객체 Command (#49): 이미지 추가·이동·크기·삭제 실행 → 취소 → 재실행 (가짜 + PDFium), 보관 해제, 기존 이미지 마크, 병합
+// 쪽 객체 Command (#49): 이미지 추가·이동·크기·삭제 실행 → 취소 → 재실행 (가짜 + PDFium), 보관
+// 해제, 기존 이미지 마크, 병합
+#include "onpdf/edit/object_commands.h"
+
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/edit/add_text_command.h"
-#include "onpdf/edit/object_commands.h"
 #include "onpdf/edit/undo_stack.h"
 
 #include "../fake_document.h"
 #include "../test_support.h"
-
-#include <gtest/gtest.h>
-
 #include <algorithm>
+#include <gtest/gtest.h>
 
 namespace onpdf::edit {
 namespace {
@@ -154,7 +154,8 @@ TEST(ObjectCommands, KeyboardMovesMergeInUndoStack) {
   EXPECT_EQ(stack.size(), 2u);
 }
 
-// 실제 PDFium: 이미지 추가·이동·크기·삭제 실행→취소→재실행, 재실행은 같은 객체, 기존 이미지(scanned.pdf)
+// 실제 PDFium: 이미지 추가·이동·크기·삭제 실행→취소→재실행, 재실행은 같은 객체, 기존
+// 이미지(scanned.pdf)
 TEST(ObjectCommands, ExecuteUndoRedoOnPdfium) {
   auto doc = engine::PdfiumDocument::open(testdata("simple.pdf"));
   ASSERT_TRUE(doc);
@@ -162,7 +163,8 @@ TEST(ObjectCommands, ExecuteUndoRedoOnPdfium) {
   ASSERT_TRUE(add.execute(*doc));
   const std::string id = add.object_id();
   auto image_rect = [&]() -> Rect {
-    for (const auto& o : *doc->page_objects(0)) if (o.id == id) return o.bbox;
+    for (const auto& o : *doc->page_objects(0))
+      if (o.id == id) return o.bbox;
     return {};
   };
   EXPECT_NEAR(image_rect().x, 100, 0.5);
@@ -204,7 +206,6 @@ TEST(ObjectCommands, ExecuteUndoRedoOnPdfium) {
   EXPECT_NEAR(scanned->page_objects(0)->front().bbox.x, foreign.bbox.x, 0.5);
 }
 
-
 // #66: 떼어 둔 객체의 쪽 번호는 쪽 삭제·이동·삽입 뒤에도 맞아야 한다 (삭제된 쪽의 것은 lost)
 TEST(DetachedObjects, PageIndexFollowsStructuralEdits) {
   auto doc = engine::PdfiumDocument::open(testdata("simple.pdf"));  // 2쪽
@@ -216,7 +217,10 @@ TEST(DetachedObjects, PageIndexFollowsStructuralEdits) {
   auto count_on = [&](int page) {
     auto objects = doc->page_objects(page);
     EXPECT_TRUE(objects);
-    return objects ? std::count_if(objects->begin(), objects->end(), [](const auto& o) { return o.kind == engine::ObjectKind::kImage; }) : -1;
+    return objects
+               ? std::count_if(objects->begin(), objects->end(),
+                               [](const auto& o) { return o.kind == engine::ObjectKind::kImage; })
+               : -1;
   };
   // 삭제: 0쪽을 지우면 1쪽 → 0쪽
   auto d1 = doc->detach_objects(1, {*image});

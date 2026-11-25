@@ -53,12 +53,14 @@ using ProgressFn = std::function<void(int percent)>;  // 작업 스레드에서 
 // 그대로(PDFium 재생성 손실 없음). 순번 = 컨테이너 안 표시 연산자 순서 = PDFium 텍스트 객체 순서
 // (호출자가 개수 일치를 검사한다)
 
-// 새 객체(우리가 덧붙인 표시 연산자)에 자간을 넣는다 (#77): `<cs> Tc <피연산자> TJ 0 Tc`. char_space 는 텍스트 공간
-// 단위(Tc). TJ 커닝이 아니라 Tc 인 이유: PDFium 텍스트 추출은 커닝 간격이 문턱을 넘으면 공백을 끼워 "C h a r" 가 되지만
-// Tc 는 기본 간격으로 본다(CalculateBaseSpace). 대신 PDFium 재생성(그 객체를 옮기거나 크기를 바꿀 때)은 Tc 를 쓰지 않아
-// 자간이 사라진다 — 알려진 제한 (마크 ls 는 남는다)
+// 새 객체(우리가 덧붙인 표시 연산자)에 자간을 넣는다 (#77): `<cs> Tc <피연산자> TJ 0 Tc`.
+// char_space 는 텍스트 공간 단위(Tc). TJ 커닝이 아니라 Tc 인 이유: PDFium 텍스트 추출은 커닝 간격이
+// 문턱을 넘으면 공백을 끼워 "C h a r" 가 되지만 Tc 는 기본 간격으로 본다(CalculateBaseSpace). 대신
+// PDFium 재생성(그 객체를 옮기거나 크기를 바꿀 때)은 Tc 를 쓰지 않아 자간이 사라진다 → 엔진이 마크
+// ls 로 다시 넣는다(#87). 그 연산자 시점의 유효 Tc 가 이미 char_space 면 건드리지 않는다(멱등)
 struct ShowOpFit {
-  int container = -1;  // -1 = 쪽만 적용한다 (Form 안의 새 객체는 만들지 않으므로 container ≥ 0 은 무시된다)
+  int container =
+      -1;  // -1 = 쪽만 적용한다 (Form 안의 새 객체는 만들지 않으므로 container ≥ 0 은 무시된다)
   int ordinal = 0;
   double char_space = 0.0;
 };
@@ -70,7 +72,8 @@ struct ShowOpSurgery {
 };
 struct SurgeryReport {
   std::vector<std::uint8_t> bytes;
-  int fitted = 0;                    // 커닝을 넣은 연산자 수
+  int fitted = 0;                    // 자간(Tc)을 넣은 연산자 수
+  int already_fitted = 0;            // 유효 Tc 가 이미 목표 값이라 건너뛴 fit 수 (#87)
   int page_show_ops = 0;             // 쪽 콘텐츠의 비어 있지 않은 표시 연산자 수
   std::map<int, int> form_show_ops;  // 수술한 Form 별
   int needs_displacement =

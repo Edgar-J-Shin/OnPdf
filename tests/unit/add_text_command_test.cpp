@@ -1,10 +1,10 @@
 // AddTextCommand: 실행 → 취소 → 재실행 (가짜 + PDFium), 회전 쪽, 폰트 재사용 (#45)
-#include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/edit/add_text_command.h"
+
+#include "onpdf/core/engine/pdfium_document.h"
 
 #include "../fake_document.h"
 #include "../test_support.h"
-
 #include <gtest/gtest.h>
 
 namespace onpdf::edit {
@@ -104,12 +104,18 @@ TEST(AddTextCommand, ExecuteUndoRedoOnPdfium) {
   EXPECT_EQ((*doc->text_objects(0))[0].id, cmd.object_ids()[0]) << "재실행은 같은 id";
   EXPECT_EQ(doc->font_cache_size(), 1) << "같은 서브셋은 폰트 객체 재사용";
   // NFD 입력(초성·중성·종성)도 추출은 입력 그대로 (ToUnicode 다중 코드, 리뷰 W3)
-  AddTextCommand nfd(box(0, "\xE1\x84\x92\xE1\x85\xA1\xE1\x86\xAB" " x", {72, 500}));
+  AddTextCommand nfd(box(0,
+                         "\xE1\x84\x92\xE1\x85\xA1\xE1\x86\xAB"
+                         " x",
+                         {72, 500}));
   ASSERT_TRUE(nfd.execute(*doc));
-  EXPECT_NE(doc->load_text(0)->all_text().find("\xE1\x84\x92\xE1\x85\xA1\xE1\x86\xAB"), std::string::npos) << doc->load_text(0)->all_text();
+  EXPECT_NE(doc->load_text(0)->all_text().find("\xE1\x84\x92\xE1\x85\xA1\xE1\x86\xAB"),
+            std::string::npos)
+      << doc->load_text(0)->all_text();
   ASSERT_TRUE(nfd.undo(*doc));
   // 다른 글자 집합 → 새 폰트, 같은 집합 → 재사용
-  const int cached = doc->font_cache_size();  // NFD 상자의 폰트도 캐시에 남는다 (취소해도 사전은 유지)
+  const int cached =
+      doc->font_cache_size();  // NFD 상자의 폰트도 캐시에 남는다 (취소해도 사전은 유지)
   AddTextCommand other(box(0, "둘째 줄", {72, 400}));
   ASSERT_TRUE(other.execute(*doc));
   EXPECT_EQ(doc->font_cache_size(), cached + 1);

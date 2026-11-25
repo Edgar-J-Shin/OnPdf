@@ -6,10 +6,12 @@
 namespace onpdf::edit {
 namespace {
 
-Result<engine::FormWidgetInfo> read_widget(engine::EditableDocument& doc, int page, const engine::FieldRef& ref) {
+Result<engine::FormWidgetInfo> read_widget(engine::EditableDocument& doc, int page,
+                                           const engine::FieldRef& ref) {
   auto list = doc.form_widgets(page);
   if (!list) return std::unexpected(list.error());
-  for (const auto& w : *list) if (w.ref == ref) return w;
+  for (const auto& w : *list)
+    if (w.ref == ref) return w;
   return make_error(ErrorCode::kInvalidArgument, "form field not found: " + ref.name);
 }
 
@@ -58,11 +60,14 @@ Result<engine::ChangeSet> SetFormCheckedCommand::execute(engine::EditableDocumen
     auto widget = read_widget(doc, page_, ref_);
     if (!widget) return std::unexpected(widget.error());
     if (widget->type != engine::FieldType::kCheckBox && widget->type != engine::FieldType::kRadio) {
-      return make_error(ErrorCode::kInvalidArgument, "not a check box or radio button: " + ref_.name);
+      return make_error(ErrorCode::kInvalidArgument,
+                        "not a check box or radio button: " + ref_.name);
     }
     radio_ = widget->type == engine::FieldType::kRadio;
-    if (radio_ && !checked_) return make_error(ErrorCode::kUnsupported, "a radio button group cannot be cleared");
-    if (widget->checked == checked_) return make_error(ErrorCode::kInvalidArgument, "state unchanged");
+    if (radio_ && !checked_)
+      return make_error(ErrorCode::kUnsupported, "a radio button group cannot be cleared");
+    if (widget->checked == checked_)
+      return make_error(ErrorCode::kInvalidArgument, "state unchanged");
     before_checked_ = widget->checked;
     if (radio_) {
       // 같은 필드에서 켜져 있던 위젯: 이 쪽 먼저, 없으면 다른 쪽 (위젯이 여러 쪽에 걸친 그룹)
@@ -96,8 +101,9 @@ Result<engine::ChangeSet> SetFormCheckedCommand::undo(engine::EditableDocument& 
     return pages_change(std::move(*pages));
   }
   if (previous_page_ < 0) {
-    // 처음 선택 없던 그룹: PDFium 이 라디오 해제를 지원하지 않는다. 실패로 두면 이 단계가 스택에 걸려 그 앞의 편집까지
-    // 되돌릴 수 없게 되므로, 문서를 바꾸지 않고 성공한다 (다시 실행도 같은 선택이라 변화 없음). 앱이 undoable() 로 안내
+    // 처음 선택 없던 그룹: PDFium 이 라디오 해제를 지원하지 않는다. 실패로 두면 이 단계가 스택에
+    // 걸려 그 앞의 편집까지 되돌릴 수 없게 되므로, 문서를 바꾸지 않고 성공한다 (다시 실행도 같은
+    // 선택이라 변화 없음). 앱이 undoable() 로 안내
     return engine::ChangeSet{};
   }
   auto pages = doc.set_form_checked(previous_page_, previous_ref_, true);
@@ -117,12 +123,14 @@ Result<engine::ChangeSet> SetFormChoiceCommand::execute(engine::EditableDocument
   if (!executed_) {
     auto widget = read_widget(doc, page_, ref_);
     if (!widget) return std::unexpected(widget.error());
-    if (widget->type != engine::FieldType::kComboBox && widget->type != engine::FieldType::kListBox) {
+    if (widget->type != engine::FieldType::kComboBox &&
+        widget->type != engine::FieldType::kListBox) {
       return make_error(ErrorCode::kInvalidArgument, "not a choice field: " + ref_.name);
     }
     std::vector<int> current = widget->selected;
     std::sort(current.begin(), current.end());
-    if (current == after_ && (widget->type == engine::FieldType::kListBox || !widget->selected.empty())) {
+    if (current == after_ &&
+        (widget->type == engine::FieldType::kListBox || !widget->selected.empty())) {
       return make_error(ErrorCode::kInvalidArgument, "selection unchanged");
     }
     type_ = widget->type;
@@ -141,7 +149,8 @@ Result<engine::ChangeSet> SetFormChoiceCommand::undo(engine::EditableDocument& d
   Result<std::vector<int>> pages;
   if (type_ == engine::FieldType::kComboBox && before_selected_.empty()) {
     // 선택지에 없던 값(직접 입력)이었다: 편집 가능 콤보면 텍스트로, 아니면 되돌릴 수 없다
-    if (!before_editable_) return make_error(ErrorCode::kUnsupported, "previous value is not an option");
+    if (!before_editable_)
+      return make_error(ErrorCode::kUnsupported, "previous value is not an option");
     pages = doc.set_form_text(page_, ref_, before_value_);
   } else {
     pages = doc.set_form_selection(page_, ref_, before_selected_);

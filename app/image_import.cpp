@@ -4,14 +4,14 @@
 #include <QImageReader>
 #include <QMimeDatabase>
 #include <QStringList>
-
 #include <algorithm>
 #include <cstring>
 
 namespace onpdf::app {
 namespace {
 
-// Qt 의 PDF 이미지 플러그인(QtPdf)이 있으면 "pdf" 도 이미지 형식으로 보인다 — PDF 는 이미지로 다루지 않는다 (드롭은 열기·삽입)
+// Qt 의 PDF 이미지 플러그인(QtPdf)이 있으면 "pdf" 도 이미지 형식으로 보인다 — PDF 는 이미지로
+// 다루지 않는다 (드롭은 열기·삽입)
 bool is_excluded_format(const QString& format) {
   const QString f = format.toLower();
   return f == QStringLiteral("pdf") || f == QStringLiteral("svg") || f == QStringLiteral("svgz");
@@ -27,9 +27,11 @@ Result<ImportedImage> from_qimage(QImage image, const QString& format) {
   engine::ImagePixels pixels;
   pixels.width = image.width();
   pixels.height = image.height();
-  pixels.bgra.resize(static_cast<std::size_t>(pixels.width) * static_cast<std::size_t>(pixels.height) * 4);
+  pixels.bgra.resize(static_cast<std::size_t>(pixels.width) *
+                     static_cast<std::size_t>(pixels.height) * 4);
   for (int y = 0; y < pixels.height; ++y) {
-    std::memcpy(pixels.bgra.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(pixels.width) * 4,
+    std::memcpy(pixels.bgra.data() +
+                    static_cast<std::size_t>(y) * static_cast<std::size_t>(pixels.width) * 4,
                 image.constScanLine(y), static_cast<std::size_t>(pixels.width) * 4);
   }
   ImportedImage out;
@@ -46,32 +48,42 @@ Result<ImportedImage> import_image_file(const QString& path, bool force_pixels) 
   QImageReader reader(path);
   reader.setAutoTransform(true);  // EXIF 회전을 픽셀에 반영
   const QString format = QString::fromLatin1(reader.format());
-  if (format.isEmpty()) return make_error(ErrorCode::kInvalidFormat, reader.errorString().toStdString());
-  if (is_excluded_format(format)) return make_error(ErrorCode::kInvalidFormat, "not a raster image");
+  if (format.isEmpty())
+    return make_error(ErrorCode::kInvalidFormat, reader.errorString().toStdString());
+  if (is_excluded_format(format))
+    return make_error(ErrorCode::kInvalidFormat, "not a raster image");
   const QSize size = reader.size();
-  if (size.isValid() && static_cast<std::int64_t>(size.width()) * size.height() > engine::kMaxImagePixels) {
+  if (size.isValid() &&
+      static_cast<std::int64_t>(size.width()) * size.height() > engine::kMaxImagePixels) {
     return make_error(ErrorCode::kInvalidArgument, "image is too large");
   }
   const bool jpeg = format == QStringLiteral("jpeg") || format == QStringLiteral("jpg");
-  if (jpeg && !force_pixels && reader.transformation() == QImageIOHandler::TransformationNone && size.isValid()) {
+  if (jpeg && !force_pixels && reader.transformation() == QImageIOHandler::TransformationNone &&
+      size.isValid()) {
     QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) return make_error(ErrorCode::kIoError, file.errorString().toStdString());
+    if (!file.open(QIODevice::ReadOnly))
+      return make_error(ErrorCode::kIoError, file.errorString().toStdString());
     const QByteArray bytes = file.readAll();
     ImportedImage out;
     out.pixel_width = size.width();
     out.pixel_height = size.height();
     out.format = QStringLiteral("jpeg");
-    out.spec.source = engine::JpegBytes{std::vector<std::uint8_t>(bytes.begin(), bytes.end()), size.width(), size.height()};
+    out.spec.source = engine::JpegBytes{std::vector<std::uint8_t>(bytes.begin(), bytes.end()),
+                                        size.width(), size.height()};
     return out;
   }
   QImage image = reader.read();  // GIF·애니메이션은 첫 프레임
-  if (image.isNull()) return make_error(ErrorCode::kInvalidFormat, reader.errorString().toStdString());
+  if (image.isNull())
+    return make_error(ErrorCode::kInvalidFormat, reader.errorString().toStdString());
   return from_qimage(std::move(image), format);
 }
 
-Result<ImportedImage> import_image(const QImage& image) { return from_qimage(image, QStringLiteral("png")); }
+Result<ImportedImage> import_image(const QImage& image) {
+  return from_qimage(image, QStringLiteral("png"));
+}
 
-Rect place_image(engine::PageSize page, Point origin, int pixel_width, int pixel_height, bool center) {
+Rect place_image(engine::PageSize page, Point origin, int pixel_width, int pixel_height,
+                 bool center) {
   double w = std::max(1, pixel_width);
   double h = std::max(1, pixel_height);
   const double max_w = page.width * 0.8;
@@ -89,10 +101,11 @@ Rect place_image(engine::PageSize page, Point origin, int pixel_width, int pixel
 QString image_file_filter() {
   QStringList patterns;
   for (const QByteArray& f : QImageReader::supportedImageFormats()) {
-    if (!is_excluded_format(QString::fromLatin1(f))) patterns << QStringLiteral("*.") + QString::fromLatin1(f);
+    if (!is_excluded_format(QString::fromLatin1(f)))
+      patterns << QStringLiteral("*.") + QString::fromLatin1(f);
   }
   patterns.removeDuplicates();
-  return QObject::tr("이미지 (%1)").arg(patterns.join(QLatin1Char(' ')));
+  return QObject::tr("Images (%1)").arg(patterns.join(QLatin1Char(' ')));
 }
 
 bool looks_like_image_file(const QString& path) {

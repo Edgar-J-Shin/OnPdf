@@ -4,7 +4,8 @@
 //
 // PDFium 은 스레드 안전하지 않다. PdfiumWorker 는 스레드 하나를 띄워 그 안에서 PdfiumLibrary 를
 // 생성하고, 모든 PDFium 호출을 이 스레드에서만 실행한 뒤, 종료 시 같은 스레드에서 해제한다.
-// 다른 스레드는 post()/submit() 으로 작업을 넣고 콜백(워커 스레드에서 호출) 또는 future 로 결과를 받는다.
+// 다른 스레드는 post()/submit() 으로 작업을 넣고 콜백(워커 스레드에서 호출) 또는 future 로 결과를
+// 받는다.
 //
 // 규칙
 //  - 앱은 PdfiumWorker 하나만 만든다. CLI·테스트처럼 단일 스레드인 경우에는 PdfiumLibrary 를
@@ -50,7 +51,9 @@ class TaskHandle {
   [[nodiscard]] bool valid() const noexcept { return static_cast<bool>(cancelled_); }
 
   // 테스트용: 가짜 TileSource 등이 취소 가능한 핸들을 만들 수 있게 한다
-  static TaskHandle for_testing(std::shared_ptr<std::atomic<bool>> flag) { return TaskHandle(std::move(flag)); }
+  static TaskHandle for_testing(std::shared_ptr<std::atomic<bool>> flag) {
+    return TaskHandle(std::move(flag));
+  }
 
  private:
   friend struct PdfiumWorkerImpl;
@@ -77,7 +80,8 @@ class PdfiumWorker {
   PdfiumWorker(PdfiumWorker&&) = delete;
   PdfiumWorker& operator=(PdfiumWorker&&) = delete;
 
-  // 작업을 큐에 넣는다. 워커가 이미 멈췄으면 호출 스레드에서 즉시 task(true) 를 실행하고 빈 핸들을 돌려준다.
+  // 작업을 큐에 넣는다. 워커가 이미 멈췄으면 호출 스레드에서 즉시 task(true) 를 실행하고 빈 핸들을
+  // 돌려준다.
   TaskHandle post(Task task, Priority priority = Priority::kNormal);
 
   // fn 을 워커에서 실행하고 결과를 future 로 받는다.
@@ -88,7 +92,8 @@ class PdfiumWorker {
   // 대기 중인 작업을 전부 취소한다. 실행 중인 작업은 끝까지 간다.
   void cancel_all() noexcept;
 
-  // 새 작업을 받지 않고 대기 작업을 취소한다. 소멸자가 호출하며, 테스트에서 명시적으로 부를 수 있다.
+  // 새 작업을 받지 않고 대기 작업을 취소한다. 소멸자가 호출하며, 테스트에서 명시적으로 부를 수
+  // 있다.
   void stop() noexcept;
 
   [[nodiscard]] bool is_worker_thread() const noexcept;

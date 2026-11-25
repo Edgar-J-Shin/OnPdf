@@ -87,12 +87,14 @@ onpdf_add_test(onpdf_worker_tests
 if(ONPDF_BUILD_APP)
   onpdf_add_test(onpdf_app_tests NO_GTEST_MAIN
     app/test_main.cpp
+    app/i18n_test.cpp
     app/qt_image_test.cpp
     app/document_session_test.cpp
     app/document_view_test.cpp
     app/search_test.cpp
     app/sidebar_test.cpp
     app/print_test.cpp
+    app/print_preview_test.cpp
     app/edit_test.cpp
     app/annotation_test.cpp
     app/merge_split_test.cpp
@@ -103,6 +105,16 @@ if(ONPDF_BUILD_APP)
   )
   target_link_libraries(onpdf_app_tests PRIVATE onpdf_app_lib)
   set_tests_properties(onpdf_app_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+  # 번역 누락 검사 (#8): 소스의 tr() 와 app/i18n/*.ts 가 맞는지, 한국어 번역이 다 찼는지
+  find_package(Python3 COMPONENTS Interpreter)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME i18n_check
+      COMMAND Python3::Interpreter ${CMAKE_SOURCE_DIR}/scripts/check_translations.py
+        --lupdate $<TARGET_FILE:Qt6::lupdate>
+        --source-dir ${CMAKE_SOURCE_DIR}/app
+        --ts ${CMAKE_SOURCE_DIR}/app/i18n/onpdf_ko.ts
+        --plurals ${CMAKE_SOURCE_DIR}/app/i18n/onpdf_en.ts)
+  endif()
 endif()
 
 # ---- Spike (#43): 한글 폰트 임베딩. 제품 코드가 아니며 PDFium 헤더를 직접 쓴다. ctest 에는 넣지 않는다 ----

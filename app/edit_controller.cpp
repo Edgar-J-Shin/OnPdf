@@ -1,15 +1,15 @@
 #include "edit_controller.h"
 
 #include "onpdf/edit/page_ops.h"
+
 #include "ui_dispatcher.h"
-
 #include <QPointer>
-
 #include <utility>
 
 namespace onpdf::app {
 
-EditController::EditController(UiDispatcher& dispatcher, QObject* parent) : QObject(parent), dispatcher_(dispatcher) {}
+EditController::EditController(UiDispatcher& dispatcher, QObject* parent)
+    : QObject(parent), dispatcher_(dispatcher) {}
 
 void EditController::set_document(engine::DocumentHandle handle) {
   handle_ = std::move(handle);
@@ -19,13 +19,21 @@ void EditController::set_document(engine::DocumentHandle handle) {
   emit state_changed();
 }
 
-void EditController::clear() { set_document(engine::DocumentHandle{}); }
+void EditController::clear() {
+  set_document(engine::DocumentHandle{});
+}
 
-bool EditController::run(std::shared_ptr<edit::Command> command) { return dispatch(std::move(command), Op::kExecute); }
+bool EditController::run(std::shared_ptr<edit::Command> command) {
+  return dispatch(std::move(command), Op::kExecute);
+}
 
-bool EditController::undo() { return can_undo() && dispatch(stack_.undo_target(), Op::kUndo); }
+bool EditController::undo() {
+  return can_undo() && dispatch(stack_.undo_target(), Op::kUndo);
+}
 
-bool EditController::redo() { return can_redo() && dispatch(stack_.redo_target(), Op::kRedo); }
+bool EditController::redo() {
+  return can_redo() && dispatch(stack_.redo_target(), Op::kRedo);
+}
 
 std::string_view EditController::undo_id() const {
   const auto target = stack_.undo_target();
@@ -49,10 +57,15 @@ bool EditController::dispatch(std::shared_ptr<edit::Command> command, Op op) {
   const int generation = generation_;
   UiDispatcher* dispatcher = &dispatcher_;
   QPointer<EditController> self(this);
-  // Command 객체는 이 람다와 스택이 함께 잡는다. execute/undo 는 워커에서만, busy 동안 하나씩 실행된다
+  // Command 객체는 이 람다와 스택이 함께 잡는다. execute/undo 는 워커에서만, busy 동안 하나씩
+  // 실행된다
   handle_.modify(
       [command, op](engine::EditableDocument& doc) {
-        return op == Op::kUndo ? command->undo(doc) : command->execute(doc);
+        auto result = op == Op::kUndo ? command->undo(doc) : command->execute(doc);
+        // 쪽 재생성으로 잃은 자간을 되살린다 (#87). 실패한 명령도 보상 단계에서 재생성했을 수 있다
+        const engine::SpacingSettleResult spacing = doc.settle_letter_spacing();
+        if (result && spacing.lost) result->spacing_lost = true;
+        return result;
       },
       // 워커 스레드: 메인으로 넘기기만
       [dispatcher, self, op, command, generation](Result<engine::ChangeSet> result) {
@@ -69,8 +82,10 @@ void EditController::finish(Op op, std::shared_ptr<edit::Command> command, int g
   if (generation != generation_) return;  // 그 사이 문서가 바뀌었다
   busy_ = false;
   if (!result) {
-    if (op == Op::kExecute) discard_on_worker({std::move(command)});  // 스택에 오르지 않으므로 스냅샷을 해제한다
-    // 취소가 실패하면 그 아래 항목도 되돌릴 수 없다 (예: 줄 수정의 상태 토큰이 메모리 상한으로 폐기됨, #65) → 기록을 비운다
+    if (op == Op::kExecute)
+      discard_on_worker({std::move(command)});  // 스택에 오르지 않으므로 스냅샷을 해제한다
+    // 취소가 실패하면 그 아래 항목도 되돌릴 수 없다 (예: 줄 수정의 상태 토큰이 메모리 상한으로
+    // 폐기됨, #65) → 기록을 비운다
     if (op == Op::kUndo) stack_.invalidate();
     resync_after_failure();
     emit state_changed();
@@ -79,9 +94,15 @@ void EditController::finish(Op op, std::shared_ptr<edit::Command> command, int g
   }
   handle_.apply_change(*result);  // 메인 스레드에서만 문서 정보를 고친다
   switch (op) {
-    case Op::kExecute: discard_on_worker(stack_.push(std::move(command))); break;
-    case Op::kUndo: stack_.did_undo(); break;
-    case Op::kRedo: stack_.did_redo(); break;
+    case Op::kExecute:
+      discard_on_worker(stack_.push(std::move(command)));
+      break;
+    case Op::kUndo:
+      stack_.did_undo();
+      break;
+    case Op::kRedo:
+      stack_.did_redo();
+      break;
   }
   emit document_changed(*result);
   emit state_changed();
@@ -102,10 +123,12 @@ void EditController::resync_after_failure() {
                      const auto& known = controller->handle_.info().page_sizes;
                      bool same = actual.size() == known.size();
                      for (std::size_t i = 0; same && i < actual.size(); ++i) {
-                       same = actual[i].width == known[i].width && actual[i].height == known[i].height;
+                       same =
+                           actual[i].width == known[i].width && actual[i].height == known[i].height;
                      }
                      if (same) return;  // 문서는 그대로다 (예: 인자 검증 단계 실패)
-                     // 문서가 실제로 바뀌었다: 화면을 맞추고, 스택의 기록은 더 믿을 수 없으니 버린다 (저장할 때까지 수정됨)
+                     // 문서가 실제로 바뀌었다: 화면을 맞추고, 스택의 기록은 더 믿을 수 없으니
+                     // 버린다 (저장할 때까지 수정됨)
                      controller->handle_.apply_change(**shared);
                      controller->stack_.invalidate();
                      emit controller->document_changed(**shared);

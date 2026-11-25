@@ -1,20 +1,17 @@
 #include "document_session.h"
 
-#include "onpdf/core/engine/render_types.h"
 #include "onpdf/core/engine/pdfium_worker.h"
-#include "qt_image.h"
-#include "ui_dispatcher.h"
+#include "onpdf/core/engine/render_types.h"
 
 #include "../test_support.h"
-
-#include <gtest/gtest.h>
-
+#include "qt_image.h"
+#include "ui_dispatcher.h"
 #include <QEventLoop>
 #include <QImage>
 #include <QObject>
 #include <QString>
 #include <QTimer>
-
+#include <gtest/gtest.h>
 #include <vector>
 
 namespace onpdf::app {
@@ -23,7 +20,9 @@ namespace {
 using onpdf::test::expect_bitmap_matches_png;
 using onpdf::test::testdata;
 
-QString testdata_q(const char* name) { return QString::fromStdString(onpdf::path_to_utf8(testdata(name))); }
+QString testdata_q(const char* name) {
+  return QString::fromStdString(onpdf::path_to_utf8(testdata(name)));
+}
 
 // 이벤트 루프를 돌리며 predicate 가 참이 될 때까지 기다린다. 시간 초과면 false.
 template <class Pred>
@@ -46,15 +45,15 @@ bool spin_until(Pred pred, int timeout_ms = 5000) {
 class DocumentSessionTest : public ::testing::Test {
  protected:
   DocumentSessionTest() : worker_(make_options()), session_(worker_, dispatcher_) {
-    QObject::connect(&session_, &DocumentSession::opened, [&](const QString& p, int n) {
-      opened_.push_back({p, n});
-    });
+    QObject::connect(&session_, &DocumentSession::opened,
+                     [&](const QString& p, int n) { opened_.push_back({p, n}); });
     QObject::connect(&session_, &DocumentSession::open_failed,
                      [&](const QString& p, const QString& m) { failed_.push_back({p, m}); });
     QObject::connect(&session_, &DocumentSession::password_required,
                      [&](const QString& p) { password_.push_back(p); });
-    QObject::connect(&session_, &DocumentSession::page_rendered,
-                     [&](int page, const QImage& img, int ms) { rendered_.push_back({page, img, ms}); });
+    QObject::connect(
+        &session_, &DocumentSession::page_rendered,
+        [&](int page, const QImage& img, int ms) { rendered_.push_back({page, img, ms}); });
     QObject::connect(&session_, &DocumentSession::render_failed,
                      [&](int page, const QString& m) { render_failed_.push_back({page, m}); });
   }
@@ -70,10 +69,23 @@ class DocumentSessionTest : public ::testing::Test {
     return spin_until([&] { return !opened_.empty() || !failed_.empty(); });
   }
 
-  struct Opened { QString path; int pages; };
-  struct Failed { QString path; QString message; };
-  struct Rendered { int page; QImage image; int ms; };
-  struct RenderFailed { int page; QString message; };
+  struct Opened {
+    QString path;
+    int pages;
+  };
+  struct Failed {
+    QString path;
+    QString message;
+  };
+  struct Rendered {
+    int page;
+    QImage image;
+    int ms;
+  };
+  struct RenderFailed {
+    int page;
+    QString message;
+  };
 
   UiDispatcher dispatcher_;
   engine::PdfiumWorker worker_;

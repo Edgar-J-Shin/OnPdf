@@ -741,7 +741,8 @@ TEST(SaveDocument, GlyfSaveIsNotRewrittenWithoutUnreferencedFonts) {
   EXPECT_FALSE(saved->fonts_converted);
 }
 
-// 비CID CFF(이름 기반 charset): 사전만 FontFile3/CIDFontType0 으로 바꾸고 charset 은 손대지 않는다 (규격: CID = GID, 리뷰 W4)
+// 비CID CFF(이름 기반 charset): 사전만 FontFile3/CIDFontType0 으로 바꾸고 charset 은 손대지 않는다
+// (규격: CID = GID, 리뷰 W4)
 TEST(SaveDocument, NonCidCffFontIsConvertedWithoutCharsetRewrite) {
   ScopedTempDir dir;
   auto face = edit::FontFace::load(testdata("fonts") / "SourceSans3-subset.otf");

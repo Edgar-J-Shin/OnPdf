@@ -1,12 +1,11 @@
-#include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/edit/move_pages.h"
+
+#include "onpdf/core/engine/pdfium_document.h"
 
 #include "../fake_document.h"
 #include "../test_support.h"
-
-#include <gtest/gtest.h>
-
 #include <cmath>
+#include <gtest/gtest.h>
 #include <vector>
 
 namespace onpdf::edit {
@@ -31,7 +30,8 @@ std::vector<PageSize> reorder(const std::vector<PageSize>& sizes, const std::vec
 bool same_sizes(const std::vector<PageSize>& a, const std::vector<PageSize>& b) {
   if (a.size() != b.size()) return false;
   for (std::size_t i = 0; i < a.size(); ++i) {
-    if (std::abs(a[i].width - b[i].width) > 0.01 || std::abs(a[i].height - b[i].height) > 0.01) return false;
+    if (std::abs(a[i].width - b[i].width) > 0.01 || std::abs(a[i].height - b[i].height) > 0.01)
+      return false;
   }
   return true;
 }

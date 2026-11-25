@@ -17,8 +17,9 @@ class UndoStack {
   static constexpr std::size_t kDefaultLimit = 100;
   explicit UndoStack(std::size_t limit = kDefaultLimit);
 
-  // 실행에 성공한 Command 를 올린다. 다시 실행 기록은 지운다. 상한을 넘으면 가장 오래된 것을 버린다.
-  // 버린 Command(다시 실행 기록·상한 초과분)를 돌려준다 — 호출자가 워커에서 discard 를 불러 스냅샷을 해제한다
+  // 실행에 성공한 Command 를 올린다. 다시 실행 기록은 지운다. 상한을 넘으면 가장 오래된 것을
+  // 버린다. 버린 Command(다시 실행 기록·상한 초과분)를 돌려준다 — 호출자가 워커에서 discard 를 불러
+  // 스냅샷을 해제한다
   std::vector<std::shared_ptr<Command>> push(std::shared_ptr<Command> executed);
   [[nodiscard]] std::shared_ptr<Command> undo_target() const;  // 없으면 nullptr
   [[nodiscard]] std::shared_ptr<Command> redo_target() const;
@@ -33,7 +34,8 @@ class UndoStack {
   // 저장 지점과 같은 위치면 깨끗하다. 저장 지점이 버려졌으면(분기·상한) 다시는 깨끗해지지 않는다
   [[nodiscard]] bool is_clean() const noexcept { return clean_index_ && *clean_index_ == index_; }
   void clear();       // 새 문서: 비우고 깨끗한 상태
-  void invalidate();  // 기록을 믿을 수 없다(실패한 명령이 문서를 반쯤 바꿈): 비우고, 저장할 때까지 수정됨으로 둔다
+  void invalidate();  // 기록을 믿을 수 없다(실패한 명령이 문서를 반쯤 바꿈): 비우고, 저장할 때까지
+                      // 수정됨으로 둔다
 
  private:
   std::vector<std::shared_ptr<Command>> items_;

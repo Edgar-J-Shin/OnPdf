@@ -26,11 +26,13 @@ Result<void> stabilize(engine::EditableDocument& doc, int page, std::vector<std:
 
 // ---------------------------------------------------------------- Add image
 
-AddImageCommand::AddImageCommand(int page, engine::ImageSpec spec) : page_(page), spec_(std::move(spec)) {}
+AddImageCommand::AddImageCommand(int page, engine::ImageSpec spec)
+    : page_(page), spec_(std::move(spec)) {}
 
 Result<engine::ChangeSet> AddImageCommand::execute(engine::EditableDocument& doc) {
   if (detached_ != 0) {  // 재실행: 떼어 둔 같은 객체를 다시 붙인다 (픽셀을 다시 넣지 않는다)
-    if (auto reattached = doc.reattach_objects(detached_); !reattached) return std::unexpected(reattached.error());
+    if (auto reattached = doc.reattach_objects(detached_); !reattached)
+      return std::unexpected(reattached.error());
     detached_ = 0;
     return page_change(page_);
   }
@@ -44,7 +46,8 @@ Result<engine::ChangeSet> AddImageCommand::execute(engine::EditableDocument& doc
 }
 
 Result<engine::ChangeSet> AddImageCommand::undo(engine::EditableDocument& doc) {
-  if (!executed_ || detached_ != 0) return make_error(ErrorCode::kInvalidState, "undo before execute");
+  if (!executed_ || detached_ != 0)
+    return make_error(ErrorCode::kInvalidState, "undo before execute");
   auto detached = doc.detach_objects(page_, {object_id_});
   if (!detached) return std::unexpected(detached.error());
   detached_ = *detached;
@@ -58,7 +61,8 @@ void AddImageCommand::discard(engine::EditableDocument& doc) noexcept {
 
 // ---------------------------------------------------------------- Move
 
-MoveObjectsCommand::MoveObjectsCommand(int page, std::vector<std::string> ids, Point delta, bool keyboard)
+MoveObjectsCommand::MoveObjectsCommand(int page, std::vector<std::string> ids, Point delta,
+                                       bool keyboard)
     : page_(page), ids_(std::move(ids)), delta_(delta), keyboard_(keyboard) {}
 
 Result<engine::ChangeSet> MoveObjectsCommand::execute(engine::EditableDocument& doc) {
@@ -66,20 +70,24 @@ Result<engine::ChangeSet> MoveObjectsCommand::execute(engine::EditableDocument& 
   if (!executed_) {
     if (auto stable = stabilize(doc, page_, ids_); !stable) return std::unexpected(stable.error());
   }
-  if (auto moved = doc.move_page_objects(page_, ids_, delta_); !moved) return std::unexpected(moved.error());
+  if (auto moved = doc.move_page_objects(page_, ids_, delta_); !moved)
+    return std::unexpected(moved.error());
   executed_ = true;
   return page_change(page_);
 }
 
 Result<engine::ChangeSet> MoveObjectsCommand::undo(engine::EditableDocument& doc) {
   if (!executed_) return make_error(ErrorCode::kInvalidState, "undo before execute");
-  if (auto moved = doc.move_page_objects(page_, ids_, {-delta_.x, -delta_.y}); !moved) return std::unexpected(moved.error());
+  if (auto moved = doc.move_page_objects(page_, ids_, {-delta_.x, -delta_.y}); !moved)
+    return std::unexpected(moved.error());
   return page_change(page_);
 }
 
 bool MoveObjectsCommand::merge_with(const Command& next) {
   const auto* other = dynamic_cast<const MoveObjectsCommand*>(&next);
-  if (other == nullptr || !keyboard_ || !other->keyboard_ || other->page_ != page_ || other->ids_ != ids_) return false;
+  if (other == nullptr || !keyboard_ || !other->keyboard_ || other->page_ != page_ ||
+      other->ids_ != ids_)
+    return false;
   delta_.x += other->delta_.x;
   delta_.y += other->delta_.y;
   return true;
@@ -96,20 +104,23 @@ Result<engine::ChangeSet> ResizeObjectCommand::execute(engine::EditableDocument&
     if (!marked) return std::unexpected(marked.error());
     object_id_ = std::move(*marked);
   }
-  if (auto set = doc.set_object_rect(page_, object_id_, after_); !set) return std::unexpected(set.error());
+  if (auto set = doc.set_object_rect(page_, object_id_, after_); !set)
+    return std::unexpected(set.error());
   executed_ = true;
   return page_change(page_);
 }
 
 Result<engine::ChangeSet> ResizeObjectCommand::undo(engine::EditableDocument& doc) {
   if (!executed_) return make_error(ErrorCode::kInvalidState, "undo before execute");
-  if (auto set = doc.set_object_rect(page_, object_id_, before_); !set) return std::unexpected(set.error());
+  if (auto set = doc.set_object_rect(page_, object_id_, before_); !set)
+    return std::unexpected(set.error());
   return page_change(page_);
 }
 
 // ---------------------------------------------------------------- Remove
 
-RemoveObjectsCommand::RemoveObjectsCommand(int page, std::vector<std::string> ids) : page_(page), ids_(std::move(ids)) {}
+RemoveObjectsCommand::RemoveObjectsCommand(int page, std::vector<std::string> ids)
+    : page_(page), ids_(std::move(ids)) {}
 
 Result<engine::ChangeSet> RemoveObjectsCommand::execute(engine::EditableDocument& doc) {
   if (ids_.empty()) return make_error(ErrorCode::kInvalidArgument, "no ids");
@@ -124,8 +135,10 @@ Result<engine::ChangeSet> RemoveObjectsCommand::execute(engine::EditableDocument
 }
 
 Result<engine::ChangeSet> RemoveObjectsCommand::undo(engine::EditableDocument& doc) {
-  if (!executed_ || detached_ == 0) return make_error(ErrorCode::kInvalidState, "undo before execute");
-  if (auto reattached = doc.reattach_objects(detached_); !reattached) return std::unexpected(reattached.error());
+  if (!executed_ || detached_ == 0)
+    return make_error(ErrorCode::kInvalidState, "undo before execute");
+  if (auto reattached = doc.reattach_objects(detached_); !reattached)
+    return std::unexpected(reattached.error());
   detached_ = 0;
   return page_change(page_);
 }

@@ -115,7 +115,7 @@ Result<std::shared_ptr<const FontFace>> FontFace::open_face(std::unique_ptr<Impl
   }
   (void)hb_language_get_default();  // 첫 호출이 스레드 안전하지 않다 — 워커가 shape 에서 처음
                                     // 부르기 전에 여기서(리뷰 I9)
-  hb_ot_var_axis_info_t axis{};  // 출력 인자는 널이면 안 된다 (HarfBuzz 가 무조건 쓴다)
+  hb_ot_var_axis_info_t axis{};     // 출력 인자는 널이면 안 된다 (HarfBuzz 가 무조건 쓴다)
   impl->has_wght = hb_ot_var_find_axis_info(impl->face.get(), kWghtTag, &axis) != 0;
   return std::shared_ptr<const FontFace>(new FontFace(std::move(impl)));
 }

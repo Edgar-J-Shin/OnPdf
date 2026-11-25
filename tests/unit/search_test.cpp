@@ -1,8 +1,7 @@
 #include "onpdf/core/view/search.h"
 
-#include <gtest/gtest.h>
-
 #include <atomic>
+#include <gtest/gtest.h>
 #include <map>
 #include <memory>
 #include <vector>
@@ -26,19 +25,21 @@ PageTextIndex index_with_sources(const std::vector<int>& sources) {
 TEST(Search, MapSourceRangeSkipsLineBreaks) {
   // PDFium 인덱스 3,4 는 줄바꿈(\r\n)이라 인덱스에 없다
   const auto idx = index_with_sources({0, 1, 2, 5, 6, 7});
-  EXPECT_EQ(map_source_range(idx, {1, 2}), (TextRange{1, 3}));   // 1,2
-  EXPECT_EQ(map_source_range(idx, {2, 4}), (TextRange{2, 4}));   // 2,(3,4),5 → 인덱스 2..3
-  EXPECT_EQ(map_source_range(idx, {3, 2}), (TextRange{}));       // 줄바꿈만
+  EXPECT_EQ(map_source_range(idx, {1, 2}), (TextRange{1, 3}));  // 1,2
+  EXPECT_EQ(map_source_range(idx, {2, 4}), (TextRange{2, 4}));  // 2,(3,4),5 → 인덱스 2..3
+  EXPECT_EQ(map_source_range(idx, {3, 2}), (TextRange{}));      // 줄바꿈만
   EXPECT_EQ(map_source_range(idx, {5, 3}), (TextRange{3, 6}));
-  EXPECT_EQ(map_source_range(idx, {7, 5}), (TextRange{5, 6}));   // 끝을 넘어도 clamp
+  EXPECT_EQ(map_source_range(idx, {7, 5}), (TextRange{5, 6}));  // 끝을 넘어도 clamp
   EXPECT_EQ(map_source_range(idx, {0, 0}), (TextRange{}));
   EXPECT_EQ(map_source_range(PageTextIndex{}, {0, 3}), (TextRange{}));
 }
 
 TEST(Search, NormalizeQuery) {
   EXPECT_EQ(normalize_query("  page  "), "page");
-  EXPECT_EQ(normalize_query("a\xC2\xA0" "b"), "a b");          // NBSP
-  EXPECT_EQ(normalize_query("한\xE3\x80\x80글"), "한 글");        // 전각 공백
+  EXPECT_EQ(normalize_query("a\xC2\xA0"
+                            "b"),
+            "a b");                                         // NBSP
+  EXPECT_EQ(normalize_query("한\xE3\x80\x80글"), "한 글");  // 전각 공백
   EXPECT_EQ(normalize_query("\t\n "), "");
   EXPECT_EQ(normalize_query("x\ty"), "x y");
 }
@@ -53,7 +54,8 @@ class FakeExecutor {
     std::shared_ptr<std::atomic<bool>> cancelled;
   };
   SearchSession::Executor executor() {
-    return [this](int page, const std::string& query, SearchOptions options, SearchSession::PageCallback cb) {
+    return [this](int page, const std::string& query, SearchOptions options,
+                  SearchSession::PageCallback cb) {
       auto flag = std::make_shared<std::atomic<bool>>(false);
       pending[page] = Pending{query, options, std::move(cb), flag};
       order.push_back(page);
@@ -231,7 +233,7 @@ TEST(SearchSession, CancelKeepsResultsAndIsNotNoText) {
   EXPECT_FALSE(s.current().has_value());
   s.cancel();
   EXPECT_FALSE(s.searching());
-  EXPECT_FALSE(s.no_text());  // 다 검색하지 않았으므로 "텍스트 없음" 이 아니다
+  EXPECT_FALSE(s.no_text());             // 다 검색하지 않았으므로 "텍스트 없음" 이 아니다
   ASSERT_TRUE(s.current().has_value());  // 남은 결과에서 현재 선택
   EXPECT_EQ(s.current()->page, 1);
   EXPECT_TRUE(s.current_is_automatic());
@@ -282,7 +284,8 @@ TEST(SearchSession, ReentrantRestartFromCallbackKeepsNewHandle) {
   ASSERT_TRUE(fake.pending.contains(0));
   EXPECT_EQ(fake.pending.at(0).query, "again");
   s.cancel();
-  EXPECT_TRUE(fake.cancelled(0)) << "new request handle must be the one held (and cancelled) by the session";
+  EXPECT_TRUE(fake.cancelled(0))
+      << "new request handle must be the one held (and cancelled) by the session";
 }
 
 TEST(SearchSession, LateCallbackAfterDestructionIsIgnored) {

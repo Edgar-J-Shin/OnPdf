@@ -2,7 +2,6 @@
 
 #include "qt_image.h"
 #include "ui_dispatcher.h"
-
 #include <QAbstractListModel>
 #include <QApplication>
 #include <QContextMenuEvent>
@@ -18,7 +17,6 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
-
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -34,7 +32,7 @@ constexpr int kPadding = 6;      // 썸네일 위아래 여백
 constexpr int kSideMargin = 16;  // 썸네일 좌우 여백 (목록 배경이 보이게)
 constexpr int kMinThumb = 48;
 constexpr int kMaxThumb = 360;
-constexpr double kMaxAspect = 4.0;  // 아주 긴 쪽은 높이를 폭의 4배로 제한
+constexpr double kMaxAspect = 4.0;                      // 아주 긴 쪽은 높이를 폭의 4배로 제한
 const char kPagesMime[] = "application/x-onpdf-pages";  // 내부 끌어 놓기: 쪽 번호 목록 "1,3,5"
 
 }  // namespace
@@ -65,12 +63,15 @@ class ThumbnailModel : public QAbstractListModel {
     return {};
   }
 
-  // ---- 끌어 놓기: 모델은 행을 옮기지 않는다. 패널에 요청하면 Command 가 문서를 바꾸고 그 뒤 행을 다시 세운다 ----
+  // ---- 끌어 놓기: 모델은 행을 옮기지 않는다. 패널에 요청하면 Command 가 문서를 바꾸고 그 뒤 행을
+  // 다시 세운다 ----
   [[nodiscard]] Qt::ItemFlags flags(const QModelIndex& index) const override {
     if (!index.isValid()) return Qt::ItemIsDropEnabled;  // 행 사이에 놓기
     return Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled;
   }
-  [[nodiscard]] Qt::DropActions supportedDropActions() const override { return Qt::MoveAction | Qt::CopyAction; }
+  [[nodiscard]] Qt::DropActions supportedDropActions() const override {
+    return Qt::MoveAction | Qt::CopyAction;
+  }
   [[nodiscard]] Qt::DropActions supportedDragActions() const override { return Qt::MoveAction; }
   [[nodiscard]] QStringList mimeTypes() const override {
     return {QString::fromLatin1(kPagesMime), QStringLiteral("text/uri-list")};
@@ -125,7 +126,8 @@ class ThumbnailModel : public QAbstractListModel {
 
 namespace {
 
-// 키보드로 현재 행을 옮길 때만 쪽 이동으로 본다. (포커스·모델 리셋 때 Qt 가 스스로 현재 행을 정하는 경우는 무시)
+// 키보드로 현재 행을 옮길 때만 쪽 이동으로 본다. (포커스·모델 리셋 때 Qt 가 스스로 현재 행을 정하는
+// 경우는 무시)
 class ThumbnailList : public QListView {
  public:
   explicit ThumbnailList(ThumbnailPanel* panel) : QListView(panel), panel_(panel) {}
@@ -161,12 +163,13 @@ class ThumbnailDelegate : public QStyledItemDelegate {
     return {panel_->thumb_width() + 2 * kSideMargin, thumb.height() + kLabelHeight + 2 * kPadding};
   }
 
-  void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+  void paint(QPainter* painter, const QStyleOptionViewItem& option,
+             const QModelIndex& index) const override {
     const int page = index.row();
     const QSize size = panel_->thumb_size(page);
     const QRect area = option.rect;
-    const QRect box(area.left() + (area.width() - size.width()) / 2, area.top() + kPadding, size.width(),
-                    size.height());
+    const QRect box(area.left() + (area.width() - size.width()) / 2, area.top() + kPadding,
+                    size.width(), size.height());
     painter->save();
     painter->setRenderHint(QPainter::SmoothPixmapTransform);
     const QImage image = panel_->thumbnail(page);
@@ -237,18 +240,23 @@ ThumbnailPanel::ThumbnailPanel(QWidget* parent) : QWidget(parent) {
   request_timer_->setSingleShot(true);
   request_timer_->setInterval(0);
   connect(request_timer_, &QTimer::timeout, this, &ThumbnailPanel::request_visible);
-  connect(list_->verticalScrollBar(), &QScrollBar::valueChanged, this, &ThumbnailPanel::schedule_request);
+  connect(list_->verticalScrollBar(), &QScrollBar::valueChanged, this,
+          &ThumbnailPanel::schedule_request);
   // 스크롤바를 끄는 동안에는 요청하지 않고, 놓으면 그 자리만 요청한다
-  connect(list_->verticalScrollBar(), &QScrollBar::sliderReleased, this, &ThumbnailPanel::schedule_request);
+  connect(list_->verticalScrollBar(), &QScrollBar::sliderReleased, this,
+          &ThumbnailPanel::schedule_request);
   connect(list_, &QListView::clicked, this, &ThumbnailPanel::on_user_activated);
   connect(list_, &QListView::activated, this, &ThumbnailPanel::on_user_activated);
   connect(list_->selectionModel(), &QItemSelectionModel::currentChanged, this,
           [this, list](const QModelIndex& current) {
-            if (!syncing_ && list->keyboard_navigating()) on_user_activated(current);  // 키보드 이동
+            if (!syncing_ && list->keyboard_navigating())
+              on_user_activated(current);  // 키보드 이동
           });
 }
 
-ThumbnailPanel::~ThumbnailPanel() { cancel_all(); }
+ThumbnailPanel::~ThumbnailPanel() {
+  cancel_all();
+}
 
 void ThumbnailPanel::set_document(const engine::DocumentHandle& handle, UiDispatcher& dispatcher) {
   cancel_all();
@@ -304,10 +312,11 @@ void ThumbnailPanel::set_current_page(int page) {
   const QScopedValueRollback guard(syncing_, true);
   // 사용자가 여러 쪽을 고른 상태면 선택은 건드리지 않고 현재 쪽 강조만 옮긴다
   const bool multi = list_->selectionModel()->selectedIndexes().size() > 1;
-  list_->selectionModel()->setCurrentIndex(index, multi ? QItemSelectionModel::NoUpdate
-                                                        : QItemSelectionModel::ClearAndSelect);
+  list_->selectionModel()->setCurrentIndex(
+      index, multi ? QItemSelectionModel::NoUpdate : QItemSelectionModel::ClearAndSelect);
   list_->scrollTo(index, QAbstractItemView::EnsureVisible);
-  if (previous >= 0 && previous < model_->rowCount() && previous != page) model_->page_changed(previous);
+  if (previous >= 0 && previous < model_->rowCount() && previous != page)
+    model_->page_changed(previous);
   model_->page_changed(page);
 }
 
@@ -342,13 +351,16 @@ void ThumbnailPanel::set_editable(bool editable) {
 
 std::vector<int> ThumbnailPanel::selected_pages() const {
   std::vector<int> pages;
-  for (const QModelIndex& index : list_->selectionModel()->selectedIndexes()) pages.push_back(index.row());
+  for (const QModelIndex& index : list_->selectionModel()->selectedIndexes())
+    pages.push_back(index.row());
   std::sort(pages.begin(), pages.end());
   pages.erase(std::unique(pages.begin(), pages.end()), pages.end());
   return pages;
 }
 
-bool ThumbnailPanel::list_has_focus() const { return list_->hasFocus(); }
+bool ThumbnailPanel::list_has_focus() const {
+  return list_->hasFocus();
+}
 
 void ThumbnailPanel::select_pages(const std::vector<int>& pages) {
   if (pages.empty()) return;
@@ -362,8 +374,8 @@ void ThumbnailPanel::select_pages(const std::vector<int>& pages) {
   list_->selectionModel()->select(selection, QItemSelectionModel::ClearAndSelect);
 }
 
-// 드롭 이벤트 안에서 바로 신호를 내면 수신자의 대화상자(서명 경고 등)가 드롭 안의 중첩 모달이 되어 Finder/OLE 를
-// 멈춘다 (#27 과 같은 이유) → 다음 이벤트 턴에 낸다
+// 드롭 이벤트 안에서 바로 신호를 내면 수신자의 대화상자(서명 경고 등)가 드롭 안의 중첩 모달이 되어
+// Finder/OLE 를 멈춘다 (#27 과 같은 이유) → 다음 이벤트 턴에 낸다
 void ThumbnailPanel::request_move(const std::vector<int>& pages, int drop_row) {
   if (!editable_) return;
   QTimer::singleShot(0, this, [this, pages, drop_row] {
@@ -399,7 +411,8 @@ QSize ThumbnailPanel::thumb_size(int page) const {
   const int width = std::max(thumb_width_, kMinThumb);
   if (!handle_.valid()) return {width, width};
   const auto& sizes = handle_.info().page_sizes;
-  if (page < 0 || static_cast<std::size_t>(page) >= sizes.size() || sizes[static_cast<std::size_t>(page)].width <= 0) {
+  if (page < 0 || static_cast<std::size_t>(page) >= sizes.size() ||
+      sizes[static_cast<std::size_t>(page)].width <= 0) {
     return {width, width};
   }
   const auto& size = sizes[static_cast<std::size_t>(page)];
@@ -430,7 +443,8 @@ void ThumbnailPanel::resizeEvent(QResizeEvent* event) {
 
 bool ThumbnailPanel::event(QEvent* event) {
   if (event->type() == QEvent::DevicePixelRatioChange) {
-    // 다른 배율의 화면으로 옮겨졌다: 대기 요청은 이전 배율이므로 버리고, 캐시 그림은 새 그림이 올 때까지 늘려 그린다
+    // 다른 배율의 화면으로 옮겨졌다: 대기 요청은 이전 배율이므로 버리고, 캐시 그림은 새 그림이 올
+    // 때까지 늘려 그린다
     cancel_all();
     ++generation_;
     failed_.clear();
@@ -452,7 +466,8 @@ void ThumbnailPanel::schedule_request() {
 void ThumbnailPanel::request_visible() {
   const int rows = model_->rowCount();
   if (!handle_.valid() || rows == 0 || dispatcher_ == nullptr || !isVisible()) return;
-  if (list_->verticalScrollBar()->isSliderDown()) return;  // 드래그 중: 지나가는 쪽은 요청하지 않는다
+  if (list_->verticalScrollBar()->isSliderDown())
+    return;  // 드래그 중: 지나가는 쪽은 요청하지 않는다
 
   const QRect vp = list_->viewport()->rect();
   QModelIndex first = list_->indexAt(QPoint(vp.center().x(), vp.top() + 1));

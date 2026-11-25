@@ -1,11 +1,12 @@
-// 폼 Command (#51): 텍스트·체크·라디오·선택지 실행 → 취소 → 재실행 (가짜 + PDFium), 라디오 첫 선택 취소 불가
+// 폼 Command (#51): 텍스트·체크·라디오·선택지 실행 → 취소 → 재실행 (가짜 + PDFium), 라디오 첫 선택
+// 취소 불가
+#include "onpdf/edit/form_commands.h"
+
 #include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/edit/delete_pages.h"
-#include "onpdf/edit/form_commands.h"
 
 #include "../fake_document.h"
 #include "../test_support.h"
-
 #include <gtest/gtest.h>
 
 namespace onpdf::edit {
@@ -22,7 +23,8 @@ engine::FormWidgetInfo text_widget(const std::string& name, int control, const s
   return w;
 }
 
-engine::FormWidgetInfo radio_widget(const std::string& name, int control, const std::string& on, bool checked) {
+engine::FormWidgetInfo radio_widget(const std::string& name, int control, const std::string& on,
+                                    bool checked) {
   engine::FormWidgetInfo w;
   w.ref = {name, control};
   w.type = engine::FieldType::kRadio;
@@ -32,10 +34,12 @@ engine::FormWidgetInfo radio_widget(const std::string& name, int control, const 
   return w;
 }
 
-engine::FormWidgetInfo widget(engine::EditableDocument& doc, int page, const std::string& name, int control = 0) {
+engine::FormWidgetInfo widget(engine::EditableDocument& doc, int page, const std::string& name,
+                              int control = 0) {
   auto list = doc.form_widgets(page);
   EXPECT_TRUE(list);
-  for (const auto& w : *list) if (w.ref.name == name && w.ref.nth == control) return w;
+  for (const auto& w : *list)
+    if (w.ref.name == name && w.ref.nth == control) return w;
   ADD_FAILURE() << "no widget " << name;
   return {};
 }
@@ -152,7 +156,8 @@ TEST(FormCommands, RoundTripOnPdfium) {
 
   SetFormTextCommand address(0, {"address", 0}, "1 Main St\n2nd line");
   ASSERT_TRUE(address.execute(*doc));
-  EXPECT_EQ(widget(*doc, 0, "address").value, "1 Main St\n2nd line") << "줄바꿈 정규화로 Command 값과 같다";
+  EXPECT_EQ(widget(*doc, 0, "address").value, "1 Main St\n2nd line")
+      << "줄바꿈 정규화로 Command 값과 같다";
   ASSERT_TRUE(address.undo(*doc));
   EXPECT_EQ(widget(*doc, 0, "address").value, "");
 

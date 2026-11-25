@@ -43,7 +43,7 @@ struct TextObjectsSpec {
   std::string box;  // 상자 id("onpdf-box-<16진 16자>"): 줄들을 묶는다. 비면 엔진이 만든다 (#47)
   std::string box_text;  // 상자 원문 전체(빈 줄 포함, '\n' 구분) — 첫 줄 객체의 블롭 "box_text". 빈
                          // 줄은 객체가 없어 줄 원문만으로는 복원이 안 된다
-  double width = 0.0;     // 상자 폭(pt, 0 = 줄바꿈 없음) — 첫 줄 마크 "width" (#49)
+  double width = 0.0;    // 상자 폭(pt, 0 = 줄바꿈 없음) — 첫 줄 마크 "width" (#49)
   bool write_box = true;  // 테스트용: false 면 box·box_text 마크를 쓰지 않는다 (#47 이전 파일 흉내)
   double letter_spacing = 0.0;  // 원 줄 자간(pt) — 첫 줄 마크 "ls" (#77, 재수정 때 같은 자간)
 };

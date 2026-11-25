@@ -21,11 +21,14 @@ namespace onpdf::edit {
 // order[new] = old → inv[old] = new
 [[nodiscard]] std::vector<int> invert_order(const std::vector<int>& order);
 
-// 현재 문서를 target 순서로 재배열한다: target[new] = 현재 인덱스. 단일 쪽 move_pages 의 열(최대 n 회)
-[[nodiscard]] Result<void> apply_order(engine::EditableDocument& doc, const std::vector<int>& target);
+// 현재 문서를 target 순서로 재배열한다: target[new] = 현재 인덱스. 단일 쪽 move_pages 의 열(최대 n
+// 회)
+[[nodiscard]] Result<void> apply_order(engine::EditableDocument& doc,
+                                       const std::vector<int>& target);
 
 // 쪽 수·순서가 바뀐 뒤의 ChangeSet (all_sizes 에 전체 쪽 크기). focus_page 는 새 범위로 클램프한다
-[[nodiscard]] Result<engine::ChangeSet> structural_change(const engine::EditableDocument& doc, int focus_page = -1,
-                                                        std::vector<int> selected_pages = {});
+[[nodiscard]] Result<engine::ChangeSet> structural_change(const engine::EditableDocument& doc,
+                                                          int focus_page = -1,
+                                                          std::vector<int> selected_pages = {});
 
 }  // namespace onpdf::edit

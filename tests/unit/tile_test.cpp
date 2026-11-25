@@ -23,7 +23,8 @@ TEST(Tile, GridAndRects) {
   EXPECT_EQ(tiles_across(0), 0);
 
   EXPECT_EQ(tile_rect_px({0, 128, 0, 0}, letter), (Rect{0, 0, 512, 512}));
-  EXPECT_EQ(tile_rect_px({0, 128, 2, 3}, letter), (Rect{1024, 1536, 200, 48}));  // 마지막 타일은 잘림
+  EXPECT_EQ(tile_rect_px({0, 128, 2, 3}, letter),
+            (Rect{1024, 1536, 200, 48}));  // 마지막 타일은 잘림
 }
 
 TEST(Tile, KeyHashAndOrder) {
@@ -36,13 +37,14 @@ TEST(Tile, KeyHashAndOrder) {
 
 }  // namespace
 TEST(Tile, PreviewScaleFitsWholePageInOneTile) {
-  EXPECT_EQ(preview_scale_q_for({612, 792}, 8), 8);       // Letter: 기본 1/8
-  EXPECT_EQ(preview_scale_q_for({4096, 4096}, 8), 8);     // 경계: 512px 딱 맞음
-  EXPECT_EQ(preview_scale_q_for({8192, 1000}, 8), 4);     // 긴 변 기준
+  EXPECT_EQ(preview_scale_q_for({612, 792}, 8), 8);    // Letter: 기본 1/8
+  EXPECT_EQ(preview_scale_q_for({4096, 4096}, 8), 8);  // 경계: 512px 딱 맞음
+  EXPECT_EQ(preview_scale_q_for({8192, 1000}, 8), 4);  // 긴 변 기준
   EXPECT_EQ(preview_scale_q_for({10000, 7000}, 8), 3);
-  EXPECT_EQ(preview_scale_q_for({100000, 10}, 8), 1);     // 하한 1/64 (일부만 덮음)
-  EXPECT_EQ(preview_scale_q_for({0, 0}, 8), 8);           // 비정상 크기: 기본값
-  for (engine::PageSize pt : {engine::PageSize{4097, 100}, engine::PageSize{2384, 3370}, engine::PageSize{14400, 14400}}) {
+  EXPECT_EQ(preview_scale_q_for({100000, 10}, 8), 1);  // 하한 1/64 (일부만 덮음)
+  EXPECT_EQ(preview_scale_q_for({0, 0}, 8), 8);        // 비정상 크기: 기본값
+  for (engine::PageSize pt : {engine::PageSize{4097, 100}, engine::PageSize{2384, 3370},
+                              engine::PageSize{14400, 14400}}) {
     const int q = preview_scale_q_for(pt, 8);
     const Size px = page_pixel_size(pt, q);
     EXPECT_LE(std::max(px.w, px.h), kTileSize) << pt.width << "x" << pt.height;

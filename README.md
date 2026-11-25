@@ -2,7 +2,7 @@
 
 PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편집기입니다.
 
-> 현재 단계: **v0.5.0** — 뷰어·주석·쪽 조작·텍스트/이미지 추가·폼 채우기에 이어 기존 텍스트 줄 단위 수정(M4)까지 나왔습니다. 다음은 M5(성능·설치 파일·다국어·문서화, v1.0)입니다. 변경 내역은 [CHANGELOG.md](CHANGELOG.md) 를 참고하세요.
+> 현재 단계: **v0.5.1** — M5 의 코드 범위(배포물 자동 생성, 영어 UI, 인쇄 미리보기, 자간 유지)까지 나왔고 [Releases](https://github.com/Edgar-J-Shin/OnPdf/releases) 에서 Windows zip·macOS DMG 를 받을 수 있습니다. v1.0 전에 코드 서명·공증, Windows 설치기, macOS x64 가 남았습니다. 변경 내역은 [CHANGELOG.md](CHANGELOG.md) 를 참고하세요.
 
 ## 목표
 
@@ -20,7 +20,7 @@ PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편
 | M2 | 주석, 페이지 조작(회전·삭제·재배열·병합·분할), 저장, 실행 취소 | v0.2 (완료) |
 | M3 | 텍스트·이미지 추가, 객체 편집, 폼 채우기, 폰트 임베딩 | v0.3 (완료) |
 | M4 | 기존 텍스트 줄 단위 수정, 서식 변경, 시스템 글꼴 대체, 폭 맞춤 | v0.5 (완료) |
-| M5 | 성능, Windows 설치 파일·macOS DMG, 코드 서명, 다국어, 문서화 | v1.0 |
+| M5 | 배포물 자동 생성, 다국어, 인쇄 미리보기, 자간 유지 (v0.5.1 완료) · 코드 서명, Windows 설치기, macOS x64 | v1.0 |
 
 자세한 계획은 [pdf-editor-plan.md](pdf-editor-plan.md) 를 참고하세요.
 
@@ -30,6 +30,14 @@ PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편
 - [PDFium](https://pdfium.googlesource.com/pdfium/) ([pdfium-binaries](https://github.com/bblanchon/pdfium-binaries) 사전 빌드)
 - [qpdf](https://github.com/qpdf/qpdf), Qt 6 Widgets (동적 링크), HarfBuzz + FreeType
 - GoogleTest, GitHub Actions
+
+## 설치
+
+[Releases](https://github.com/Edgar-J-Shin/OnPdf/releases) 에서 내려받습니다.
+
+- **Windows x64**: `OnPdf-<버전>-windows-x64.zip` 을 풀고 `onpdf_app.exe` 를 실행합니다(설치 과정 없음). 코드 서명 인증서가 아직 없어 SmartScreen 경고가 뜨면 "추가 정보 → 실행" 을 누르세요.
+- **macOS (Apple Silicon)**: `OnPdf-<버전>-macos-arm64.dmg` 를 열어 `OnPdf.app` 을 응용 프로그램 폴더로 끌어 놓습니다. 공증 전 빌드는 처음 한 번 Control-클릭 → "열기" 가 필요합니다. 최소 macOS 버전은 DMG 안 README.txt 에 적혀 있습니다. Intel Mac 용은 아직 없습니다.
+- 내려받은 파일은 같은 릴리스의 `SHA256SUMS.txt` 로 확인할 수 있습니다.
 
 ## 빌드
 
@@ -42,7 +50,7 @@ cmake --build --preset dev
 ctest --preset dev
 ./build/dev/bin/onpdf_cli render some.pdf page0.png
 
-# Qt 앱 (Qt 6 필요. macOS: brew install qt && export QT_ROOT=$(brew --prefix qt))
+# Qt 앱 (Qt 6.7 이상 + Linguist 도구 필요. macOS: brew install qt && export QT_ROOT=$(brew --prefix qt))
 cmake --preset dev-app && cmake --build --preset dev-app
 ./build/dev-app/bin/onpdf_app some.pdf
 ```

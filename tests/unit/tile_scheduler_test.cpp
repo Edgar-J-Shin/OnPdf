@@ -1,9 +1,8 @@
 #include "onpdf/core/view/tile_scheduler.h"
 
-#include <gtest/gtest.h>
-
 #include <algorithm>
 #include <atomic>
+#include <gtest/gtest.h>
 #include <map>
 #include <memory>
 #include <vector>
@@ -23,7 +22,8 @@ class FakeTileSource : public TileSource {
   engine::TaskHandle request(const TileRequest& r, engine::Priority p, TileCallback cb) override {
     auto flag = std::make_shared<std::atomic<bool>>(false);
     // 같은 키 재요청(승격): 이전 요청은 취소됐어도 이미 실행 중일 수 있으므로 콜백을 보관해 둔다
-    if (auto it = pending.find(r.key); it != pending.end()) superseded.push_back(std::move(it->second));
+    if (auto it = pending.find(r.key); it != pending.end())
+      superseded.push_back(std::move(it->second));
     pending[r.key] = Pending{r, p, std::move(cb), flag};
     ++requested;
     return engine::TaskHandle::for_testing(flag);
@@ -49,7 +49,8 @@ class FakeTileSource : public TileSource {
   }
   // 지난(승격으로 대체된) 요청을 지금 완료시킨다 — 취소 플래그와 무관하게 워커가 이미 렌더한 경우
   void complete_superseded(const TileKey& key) {
-    auto it = std::find_if(superseded.begin(), superseded.end(), [&](const Pending& p) { return p.request.key == key; });
+    auto it = std::find_if(superseded.begin(), superseded.end(),
+                           [&](const Pending& p) { return p.request.key == key; });
     ASSERT_NE(it, superseded.end()) << "no superseded request for key";
     Pending old = std::move(*it);
     superseded.erase(it);
@@ -66,7 +67,9 @@ class FakeTileSource : public TileSource {
   int requested = 0;
 };
 
-std::vector<engine::PageSize> letters(int n) { return std::vector<engine::PageSize>(static_cast<std::size_t>(n), {612, 792}); }
+std::vector<engine::PageSize> letters(int n) {
+  return std::vector<engine::PageSize>(static_cast<std::size_t>(n), {612, 792});
+}
 
 class TileSchedulerTest : public ::testing::Test {
  protected:
@@ -106,8 +109,8 @@ TEST_F(TileSchedulerTest, ComputeNeededCoversVisibleTilesPreviewAndPrefetch) {
       ++prefetch_low;
     }
   }
-  EXPECT_EQ(visible_high, 2);   // 미리보기 + 타일(0,0)
-  EXPECT_EQ(prefetch_low, 5);   // 다음 쪽 미리보기 + 2×2
+  EXPECT_EQ(visible_high, 2);  // 미리보기 + 타일(0,0)
+  EXPECT_EQ(prefetch_low, 5);  // 다음 쪽 미리보기 + 2×2
 }
 
 TEST_F(TileSchedulerTest, RequestsOnlyMissingTilesAndCompletesIntoCache) {
@@ -164,7 +167,7 @@ TEST_F(TileSchedulerTest, FailedTileIsNotRequestedAgainUntilLayoutReset) {
   scheduler_.update({0, 0, 300, 300});
   EXPECT_FALSE(source_.pending.contains({0, 64, 0, 0}));
   EXPECT_EQ(scheduler_.pending_visible(), 1);  // 실패한 타일은 대기로 세지 않음
-  scheduler_.set_layout(&layout_);  // 배율 변경 등 → 실패 집합 초기화
+  scheduler_.set_layout(&layout_);             // 배율 변경 등 → 실패 집합 초기화
   scheduler_.update({0, 0, 300, 300});
   EXPECT_TRUE(source_.pending.contains({0, 64, 0, 0}));
 }
@@ -194,14 +197,14 @@ TEST_F(TileSchedulerTest, HighZoomSkipsPrefetchTiles) {
   }
 }
 
-// 승격으로 취소한 kLow 요청이 이미 렌더 중이었다가 먼저 끝나면: 그 결과를 쓰고 중복 kHigh 요청은 취소한다.
-// 새 요청의 진행 기록을 지우거나 렌더 시간 표본을 어긋나게 하지 않는다 (#12)
+// 승격으로 취소한 kLow 요청이 이미 렌더 중이었다가 먼저 끝나면: 그 결과를 쓰고 중복 kHigh 요청은
+// 취소한다. 새 요청의 진행 기록을 지우거나 렌더 시간 표본을 어긋나게 하지 않는다 (#12)
 TEST_F(TileSchedulerTest, SupersededResultIsUsedAndDuplicateCancelled) {
   scheduler_.update({0, 0, 300, 300});
   const TileKey next_tile{1, 64, 0, 0};
   const Rect p1 = layout_.page_rect(1);
   scheduler_.update({p1.x, p1.y, 300, 300});  // 승격: kLow 취소 + kHigh 재요청
-  ASSERT_GE(source_.superseded.size(), 1u);  // 다음 쪽 타일 + 미리보기가 함께 승격된다
+  ASSERT_GE(source_.superseded.size(), 1u);   // 다음 쪽 타일 + 미리보기가 함께 승격된다
   const auto high_flag = source_.pending.at(next_tile).cancelled;
   const int in_flight_before = scheduler_.in_flight();
   const auto completed_before = scheduler_.stats().completed;

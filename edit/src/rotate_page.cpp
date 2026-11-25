@@ -12,11 +12,13 @@ RotatePageCommand::RotatePageCommand(int page, int quarter_turns)
 RotatePageCommand::RotatePageCommand(std::vector<int> pages, int quarter_turns)
     : pages_(normalize_pages(std::move(pages))), quarter_turns_(((quarter_turns % 4) + 4) % 4) {}
 
-Result<engine::ChangeSet> RotatePageCommand::apply(engine::EditableDocument& doc, const std::vector<int>& rotations) {
+Result<engine::ChangeSet> RotatePageCommand::apply(engine::EditableDocument& doc,
+                                                   const std::vector<int>& rotations) {
   engine::ChangeSet change;
   for (std::size_t i = 0; i < pages_.size(); ++i) {
     const int page = pages_[i];
-    if (auto set = doc.set_page_rotation(page, rotations[i]); !set) return std::unexpected(set.error());
+    if (auto set = doc.set_page_rotation(page, rotations[i]); !set)
+      return std::unexpected(set.error());
     auto size = doc.page_size(page);
     if (!size) return std::unexpected(size.error());
     change.pages.push_back(page);

@@ -1,11 +1,10 @@
-#include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/edit/rotate_page.h"
+
+#include "onpdf/core/engine/pdfium_document.h"
 
 #include "../fake_document.h"
 #include "../test_support.h"
-
 #include <gtest/gtest.h>
-
 #include <utility>
 #include <vector>
 

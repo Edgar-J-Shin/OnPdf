@@ -1,10 +1,10 @@
 // 주석 Command 6종: 실행 → 취소 → 재실행 (가짜 + PDFium), 다중 쪽 보상, "#index" id (#35)
-#include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/edit/annotation_commands.h"
+
+#include "onpdf/core/engine/pdfium_document.h"
 
 #include "../fake_document.h"
 #include "../test_support.h"
-
 #include <gtest/gtest.h>
 
 namespace onpdf::edit {
@@ -86,7 +86,8 @@ TEST(SetAnnotationColorCommand, UndoRestoresAppearance) {
   EXPECT_FALSE(doc.annotation(0, *id)->has_ap) << "AP 를 지우고 색을 쓴다";
   EXPECT_EQ(doc.annotation(0, *id)->snap.color, (engine::Color{0, 255, 0, 255}));
   ASSERT_TRUE(cmd.undo(doc));
-  EXPECT_EQ(doc.annotation(0, *id)->snap.color, (engine::Color{255, 255, 0, 255})) << "이전 색으로 (모양은 재생성)";
+  EXPECT_EQ(doc.annotation(0, *id)->snap.color, (engine::Color{255, 255, 0, 255}))
+      << "이전 색으로 (모양은 재생성)";
   ASSERT_TRUE(cmd.execute(doc));
   EXPECT_EQ(doc.annotation(0, *id)->snap.color, (engine::Color{0, 255, 0, 255}));
 }
@@ -156,7 +157,8 @@ TEST(SetAnnotationBorderWidthCommand, BsAnnotationIsRecreatedOnFake) {
   filled.contents = "메모";
   auto id = doc.add_annotation(0, filled);
   ASSERT_TRUE(id);
-  auto other = doc.add_annotation(0, highlight({10, 200, 100, 12}));  // 뒤에 있는 주석 — 순서 변화 관찰용
+  auto other =
+      doc.add_annotation(0, highlight({10, 200, 100, 12}));  // 뒤에 있는 주석 — 순서 변화 관찰용
   ASSERT_TRUE(other);
   doc.set_bs(0, *id);
   SetAnnotationBorderWidthCommand cmd(0, *id, 4.0);
@@ -189,7 +191,8 @@ TEST(SetAnnotationOpacityCommand, ExecuteUndoRedoOnFake) {
   EXPECT_EQ(cmd.id(), "set_annotation_opacity");
   ASSERT_TRUE(cmd.execute(doc));
   EXPECT_FALSE(doc.annotation(0, *id)->has_ap);
-  EXPECT_EQ(doc.annotation(0, *id)->snap.color, (engine::Color{255, 255, 0, 128})) << "RGB 는 그대로, 알파만";
+  EXPECT_EQ(doc.annotation(0, *id)->snap.color, (engine::Color{255, 255, 0, 128}))
+      << "RGB 는 그대로, 알파만";
   ASSERT_TRUE(cmd.undo(doc));
   EXPECT_EQ(doc.annotation(0, *id)->snap.color, (engine::Color{255, 255, 0, 255}));
   ASSERT_TRUE(cmd.execute(doc));
@@ -243,7 +246,8 @@ TEST(ShapeCommands, ExecuteUndoRedoOnPdfium) {
   auto list = other->annotations(0);
   ASSERT_EQ(list->size(), 6u);
   const engine::AnnotationInfo* back = nullptr;
-  for (const auto& a : *list) if (a.id == before->id) back = &a;
+  for (const auto& a : *list)
+    if (a.id == before->id) back = &a;
   ASSERT_NE(back, nullptr);
   EXPECT_EQ(back->kind, AnnotationKind::kSquare);
   EXPECT_FALSE(back->has_bs);
@@ -291,7 +295,8 @@ TEST(SetAnnotationOpacityCommand, MarkupOpacityAffectsRenderOnPdfium) {
     int light = 0;
     for (int y = static_cast<int>(box.y); y < static_cast<int>(box.bottom()); ++y) {
       for (int x = static_cast<int>(box.x); x < static_cast<int>(box.right()); ++x) {
-        const auto* p = bmp->pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(bmp->stride) +
+        const auto* p = bmp->pixels.data() +
+                        static_cast<std::size_t>(y) * static_cast<std::size_t>(bmp->stride) +
                         static_cast<std::size_t>(x) * 4;
         if (p[0] > 100) ++light;
       }
@@ -332,7 +337,8 @@ TEST(AnnotationCommands, ExecuteUndoRedoOnPdfium) {
   ASSERT_TRUE(doc);
   ASSERT_EQ(doc->annotations(0)->size(), 6u);
   // 추가
-  AddAnnotationsCommand add({{0, highlight({72, 100, 200, 14})}, {1, highlight({72, 100, 200, 14})}});
+  AddAnnotationsCommand add(
+      {{0, highlight({72, 100, 200, 14})}, {1, highlight({72, 100, 200, 14})}});
   ASSERT_TRUE(add.execute(*doc));
   EXPECT_EQ(doc->annotations(0)->size(), 7u);
   EXPECT_EQ(doc->annotations(1)->size(), 1u);
@@ -349,7 +355,9 @@ TEST(AnnotationCommands, ExecuteUndoRedoOnPdfium) {
   auto list = doc->annotations(0);
   ASSERT_EQ(list->size(), 7u);
   bool square_back = false;
-  for (const auto& a : *list) square_back = square_back || (a.kind == AnnotationKind::kSquare && a.id == remove.annotation_id());
+  for (const auto& a : *list)
+    square_back =
+        square_back || (a.kind == AnnotationKind::kSquare && a.id == remove.annotation_id());
   EXPECT_TRUE(square_back);
   ASSERT_TRUE(remove.execute(*doc));
   EXPECT_EQ(doc->annotations(0)->size(), 6u);

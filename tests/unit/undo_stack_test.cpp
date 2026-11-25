@@ -1,7 +1,6 @@
 #include "onpdf/edit/undo_stack.h"
 
 #include <gtest/gtest.h>
-
 #include <memory>
 #include <string_view>
 
@@ -12,13 +11,19 @@ class NoopCommand final : public Command {
  public:
   explicit NoopCommand(int tag) : tag(tag) {}
   [[nodiscard]] std::string_view id() const noexcept override { return "noop"; }
-  Result<engine::ChangeSet> execute(engine::EditableDocument&) override { return engine::ChangeSet{}; }
+  Result<engine::ChangeSet> execute(engine::EditableDocument&) override {
+    return engine::ChangeSet{};
+  }
   Result<engine::ChangeSet> undo(engine::EditableDocument&) override { return engine::ChangeSet{}; }
   int tag;
 };
 
-std::shared_ptr<Command> cmd(int tag) { return std::make_shared<NoopCommand>(tag); }
-int tag_of(const std::shared_ptr<Command>& c) { return c ? static_cast<NoopCommand&>(*c).tag : -1; }
+std::shared_ptr<Command> cmd(int tag) {
+  return std::make_shared<NoopCommand>(tag);
+}
+int tag_of(const std::shared_ptr<Command>& c) {
+  return c ? static_cast<NoopCommand&>(*c).tag : -1;
+}
 
 TEST(UndoStack, UndoRedoOrder) {
   UndoStack stack;
@@ -53,9 +58,9 @@ TEST(UndoStack, CleanTracksSavePoint) {
   EXPECT_FALSE(stack.is_clean());
   stack.set_clean();  // 저장
   EXPECT_TRUE(stack.is_clean());
-  stack.did_undo();   // 저장 뒤 실행 취소 → 수정됨
+  stack.did_undo();  // 저장 뒤 실행 취소 → 수정됨
   EXPECT_FALSE(stack.is_clean());
-  stack.did_redo();   // 다시 저장 지점
+  stack.did_redo();  // 다시 저장 지점
   EXPECT_TRUE(stack.is_clean());
 }
 
@@ -94,7 +99,6 @@ TEST(UndoStack, ClearResets) {
   EXPECT_FALSE(stack.can_redo());
   EXPECT_TRUE(stack.is_clean());
 }
-
 
 // push 는 버려진 다시 실행 기록과 상한 초과분을 돌려준다 (호출자가 워커에서 discard 를 부른다)
 TEST(UndoStack, PushReturnsEvictedCommands) {

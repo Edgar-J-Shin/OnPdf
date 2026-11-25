@@ -1,23 +1,20 @@
-#include "document_view.h"
-#include "main_window.h"
 #include "onpdf/core/engine/pdfium_worker.h"
 #include "onpdf/core/platform/path.h"
-#include "search_bar.h"
-#include "ui_dispatcher.h"
 
 #include "../test_support.h"
-
-#include <gtest/gtest.h>
-
+#include "document_view.h"
+#include "main_window.h"
+#include "search_bar.h"
+#include "ui_dispatcher.h"
 #include <QApplication>
 #include <QEventLoop>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QScrollBar>
 #include <QTimer>
-
 #include <chrono>
 #include <cstdlib>
+#include <gtest/gtest.h>
 
 namespace onpdf::app {
 namespace {
@@ -51,10 +48,11 @@ TEST(SearchBar, DebouncesAndEmitsKeys) {
   SearchBar bar;
   int queries = 0, next = 0, prev = 0, closed = 0;
   QString last;
-  QObject::connect(&bar, &SearchBar::query_changed, &bar, [&](const QString& q, view::SearchOptions) {
-    ++queries;
-    last = q;
-  });
+  QObject::connect(&bar, &SearchBar::query_changed, &bar,
+                   [&](const QString& q, view::SearchOptions) {
+                     ++queries;
+                     last = q;
+                   });
   QObject::connect(&bar, &SearchBar::next_requested, &bar, [&] { ++next; });
   QObject::connect(&bar, &SearchBar::previous_requested, &bar, [&] { ++prev; });
   QObject::connect(&bar, &SearchBar::closed, &bar, [&] { ++closed; });
@@ -94,7 +92,9 @@ class SearchFlowTest : public ::testing::Test {
   }
   bool open(const char* name) {
     window_.open_file(QString::fromStdString(onpdf::path_to_utf8(testdata(name))));
-    return spin_until([&] { return window_.document_view()->has_document() && window_.search_session() != nullptr; });
+    return spin_until([&] {
+      return window_.document_view()->has_document() && window_.search_session() != nullptr;
+    });
   }
   bool search(const QString& q) {
     window_.open_find();
@@ -123,19 +123,22 @@ TEST_F(SearchFlowTest, FindsNavigatesAndWraps) {
   EXPECT_EQ(s().current()->page, 1);
   EXPECT_EQ(window_.search_bar()->status_text(), QStringLiteral("2 / 2"));
   {
-    // 결과가 뷰포트 안에 보인다 (이미 보이면 스크롤하지 않으므로 현재 쪽은 배율·창 크기에 따라 다르다)
+    // 결과가 뷰포트 안에 보인다 (이미 보이면 스크롤하지 않으므로 현재 쪽은 배율·창 크기에 따라
+    // 다르다)
     const auto& rects = s().current_rects();
     ASSERT_FALSE(rects.empty());
     auto* view = window_.document_view();
     const QPointF tl = view->page_point_to_viewport(1, {rects.front().x, rects.front().y});
-    const QPointF br = view->page_point_to_viewport(1, {rects.front().right(), rects.front().bottom()});
+    const QPointF br =
+        view->page_point_to_viewport(1, {rects.front().right(), rects.front().bottom()});
     EXPECT_GE(tl.y(), 0.0);
     EXPECT_LE(br.y(), view->viewport()->height());
   }
   press(window_.search_bar()->line_edit(), Qt::Key_Return);  // 끝에서 순환
   EXPECT_EQ(s().current_ordinal(), 1u);
   EXPECT_TRUE(s().wrapped());
-  press(window_.search_bar()->line_edit(), Qt::Key_Return, Qt::ShiftModifier);  // 처음에서 끝으로 순환
+  press(window_.search_bar()->line_edit(), Qt::Key_Return,
+        Qt::ShiftModifier);  // 처음에서 끝으로 순환
   EXPECT_EQ(s().current_ordinal(), 2u);
   EXPECT_TRUE(s().wrapped());
   // QA 용: ONPDF_QA_SHOT 이 있으면 하이라이트 상태 창을 PNG 로 저장
@@ -182,7 +185,9 @@ TEST_F(SearchFlowTest, LargeDocumentSearchStaysResponsive) {
   window_.document_view()->go_to_page(700);
   EXPECT_EQ(window_.document_view()->current_page(), 700);
   ASSERT_TRUE(spin_until([&] { return !s().searching(); }, 30000));
-  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+  const auto ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0)
+          .count();
   ::testing::Test::RecordProperty("search_1000_pages_ms", static_cast<int>(ms));
   std::printf("[ perf     ] large-1000 search \"Page 5\": %lld ms\n", static_cast<long long>(ms));
   // "Page 5 /", "Page 5x /", "Page 5xx /" → 1 + 10 + 100
@@ -194,8 +199,9 @@ TEST_F(SearchFlowTest, ReplacingDocumentRestartsSearch) {
   ASSERT_TRUE(open("simple.pdf"));
   ASSERT_TRUE(search(QStringLiteral("page")));
   // 검색 바가 열린 채 다른 문서를 열면 같은 검색어로 다시 찾는다.
-  // 세션 포인터 비교는 쓸 수 없다(해제 후 같은 주소에 새 세션이 할당될 수 있음) → 새 문서에만 있는 결과 위치로 판정:
-  // simple.pdf 1쪽 "page" 는 쪽 위쪽(y≈50pt), annotations.pdf 1쪽 "go to page 2" 는 y≈410pt
+  // 세션 포인터 비교는 쓸 수 없다(해제 후 같은 주소에 새 세션이 할당될 수 있음) → 새 문서에만 있는
+  // 결과 위치로 판정: simple.pdf 1쪽 "page" 는 쪽 위쪽(y≈50pt), annotations.pdf 1쪽 "go to page 2"
+  // 는 y≈410pt
   window_.open_file(QString::fromStdString(onpdf::path_to_utf8(testdata("annotations.pdf"))));
   auto first_hit_y = [&]() -> double {
     const auto* sess = window_.search_session();
@@ -206,7 +212,8 @@ TEST_F(SearchFlowTest, ReplacingDocumentRestartsSearch) {
   };
   ASSERT_TRUE(spin_until([&] {
     return window_.windowTitle().contains(QStringLiteral("annotations")) && first_hit_y() > 300;
-  })) << "first hit y=" << first_hit_y();
+  })) << "first hit y="
+      << first_hit_y();
   EXPECT_EQ(s().query(), "page");
   ASSERT_GE(s().total(), 2u);
   ASSERT_NE(s().hits_on(1), nullptr);
@@ -241,7 +248,8 @@ TEST_F(SearchFlowTest, SearchDoesNotStarveTextIndexing) {
   window_.search_bar()->line_edit()->setText(QStringLiteral("Page"));
   press(window_.search_bar()->line_edit(), Qt::Key_Return);
   window_.document_view()->go_to_page(800);
-  ASSERT_TRUE(spin_until([&] { return window_.document_view()->text_index(800) != nullptr; }, 10000));
+  ASSERT_TRUE(
+      spin_until([&] { return window_.document_view()->text_index(800) != nullptr; }, 10000));
   ASSERT_TRUE(spin_until([&] { return !s().searching(); }, 30000));
   EXPECT_EQ(s().total(), 1000u);
 }

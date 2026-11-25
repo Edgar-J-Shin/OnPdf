@@ -1,25 +1,29 @@
 // Spike #55: 기존 텍스트 줄 단위 수정 가능성 검증 (M4 사전 검증).
-// 제품 코드가 아니다 — PDFium 헤더를 engine 밖에서 직접 쓴다(스파이크 예외). 결론만 01-spike.md 로 옮긴다.
+// 제품 코드가 아니다 — PDFium 헤더를 engine 밖에서 직접 쓴다(스파이크 예외). 결론만 01-spike.md 로
+// 옮긴다.
 //
-// 질문: PDFium 공개 API 만으로 실제 문서의 기존 텍스트를 줄로 묶고, 한 줄의 객체를 지운 뒤 같은 자리·크기·색으로
+// 질문: PDFium 공개 API 만으로 실제 문서의 기존 텍스트를 줄로 묶고, 한 줄의 객체를 지운 뒤 같은
+// 자리·크기·색으로
 //       새 텍스트를 넣었을 때, 나머지 내용이 그대로 보존되고 결과가 원본과 어울리는가?
 //
 // 실행: onpdf_spike_text_edit <out-dir> [--pages N] [--scale S] [--font <cid-ttf>] a.pdf b.pdf ...
 // 출력: <out-dir>/pages.tsv (쪽별 줄 묶기·재생성 충실도), lines.tsv (대상 줄별 삭제·교체 결과),
-//       fonts.tsv (글꼴별 글자 커버리지), <doc>/p<N>-l<K>.png (원본 / 제자리 SetText / 대체 글꼴 비교)
+//       fonts.tsv (글꼴별 글자 커버리지), <doc>/p<N>-l<K>.png (원본 / 제자리 SetText / 대체 글꼴
+//       비교)
 //
 // 실험
-//   E0 재생성 충실도: 아무것도 지우지 않고 텍스트 객체 하나를 더럽혀(항등 변환) GenerateContent → 저장 → 다시 열기 → 쪽 전체 픽셀 비교
-//   E1 줄 묶기: 텍스트 객체(Form XObject 안 포함)를 기준선·방향·간격으로 묶어 FPDFText 추출 줄(FPDFText_GetTextObject)과 비교
-//   E2 줄 삭제: 줄 객체 삭제 → GenerateContent → 저장 → 다시 열기 → 줄 영역 밖 픽셀 차이, qpdf check
-//   E3a 제자리 수정: 줄 첫 객체에 FPDFText_SetText(줄 전체 문자열), 나머지 삭제 → 폭·위치·픽셀 비교 (원본 글꼴 재사용)
-//   E3b 대체 글꼴: 줄 객체 삭제 → 표준 14 글꼴(라틴) 또는 CID TrueType(한글)로 새 객체 → 폭·픽셀 비교
-//   E4 글꼴 커버리지: 원본 글꼴에 숫자·영문·한글 상용 음절의 글리프가 있는가 (FPDFFont_GetGlyphPath, .notdef 서명 비교)
+//   E0 재생성 충실도: 아무것도 지우지 않고 텍스트 객체 하나를 더럽혀(항등 변환) GenerateContent →
+//   저장 → 다시 열기 → 쪽 전체 픽셀 비교 E1 줄 묶기: 텍스트 객체(Form XObject 안 포함)를
+//   기준선·방향·간격으로 묶어 FPDFText 추출 줄(FPDFText_GetTextObject)과 비교 E2 줄 삭제: 줄 객체
+//   삭제 → GenerateContent → 저장 → 다시 열기 → 줄 영역 밖 픽셀 차이, qpdf check E3a 제자리 수정:
+//   줄 첫 객체에 FPDFText_SetText(줄 전체 문자열), 나머지 삭제 → 폭·위치·픽셀 비교 (원본 글꼴
+//   재사용) E3b 대체 글꼴: 줄 객체 삭제 → 표준 14 글꼴(라틴) 또는 CID TrueType(한글)로 새 객체 →
+//   폭·픽셀 비교 E4 글꼴 커버리지: 원본 글꼴에 숫자·영문·한글 상용 음절의 글리프가 있는가
+//   (FPDFFont_GetGlyphPath, .notdef 서명 비교)
 #include "onpdf/core/bitmap.h"
 #include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/image/png_io.h"
 #include "onpdf/core/platform/path.h"
-#include "text_edit_surgery.h"
 
 #include <fpdf_doc.h>
 #include <fpdf_edit.h>
@@ -27,6 +31,7 @@
 #include <fpdf_text.h>
 #include <fpdfview.h>
 
+#include "text_edit_surgery.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -111,9 +116,16 @@ std::string u8(const std::u32string& s) {
   return out;
 }
 
-bool is_hangul(char32_t c) { return (c >= 0xAC00 && c <= 0xD7A3) || (c >= 0x1100 && c <= 0x11FF) || (c >= 0x3130 && c <= 0x318F); }
-bool has_hangul(const std::u32string& s) { return std::any_of(s.begin(), s.end(), is_hangul); }
-bool is_space(char32_t c) { return c == ' ' || c == 0xA0 || c == '\t' || c == 0x3000; }
+bool is_hangul(char32_t c) {
+  return (c >= 0xAC00 && c <= 0xD7A3) || (c >= 0x1100 && c <= 0x11FF) ||
+         (c >= 0x3130 && c <= 0x318F);
+}
+bool has_hangul(const std::u32string& s) {
+  return std::any_of(s.begin(), s.end(), is_hangul);
+}
+bool is_space(char32_t c) {
+  return c == ' ' || c == 0xA0 || c == '\t' || c == 0x3000;
+}
 
 std::u32string trim(const std::u32string& s) {
   std::size_t b = 0, e = s.size();
@@ -133,7 +145,7 @@ struct Mat {
 };
 // PDF 행 벡터 규약: p' = p × A × B
 Mat mul(const Mat& A, const Mat& B) {
-  return {A.a * B.a + A.b * B.c, A.a * B.b + A.b * B.d, A.c * B.a + A.d * B.c,
+  return {A.a * B.a + A.b * B.c, A.a * B.b + A.b * B.d,       A.c * B.a + A.d * B.c,
           A.c * B.b + A.d * B.d, A.e * B.a + A.f * B.c + B.e, A.e * B.b + A.f * B.d + B.f};
 }
 void apply(const Mat& m, double x, double y, double& ox, double& oy) {
@@ -145,8 +157,10 @@ struct Rect {
   double l = 1e18, b = 1e18, r = -1e18, t = -1e18;
   [[nodiscard]] bool valid() const { return r >= l && t >= b; }
   void add(double x, double y) {
-    l = std::min(l, x); r = std::max(r, x);
-    b = std::min(b, y); t = std::max(t, y);
+    l = std::min(l, x);
+    r = std::max(r, x);
+    b = std::min(b, y);
+    t = std::max(t, y);
   }
   void add(const Rect& o) {
     if (!o.valid()) return;
@@ -197,10 +211,18 @@ std::optional<std::vector<std::uint8_t>> save_copy(FPDF_DOCUMENT doc) {
 
 // ---------- RAII ----------
 
-struct DocCloser { void operator()(FPDF_DOCUMENT d) const { FPDF_CloseDocument(d); } };
-struct PageCloser { void operator()(FPDF_PAGE p) const { FPDF_ClosePage(p); } };
-struct TextCloser { void operator()(FPDF_TEXTPAGE t) const { FPDFText_ClosePage(t); } };
-struct BmpCloser { void operator()(FPDF_BITMAP b) const { FPDFBitmap_Destroy(b); } };
+struct DocCloser {
+  void operator()(FPDF_DOCUMENT d) const { FPDF_CloseDocument(d); }
+};
+struct PageCloser {
+  void operator()(FPDF_PAGE p) const { FPDF_ClosePage(p); }
+};
+struct TextCloser {
+  void operator()(FPDF_TEXTPAGE t) const { FPDFText_ClosePage(t); }
+};
+struct BmpCloser {
+  void operator()(FPDF_BITMAP b) const { FPDFBitmap_Destroy(b); }
+};
 using DocPtr = std::unique_ptr<std::remove_pointer_t<FPDF_DOCUMENT>, DocCloser>;
 using PagePtr = std::unique_ptr<std::remove_pointer_t<FPDF_PAGE>, PageCloser>;
 using TextPtr = std::unique_ptr<std::remove_pointer_t<FPDF_TEXTPAGE>, TextCloser>;
@@ -235,9 +257,13 @@ onpdf::Bitmap render(FPDF_PAGE page, double scale) {
   const auto* src = static_cast<const std::uint8_t*>(FPDFBitmap_GetBuffer(bmp.get()));
   const int sstride = FPDFBitmap_GetStride(bmp.get());
   for (int y = 0; y < h; ++y) {
-    std::copy_n(src + static_cast<std::size_t>(y) * static_cast<std::size_t>(sstride), static_cast<std::size_t>(w) * 4,
-                out.pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(out.stride));
-    for (int x = 0; x < w; ++x) out.pixels[static_cast<std::size_t>(y) * static_cast<std::size_t>(out.stride) + static_cast<std::size_t>(x) * 4 + 3] = 255;
+    std::copy_n(
+        src + static_cast<std::size_t>(y) * static_cast<std::size_t>(sstride),
+        static_cast<std::size_t>(w) * 4,
+        out.pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(out.stride));
+    for (int x = 0; x < w; ++x)
+      out.pixels[static_cast<std::size_t>(y) * static_cast<std::size_t>(out.stride) +
+                 static_cast<std::size_t>(x) * 4 + 3] = 255;
   }
   return out;
 }
@@ -245,7 +271,9 @@ onpdf::Bitmap render(FPDF_PAGE page, double scale) {
 struct PixRect {
   int x0 = 0, y0 = 0, x1 = 0, y1 = 0;  // [x0,x1) × [y0,y1)
   [[nodiscard]] bool contains(int x, int y) const { return x >= x0 && x < x1 && y >= y0 && y < y1; }
-  [[nodiscard]] long area() const { return static_cast<long>(std::max(0, x1 - x0)) * std::max(0, y1 - y0); }
+  [[nodiscard]] long area() const {
+    return static_cast<long>(std::max(0, x1 - x0)) * std::max(0, y1 - y0);
+  }
 };
 
 PixRect to_device(FPDF_PAGE page, const Rect& r, const onpdf::Bitmap& bmp, int pad) {
@@ -308,9 +336,12 @@ void write_diff_png(const onpdf::Bitmap& a, const onpdf::Bitmap& b, const fs::pa
   onpdf::Bitmap v = a;
   for (int y = 0; y < a.height; ++y)
     for (int x = 0; x < a.width; ++x) {
-      auto* p = v.pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(v.stride) + static_cast<std::size_t>(x) * 4;
+      auto* p = v.pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(v.stride) +
+                static_cast<std::size_t>(x) * 4;
       if (px_diff(a, b, x, y) > 0) {
-        p[0] = 0; p[1] = 0; p[2] = 255;
+        p[0] = 0;
+        p[1] = 0;
+        p[2] = 255;
       } else {
         for (int k = 0; k < 3; ++k) p[k] = static_cast<std::uint8_t>(255 - (255 - p[k]) / 4);
       }
@@ -323,11 +354,14 @@ onpdf::Bitmap crop(const onpdf::Bitmap& src, const PixRect& r) {
   out.width = std::max(1, r.x1 - r.x0);
   out.height = std::max(1, r.y1 - r.y0);
   out.stride = out.width * 4;
-  out.pixels.assign(static_cast<std::size_t>(out.stride) * static_cast<std::size_t>(out.height), 255);
+  out.pixels.assign(static_cast<std::size_t>(out.stride) * static_cast<std::size_t>(out.height),
+                    255);
   if (src.width == 0) return out;
   for (int y = 0; y < out.height && r.y0 + y < src.height; ++y)
-    std::copy_n(src.row(r.y0 + y) + r.x0 * 4, static_cast<std::size_t>(std::min(out.width, src.width - r.x0)) * 4,
-                out.pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(out.stride));
+    std::copy_n(
+        src.row(r.y0 + y) + r.x0 * 4,
+        static_cast<std::size_t>(std::min(out.width, src.width - r.x0)) * 4,
+        out.pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(out.stride));
   return out;
 }
 
@@ -338,17 +372,23 @@ onpdf::Bitmap stack(const std::vector<onpdf::Bitmap>& parts) {
     out.height += p.height + 3;
   }
   out.stride = out.width * 4;
-  out.pixels.assign(static_cast<std::size_t>(out.stride) * static_cast<std::size_t>(out.height), 255);
+  out.pixels.assign(static_cast<std::size_t>(out.stride) * static_cast<std::size_t>(out.height),
+                    255);
   int y0 = 0;
   for (const auto& p : parts) {
     for (int y = 0; y < p.height; ++y)
       std::copy_n(p.row(y), static_cast<std::size_t>(p.width) * 4,
-                  out.pixels.data() + static_cast<std::size_t>(y0 + y) * static_cast<std::size_t>(out.stride));
+                  out.pixels.data() +
+                      static_cast<std::size_t>(y0 + y) * static_cast<std::size_t>(out.stride));
     y0 += p.height;
     for (int y = y0; y < y0 + 3 && y < out.height; ++y)
       for (int x = 0; x < out.width; ++x) {
-        auto* q = out.pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(out.stride) + static_cast<std::size_t>(x) * 4;
-        q[0] = 200; q[1] = 120; q[2] = 40;
+        auto* q = out.pixels.data() +
+                  static_cast<std::size_t>(y) * static_cast<std::size_t>(out.stride) +
+                  static_cast<std::size_t>(x) * 4;
+        q[0] = 200;
+        q[1] = 120;
+        q[2] = 40;
       }
     y0 += 3;
   }
@@ -387,7 +427,8 @@ struct Collector {
   std::vector<TObj> objs;
   int forms = 0, shadings = 0, images = 0, paths = 0;
 
-  void visit(FPDF_PAGEOBJECT obj, std::vector<int> path, FPDF_PAGEOBJECT parent, const Mat& container, int depth) {
+  void visit(FPDF_PAGEOBJECT obj, std::vector<int> path, FPDF_PAGEOBJECT parent,
+             const Mat& container, int depth) {
     const int type = FPDFPageObj_GetType(obj);
     if (type == FPDF_PAGEOBJ_SHADING) ++shadings;
     if (type == FPDF_PAGEOBJ_IMAGE) ++images;
@@ -458,8 +499,12 @@ struct Line {
   std::set<float> sizes;
 };
 
-double along_of(const TObj& o, double x, double y) { return x * o.dir_x + y * o.dir_y; }
-double normal_of(const TObj& o) { return -o.m.e * o.dir_y + o.m.f * o.dir_x; }
+double along_of(const TObj& o, double x, double y) {
+  return x * o.dir_x + y * o.dir_y;
+}
+double normal_of(const TObj& o) {
+  return -o.m.e * o.dir_y + o.m.f * o.dir_x;
+}
 
 std::pair<double, double> along_range(const TObj& o) {
   if (!o.bounds.valid()) return {along_of(o, o.m.e, o.m.f), along_of(o, o.m.e, o.m.f)};
@@ -477,7 +522,9 @@ std::pair<double, double> along_range(const TObj& o) {
 std::vector<Line> group_lines(const std::vector<TObj>& objs) {
   std::vector<int> idx;
   for (int i = 0; i < static_cast<int>(objs.size()); ++i)
-    if (!trim(objs[static_cast<std::size_t>(i)].text).empty() && objs[static_cast<std::size_t>(i)].eff_size > 0.1) idx.push_back(i);
+    if (!trim(objs[static_cast<std::size_t>(i)].text).empty() &&
+        objs[static_cast<std::size_t>(i)].eff_size > 0.1)
+      idx.push_back(i);
   // 방향(1도 단위) → 기준선 → 진행 방향 순
   auto dir_key = [&](int i) {
     const auto& o = objs[static_cast<std::size_t>(i)];
@@ -486,9 +533,11 @@ std::vector<Line> group_lines(const std::vector<TObj>& objs) {
   std::sort(idx.begin(), idx.end(), [&](int x, int y) {
     const int dx = dir_key(x), dy = dir_key(y);
     if (dx != dy) return dx < dy;
-    const double nx = normal_of(objs[static_cast<std::size_t>(x)]), ny = normal_of(objs[static_cast<std::size_t>(y)]);
+    const double nx = normal_of(objs[static_cast<std::size_t>(x)]),
+                 ny = normal_of(objs[static_cast<std::size_t>(y)]);
     if (std::abs(nx - ny) > 1e-6) return nx > ny;
-    return along_range(objs[static_cast<std::size_t>(x)]).first < along_range(objs[static_cast<std::size_t>(y)]).first;
+    return along_range(objs[static_cast<std::size_t>(x)]).first <
+           along_range(objs[static_cast<std::size_t>(y)]).first;
   });
   // 1) 같은 방향·기준선(±0.25em) 묶음
   std::vector<std::vector<int>> bands;
@@ -508,7 +557,8 @@ std::vector<Line> group_lines(const std::vector<TObj>& objs) {
   std::vector<Line> lines;
   for (auto& band : bands) {
     std::sort(band.begin(), band.end(), [&](int x, int y) {
-      return along_range(objs[static_cast<std::size_t>(x)]).first < along_range(objs[static_cast<std::size_t>(y)]).first;
+      return along_range(objs[static_cast<std::size_t>(x)]).first <
+             along_range(objs[static_cast<std::size_t>(y)]).first;
     });
     Line cur;
     double cur_end = -1e18;
@@ -621,7 +671,8 @@ GlyphSig glyph_sig(FPDF_FONT f, char32_t c) {
   s.segs = FPDFGlyphPath_CountGlyphSegments(gp);
   for (int i = 0; i < std::min(s.segs, 6); ++i) {
     float x = 0, y = 0;
-    if (FPDF_PATHSEGMENT seg = FPDFGlyphPath_GetGlyphPathSegment(gp, i); seg && FPDFPathSegment_GetPoint(seg, &x, &y)) {
+    if (FPDF_PATHSEGMENT seg = FPDFGlyphPath_GetGlyphPathSegment(gp, i);
+        seg && FPDFPathSegment_GetPoint(seg, &x, &y)) {
       s.pts.push_back(x);
       s.pts.push_back(y);
     }
@@ -683,34 +734,51 @@ std::string meta(FPDF_DOCUMENT doc, const char* key) {
   return u8(utf16_to_u32(buf));
 }
 
-// 대체 글꼴: 한글이면 CID TrueType(전체 임베딩 — 스파이크 한정), 아니면 표준 14 글꼴을 글꼴 속성으로 고른다
-FPDF_FONT substitute_font(FPDF_DOCUMENT doc, const TObj& o, const std::u32string& text, std::string& chosen) {
+// 대체 글꼴: 한글이면 CID TrueType(전체 임베딩 — 스파이크 한정), 아니면 표준 14 글꼴을 글꼴
+// 속성으로 고른다
+FPDF_FONT substitute_font(FPDF_DOCUMENT doc, const TObj& o, const std::u32string& text,
+                          std::string& chosen) {
   if (has_hangul(text)) {
     if (!g_cid_font) return nullptr;
     chosen = "NotoSansKR(CID)";
-    return FPDFText_LoadFont(doc, g_cid_font->data(), static_cast<uint32_t>(g_cid_font->size()), FPDF_FONT_TRUETYPE, 1);
+    return FPDFText_LoadFont(doc, g_cid_font->data(), static_cast<uint32_t>(g_cid_font->size()),
+                             FPDF_FONT_TRUETYPE, 1);
   }
   const std::string name = font_name(o.font);
   std::string lname = name;
-  std::transform(lname.begin(), lname.end(), lname.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  std::transform(lname.begin(), lname.end(), lname.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   const int flags = o.font ? FPDFFont_GetFlags(o.font) : 0;
   const int weight = o.font ? FPDFFont_GetWeight(o.font) : 400;
   int angle = 0;
   if (o.font) FPDFFont_GetItalicAngle(o.font, &angle);
-  const bool fixed = (flags & 1) || lname.find("mono") != std::string::npos || lname.find("courier") != std::string::npos;
-  const bool serif = (flags & 2) || lname.find("times") != std::string::npos || lname.find("serif") != std::string::npos ||
-                     lname.find("cmr") != std::string::npos || lname.find("roman") != std::string::npos ||
-                     lname.find("georgia") != std::string::npos || lname.find("cambria") != std::string::npos;
-  const bool sans_hint = lname.find("sans") != std::string::npos || lname.find("arial") != std::string::npos ||
-                         lname.find("helvet") != std::string::npos || lname.find("calibri") != std::string::npos;
-  const bool bold = weight >= 600 || lname.find("bold") != std::string::npos || lname.find("cmbx") != std::string::npos ||
-                    lname.find("black") != std::string::npos || lname.find("semibold") != std::string::npos;
+  const bool fixed = (flags & 1) || lname.find("mono") != std::string::npos ||
+                     lname.find("courier") != std::string::npos;
+  const bool serif =
+      (flags & 2) || lname.find("times") != std::string::npos ||
+      lname.find("serif") != std::string::npos || lname.find("cmr") != std::string::npos ||
+      lname.find("roman") != std::string::npos || lname.find("georgia") != std::string::npos ||
+      lname.find("cambria") != std::string::npos;
+  const bool sans_hint =
+      lname.find("sans") != std::string::npos || lname.find("arial") != std::string::npos ||
+      lname.find("helvet") != std::string::npos || lname.find("calibri") != std::string::npos;
+  const bool bold = weight >= 600 || lname.find("bold") != std::string::npos ||
+                    lname.find("cmbx") != std::string::npos ||
+                    lname.find("black") != std::string::npos ||
+                    lname.find("semibold") != std::string::npos;
   const bool italic = angle != 0 || (flags & 64) || lname.find("italic") != std::string::npos ||
-                      lname.find("oblique") != std::string::npos || lname.find("cmti") != std::string::npos;
+                      lname.find("oblique") != std::string::npos ||
+                      lname.find("cmti") != std::string::npos;
   std::string base;
-  if (fixed) base = std::string("Courier") + (bold ? (italic ? "-BoldOblique" : "-Bold") : (italic ? "-Oblique" : ""));
-  else if (serif && !sans_hint) base = bold ? (italic ? "Times-BoldItalic" : "Times-Bold") : (italic ? "Times-Italic" : "Times-Roman");
-  else base = std::string("Helvetica") + (bold ? (italic ? "-BoldOblique" : "-Bold") : (italic ? "-Oblique" : ""));
+  if (fixed)
+    base = std::string("Courier") +
+           (bold ? (italic ? "-BoldOblique" : "-Bold") : (italic ? "-Oblique" : ""));
+  else if (serif && !sans_hint)
+    base = bold ? (italic ? "Times-BoldItalic" : "Times-Bold")
+                : (italic ? "Times-Italic" : "Times-Roman");
+  else
+    base = std::string("Helvetica") +
+           (bold ? (italic ? "-BoldOblique" : "-Bold") : (italic ? "-Oblique" : ""));
   chosen = base;
   return FPDFText_LoadStandardFont(doc, base.c_str());
 }
@@ -729,8 +797,9 @@ struct EditResult {
 };
 
 // 편집된 문서를 저장 → 디스크 → qpdf check → 다시 열어 렌더
-EditResult finish(FPDF_DOCUMENT doc, FPDF_PAGE page, int page_index, const Options& opt, const onpdf::Bitmap& base,
-                  const std::optional<PixRect>& mask, const std::vector<int>& probe_path, std::chrono::steady_clock::time_point t0) {
+EditResult finish(FPDF_DOCUMENT doc, FPDF_PAGE page, int page_index, const Options& opt,
+                  const onpdf::Bitmap& base, const std::optional<PixRect>& mask,
+                  const std::vector<int>& probe_path, std::chrono::steady_clock::time_point t0) {
   EditResult r;
   if (!FPDFPage_GenerateContent(page)) {
     r.error = "generate";
@@ -746,7 +815,8 @@ EditResult finish(FPDF_DOCUMENT doc, FPDF_PAGE page, int page_index, const Optio
   const fs::path tmp = opt.out / "tmp-edit.pdf";
   {
     std::ofstream o(tmp, std::ios::binary);
-    o.write(reinterpret_cast<const char*>(saved->data()), static_cast<std::streamsize>(saved->size()));
+    o.write(reinterpret_cast<const char*>(saved->data()),
+            static_cast<std::streamsize>(saved->size()));
   }
   if (auto c = onpdf::engine::QpdfTools::check(tmp)) {
     r.qpdf_ok = true;
@@ -767,7 +837,8 @@ EditResult finish(FPDF_DOCUMENT doc, FPDF_PAGE page, int page_index, const Optio
   r.d = diff(base, r.bmp, mask);
   if (!probe_path.empty()) {
     FPDF_PAGEOBJECT parent = nullptr;
-    if (FPDF_PAGEOBJECT o = resolve(p2.get(), probe_path, &parent); o && FPDFPageObj_GetType(o) == FPDF_PAGEOBJ_TEXT) {
+    if (FPDF_PAGEOBJECT o = resolve(p2.get(), probe_path, &parent);
+        o && FPDFPageObj_GetType(o) == FPDF_PAGEOBJ_TEXT) {
       Mat container;
       if (parent) {
         // 단순화: Form 한 단계만 (경로 길이 2)
@@ -813,13 +884,16 @@ void process_doc(const fs::path& file, const Options& opt) {
       for (int i : L.members) mem.insert(col.objs[static_cast<std::size_t>(i)].handle);
       std::set<int> ids;
       for (auto* h : mem)
-        if (auto it = ex.obj_lines.find(h); it != ex.obj_lines.end()) ids.insert(it->second.begin(), it->second.end());
+        if (auto it = ex.obj_lines.find(h); it != ex.obj_lines.end())
+          ids.insert(it->second.begin(), it->second.end());
       if (ids.empty()) continue;
       ++nontrivial;
-      if (ids.size() > 1) ++merged;  // 서로 다른 추출 줄을 한 줄로 묶음 — 편집하면 다른 줄까지 바뀐다
+      if (ids.size() > 1)
+        ++merged;  // 서로 다른 추출 줄을 한 줄로 묶음 — 편집하면 다른 줄까지 바뀐다
       if (ids.size() == 1) {
         const auto& eo = ex.line_objs.at(*ids.begin());
-        if (std::all_of(eo.begin(), eo.end(), [&](FPDF_PAGEOBJECT h) { return mem.count(h) > 0; })) ++agree;
+        if (std::all_of(eo.begin(), eo.end(), [&](FPDF_PAGEOBJECT h) { return mem.count(h) > 0; }))
+          ++agree;
       }
       if (std::abs(L.dir_y) > 0.01) ++nonhoriz;
       if (L.fonts.size() > 1 || L.sizes.size() > 1) ++mixed_font;
@@ -827,7 +901,8 @@ void process_doc(const fs::path& file, const Options& opt) {
     int multi_line_objs = 0, nested = 0;
     std::size_t total_chars = 0, text_objs = 0;
     for (const auto& o : col.objs) {
-      if (auto it = ex.obj_lines.find(o.handle); it != ex.obj_lines.end() && it->second.size() > 1) ++multi_line_objs;
+      if (auto it = ex.obj_lines.find(o.handle); it != ex.obj_lines.end() && it->second.size() > 1)
+        ++multi_line_objs;
       if (o.depth > 0) ++nested;
       const auto t = trim(o.text);
       if (!t.empty()) {
@@ -854,21 +929,28 @@ void process_doc(const fs::path& file, const Options& opt) {
       if (!pick) pick = &col.objs.front();
       if (FPDF_PAGEOBJECT o = resolve(p0.get(), pick->path, &parent)) {
         FPDFPageObj_Transform(o, 1, 0, 0, 1, 0, 0);
-        const auto r = finish(ld0->doc.get(), p0.get(), p, opt, base, std::nullopt, {}, std::chrono::steady_clock::now());
+        const auto r = finish(ld0->doc.get(), p0.get(), p, opt, base, std::nullopt, {},
+                              std::chrono::steady_clock::now());
         e0 = r.ok ? (r.qpdf_ok ? "ok" : "qpdf_fail") : r.error;
         e0_px = r.ok ? r.d.outside : -1;
         e0_big = r.ok ? r.d.outside_big : -1;
-        if (r.ok && r.d.outside > 0) fs::copy_file(opt.out / "tmp-edit.pdf", doc_out / ("p" + std::to_string(p) + "-e0.pdf"), fs::copy_options::overwrite_existing);
-        if (r.ok && r.d.outside > 0) write_diff_png(base, r.bmp, doc_out / ("p" + std::to_string(p) + "-e0-diff.png"));
+        if (r.ok && r.d.outside > 0)
+          fs::copy_file(opt.out / "tmp-edit.pdf", doc_out / ("p" + std::to_string(p) + "-e0.pdf"),
+                        fs::copy_options::overwrite_existing);
+        if (r.ok && r.d.outside > 0)
+          write_diff_png(base, r.bmp, doc_out / ("p" + std::to_string(p) + "-e0-diff.png"));
       }
     }
 
-    const double mean_chars = text_objs ? static_cast<double>(total_chars) / static_cast<double>(text_objs) : 0;
-    g_pages << name << '\t' << p << '\t' << producer << '\t' << col.objs.size() << '\t' << nested << '\t' << col.forms << '\t'
-            << col.shadings << '\t' << col.images << '\t' << col.paths << '\t' << fmt(mean_chars, 1) << '\t' << lines.size() << '\t'
-            << ex.lines << '\t' << nontrivial << '\t' << agree << '\t'
-            << fmt(nontrivial ? 100.0 * agree / nontrivial : 0, 1) << '\t' << merged << '\t' << multi_line_objs << '\t' << nonhoriz << '\t'
-            << mixed_font << '\t' << e0 << '\t' << e0_px << '\t' << e0_big << '\n';
+    const double mean_chars =
+        text_objs ? static_cast<double>(total_chars) / static_cast<double>(text_objs) : 0;
+    g_pages << name << '\t' << p << '\t' << producer << '\t' << col.objs.size() << '\t' << nested
+            << '\t' << col.forms << '\t' << col.shadings << '\t' << col.images << '\t' << col.paths
+            << '\t' << fmt(mean_chars, 1) << '\t' << lines.size() << '\t' << ex.lines << '\t'
+            << nontrivial << '\t' << agree << '\t'
+            << fmt(nontrivial ? 100.0 * agree / nontrivial : 0, 1) << '\t' << merged << '\t'
+            << multi_line_objs << '\t' << nonhoriz << '\t' << mixed_font << '\t' << e0 << '\t'
+            << e0_px << '\t' << e0_big << '\n';
     g_pages.flush();
 
     // 대상 줄: 가로, 10자 이상, 쪽 위→아래 순서에서 25·50·75% 지점
@@ -880,10 +962,15 @@ void process_doc(const fs::path& file, const Options& opt) {
       for (int k : L.members) mem.insert(col.objs[static_cast<std::size_t>(k)].handle);
       if (line_text(ex, mem).size() >= 10) cand.push_back(i);
     }
-    std::sort(cand.begin(), cand.end(), [&](int x, int y) { return lines[static_cast<std::size_t>(x)].bounds.t > lines[static_cast<std::size_t>(y)].bounds.t; });
+    std::sort(cand.begin(), cand.end(), [&](int x, int y) {
+      return lines[static_cast<std::size_t>(x)].bounds.t >
+             lines[static_cast<std::size_t>(y)].bounds.t;
+    });
     std::vector<int> targets;
     for (int k = 1; k <= opt.lines_per_page && !cand.empty(); ++k) {
-      const int t = cand[std::min(cand.size() - 1, cand.size() * static_cast<std::size_t>(k) / static_cast<std::size_t>(opt.lines_per_page + 1))];
+      const int t =
+          cand[std::min(cand.size() - 1, cand.size() * static_cast<std::size_t>(k) /
+                                             static_cast<std::size_t>(opt.lines_per_page + 1))];
       if (std::find(targets.begin(), targets.end(), t) == targets.end()) targets.push_back(t);
     }
 
@@ -900,7 +987,8 @@ void process_doc(const fs::path& file, const Options& opt) {
       // 줄 객체가 다른 줄의 글자도 품고 있으면(여러 줄 객체) 삭제가 다른 줄까지 지운다 → 기록
       bool spans_other = false;
       for (auto* h : mem)
-        if (auto it = ex.obj_lines.find(h); it != ex.obj_lines.end() && it->second.size() > 1) spans_other = true;
+        if (auto it = ex.obj_lines.find(h); it != ex.obj_lines.end() && it->second.size() > 1)
+          spans_other = true;
       const int pad = std::max(3, static_cast<int>(std::lround(0.35 * L.eff_size * opt.scale)));
       const PixRect mask = to_device(page.get(), L.bounds, base, pad);
 
@@ -914,7 +1002,8 @@ void process_doc(const fs::path& file, const Options& opt) {
           FPDF_PAGEOBJECT parent = nullptr;
           FPDF_PAGEOBJECT o = resolve(pg, path, &parent);
           if (!o) continue;
-          const bool ok = parent ? FPDFFormObj_RemoveObject(parent, o) : FPDFPage_RemoveObject(pg, o);
+          const bool ok =
+              parent ? FPDFFormObj_RemoveObject(parent, o) : FPDFPage_RemoveObject(pg, o);
           if (ok) {
             FPDFPageObj_Destroy(o);
             ++removed;
@@ -932,7 +1021,9 @@ void process_doc(const fs::path& file, const Options& opt) {
         remove_line(p2.get(), false);
         e2 = finish(l2->doc.get(), p2.get(), p, opt, base, mask, {}, t0);
         if (e2.ok && e2.d.outside > 0)
-          write_diff_png(base, e2.bmp, doc_out / ("p" + std::to_string(p) + "-l" + std::to_string(ti) + "-e2-diff.png"));
+          write_diff_png(
+              base, e2.bmp,
+              doc_out / ("p" + std::to_string(p) + "-l" + std::to_string(ti) + "-e2-diff.png"));
       }
       // E3a 제자리 SetText (원본 글꼴)
       EditResult e3a;
@@ -942,12 +1033,14 @@ void process_doc(const fs::path& file, const Options& opt) {
         const auto t0 = std::chrono::steady_clock::now();
         remove_line(p3.get(), true);
         FPDF_PAGEOBJECT parent = nullptr;
-        // 앞 객체를 지우지 않았으므로 첫 객체 경로가 유효하다 — 단 같은 컨테이너의 뒤 객체만 지웠을 때. 첫 객체보다 앞 index 가
-        // 지워졌을 수 있어 경로를 다시 찾는다: 멤버 중 첫 객체보다 앞 index 의 개수만큼 당긴다
+        // 앞 객체를 지우지 않았으므로 첫 객체 경로가 유효하다 — 단 같은 컨테이너의 뒤 객체만 지웠을
+        // 때. 첫 객체보다 앞 index 가 지워졌을 수 있어 경로를 다시 찾는다: 멤버 중 첫 객체보다 앞
+        // index 의 개수만큼 당긴다
         std::vector<int> fp = first.path;
         for (const auto& path : paths)
           if (path != first.path && path.size() == fp.size() &&
-              std::equal(path.begin(), path.end() - 1, fp.begin()) && path.back() < first.path.back())
+              std::equal(path.begin(), path.end() - 1, fp.begin()) &&
+              path.back() < first.path.back())
             --fp.back();
         FPDF_PAGEOBJECT o = resolve(p3.get(), fp, &parent);
         auto w = u32_to_utf16z(text);
@@ -970,7 +1063,8 @@ void process_doc(const fs::path& file, const Options& opt) {
         auto w = u32_to_utf16z(text);
         if (o && FPDFText_SetText(o, reinterpret_cast<FPDF_WIDESTRING>(w.data()))) {
           FPDFPageObj_SetFillColor(o, first.r, first.g, first.b, first.a);
-          FPDFPageObj_Transform(o, first.m.a, first.m.b, first.m.c, first.m.d, first.m.e, first.m.f);
+          FPDFPageObj_Transform(o, first.m.a, first.m.b, first.m.c, first.m.d, first.m.e,
+                                first.m.f);
           FPDFPage_InsertObject(p4.get(), o);
           const int idx = FPDFPage_CountObjects(p4.get()) - 1;
           e3b = finish(l4->doc.get(), p4.get(), p, opt, base, mask, {idx}, t0);
@@ -981,7 +1075,8 @@ void process_doc(const fs::path& file, const Options& opt) {
         if (f) FPDFFont_Close(f);
       }
 
-      // E5 수술: qpdf 로 줄의 표시 연산자만 지우고(나머지 바이트 그대로) 새 텍스트는 PDFium 이 덧붙인 스트림에 둔다
+      // E5 수술: qpdf 로 줄의 표시 연산자만 지우고(나머지 바이트 그대로) 새 텍스트는 PDFium 이
+      // 덧붙인 스트림에 둔다
       std::set<int> page_ords;
       std::map<int, std::set<int>> form_ords;
       bool deep = false;
@@ -997,7 +1092,9 @@ void process_doc(const fs::path& file, const Options& opt) {
         } else if (path.size() == 2) {
           int fo = 0;
           for (int k = 0; k < path[0]; ++k)
-            if (FPDF_PAGEOBJECT x = FPDFPage_GetObject(page.get(), k); x && FPDFPageObj_GetType(x) == FPDF_PAGEOBJ_FORM) ++fo;
+            if (FPDF_PAGEOBJECT x = FPDFPage_GetObject(page.get(), k);
+                x && FPDFPageObj_GetType(x) == FPDF_PAGEOBJ_FORM)
+              ++fo;
           int ord = 0;
           for (const auto& o : col.objs)
             if (o.path.size() == 2 && o.path[0] == path[0] && o.path[1] < path[1]) ++ord;
@@ -1037,7 +1134,8 @@ void process_doc(const fs::path& file, const Options& opt) {
         auto w = u32_to_utf16z(text);
         if (o && FPDFText_SetText(o, reinterpret_cast<FPDF_WIDESTRING>(w.data()))) {
           FPDFPageObj_SetFillColor(o, first.r, first.g, first.b, first.a);
-          FPDFPageObj_Transform(o, first.m.a, first.m.b, first.m.c, first.m.d, first.m.e, first.m.f);
+          FPDFPageObj_Transform(o, first.m.a, first.m.b, first.m.c, first.m.d, first.m.e,
+                                first.m.f);
           FPDFPage_InsertObject(p6.get(), o);
           if (FPDFPage_GenerateContent(p6.get())) {
             if (auto saved = save_copy(l6->doc.get())) {
@@ -1049,7 +1147,8 @@ void process_doc(const fs::path& file, const Options& opt) {
                   e5n.bmp = render(p7.get(), opt.scale);
                   e5n.d = diff(base, e5n.bmp, mask);
                   const int last = FPDFPage_CountObjects(p7.get()) - 1;
-                  if (FPDF_PAGEOBJECT no = FPDFPage_GetObject(p7.get(), last); no && FPDFPageObj_GetType(no) == FPDF_PAGEOBJ_TEXT) {
+                  if (FPDF_PAGEOBJECT no = FPDFPage_GetObject(p7.get(), last);
+                      no && FPDFPageObj_GetType(no) == FPDF_PAGEOBJ_TEXT) {
                     e5n.new_bounds = bounds_in_page(no, Mat{});
                     TextPtr tp7(FPDFText_LoadPage(p7.get()));
                     if (tp7) e5n.text_back = obj_text(no, tp7.get());
@@ -1058,7 +1157,8 @@ void process_doc(const fs::path& file, const Options& opt) {
                   const fs::path tmp = opt.out / "tmp-e5.pdf";
                   {
                     std::ofstream of(tmp, std::ios::binary);
-                    of.write(reinterpret_cast<const char*>(s6.bytes.data()), static_cast<std::streamsize>(s6.bytes.size()));
+                    of.write(reinterpret_cast<const char*>(s6.bytes.data()),
+                             static_cast<std::streamsize>(s6.bytes.size()));
                   }
                   e5n.qpdf_ok = static_cast<bool>(onpdf::engine::QpdfTools::check(tmp));
                 }
@@ -1075,43 +1175,65 @@ void process_doc(const fs::path& file, const Options& opt) {
         e5d.error = e5n.error = "deep-form";
       }
       if (e5d.ok && e5d.d.outside > 0)
-        write_diff_png(base, e5d.bmp, doc_out / ("p" + std::to_string(p) + "-l" + std::to_string(ti) + "-e5-diff.png"));
+        write_diff_png(
+            base, e5d.bmp,
+            doc_out / ("p" + std::to_string(p) + "-l" + std::to_string(ti) + "-e5-diff.png"));
 
       // 비교 이미지: 원본 / 제자리 / 대체
       const int margin = static_cast<int>(std::lround(0.6 * L.eff_size * opt.scale));
-      PixRect cr{std::max(0, mask.x0 - margin), std::max(0, mask.y0 - margin), std::min(base.width, mask.x1 + margin),
-                 std::min(base.height, mask.y1 + margin)};
+      PixRect cr{std::max(0, mask.x0 - margin), std::max(0, mask.y0 - margin),
+                 std::min(base.width, mask.x1 + margin), std::min(base.height, mask.y1 + margin)};
       std::vector<onpdf::Bitmap> parts{crop(base, cr)};
       if (e3a.ok) parts.push_back(crop(e3a.bmp, cr));
       if (e3b.ok) parts.push_back(crop(e3b.bmp, cr));
       if (e5n.ok) parts.push_back(crop(e5n.bmp, cr));
-      (void)onpdf::image::write_png(stack(parts), doc_out / ("p" + std::to_string(p) + "-l" + std::to_string(ti) + ".png"));
+      (void)onpdf::image::write_png(
+          stack(parts), doc_out / ("p" + std::to_string(p) + "-l" + std::to_string(ti) + ".png"));
 
       const double orig_w = L.bounds.r - L.bounds.l;
-      auto wr = [&](const EditResult& r) { return r.ok && r.new_bounds.valid() && orig_w > 0 ? (r.new_bounds.r - r.new_bounds.l) / orig_w : 0.0; };
-      auto dl = [&](const EditResult& r) { return r.ok && r.new_bounds.valid() ? r.new_bounds.l - L.bounds.l : 0.0; };
-      auto inside_ratio = [&](const EditResult& r) { return r.ok && r.d.mask_area ? 100.0 * static_cast<double>(r.d.inside) / static_cast<double>(r.d.mask_area) : -1.0; };
+      auto wr = [&](const EditResult& r) {
+        return r.ok && r.new_bounds.valid() && orig_w > 0
+                   ? (r.new_bounds.r - r.new_bounds.l) / orig_w
+                   : 0.0;
+      };
+      auto dl = [&](const EditResult& r) {
+        return r.ok && r.new_bounds.valid() ? r.new_bounds.l - L.bounds.l : 0.0;
+      };
+      auto inside_ratio = [&](const EditResult& r) {
+        return r.ok && r.d.mask_area
+                   ? 100.0 * static_cast<double>(r.d.inside) / static_cast<double>(r.d.mask_area)
+                   : -1.0;
+      };
       std::set<std::string> fnames;
-      for (auto* f : L.fonts) fnames.insert(font_name(f) + (f && FPDFFont_GetIsEmbedded(f) == 1 ? "" : "(ne)"));
+      for (auto* f : L.fonts)
+        fnames.insert(font_name(f) + (f && FPDFFont_GetIsEmbedded(f) == 1 ? "" : "(ne)"));
       std::string fjoin;
       for (const auto& n : fnames) fjoin += (fjoin.empty() ? "" : ",") + n;
 
-      g_lines << name << '\t' << p << '\t' << ti << '\t' << L.members.size() << '\t' << (spans_other ? 1 : 0) << '\t'
-              << (first.depth > 0 ? 1 : 0) << '\t' << fmt(L.eff_size, 1) << '\t' << fjoin << '\t'
+      g_lines << name << '\t' << p << '\t' << ti << '\t' << L.members.size() << '\t'
+              << (spans_other ? 1 : 0) << '\t' << (first.depth > 0 ? 1 : 0) << '\t'
+              << fmt(L.eff_size, 1) << '\t' << fjoin
+              << '\t'
               // E2
-              << (e2.ok ? (e2.qpdf_ok ? "ok" : "qpdf_fail") : e2.error) << '\t' << e2.d.outside << '\t' << e2.d.outside_big << '\t'
-              << fmt(e2.ms, 1) << '\t'
+              << (e2.ok ? (e2.qpdf_ok ? "ok" : "qpdf_fail") : e2.error) << '\t' << e2.d.outside
+              << '\t' << e2.d.outside_big << '\t' << fmt(e2.ms, 1)
+              << '\t'
               // E3a
-              << (e3a.ok ? "ok" : e3a.error) << '\t' << (e3a.ok ? e3a.d.outside : -1) << '\t' << fmt(wr(e3a), 3) << '\t'
-              << fmt(dl(e3a), 2) << '\t' << fmt(inside_ratio(e3a), 1) << '\t'
-              << (e3a.ok ? (trim(e3a.text_back) == text ? "same" : "diff") : "-") << '\t'
+              << (e3a.ok ? "ok" : e3a.error) << '\t' << (e3a.ok ? e3a.d.outside : -1) << '\t'
+              << fmt(wr(e3a), 3) << '\t' << fmt(dl(e3a), 2) << '\t' << fmt(inside_ratio(e3a), 1)
+              << '\t' << (e3a.ok ? (trim(e3a.text_back) == text ? "same" : "diff") : "-")
+              << '\t'
               // E3b
-              << sub_name << '\t' << (e3b.ok ? "ok" : e3b.error) << '\t' << (e3b.ok ? e3b.d.outside : -1) << '\t' << fmt(wr(e3b), 3)
-              << '\t' << fmt(dl(e3b), 2) << '\t' << fmt(inside_ratio(e3b), 1) << '\t' << (e5d.ok ? "ok" : e5d.error) << '\t' << (e5d.ok ? e5d.d.outside : -1) << '\t' << (e5d.ok ? e5d.d.outside_big : -1)
-              << '\t' << pdfium_page_texts << '\t' << s5.page_show_ops << '\t' << s5.needs_displacement << '\t'
-              << (e5n.ok ? (e5n.qpdf_ok ? "ok" : "qpdf_fail") : e5n.error) << '\t' << (e5n.ok ? e5n.d.outside_big : -1) << '\t'
-              << fmt(wr(e5n), 3) << '\t' << fmt(dl(e5n), 2) << '\t' << (e5n.ok ? (trim(e5n.text_back) == text ? "same" : "diff") : "-")
-              << '\t' << u8(text).substr(0, 60) << '\n';
+              << sub_name << '\t' << (e3b.ok ? "ok" : e3b.error) << '\t'
+              << (e3b.ok ? e3b.d.outside : -1) << '\t' << fmt(wr(e3b), 3) << '\t' << fmt(dl(e3b), 2)
+              << '\t' << fmt(inside_ratio(e3b), 1) << '\t' << (e5d.ok ? "ok" : e5d.error) << '\t'
+              << (e5d.ok ? e5d.d.outside : -1) << '\t' << (e5d.ok ? e5d.d.outside_big : -1) << '\t'
+              << pdfium_page_texts << '\t' << s5.page_show_ops << '\t' << s5.needs_displacement
+              << '\t' << (e5n.ok ? (e5n.qpdf_ok ? "ok" : "qpdf_fail") : e5n.error) << '\t'
+              << (e5n.ok ? e5n.d.outside_big : -1) << '\t' << fmt(wr(e5n), 3) << '\t'
+              << fmt(dl(e5n), 2) << '\t'
+              << (e5n.ok ? (trim(e5n.text_back) == text ? "same" : "diff") : "-") << '\t'
+              << u8(text).substr(0, 60) << '\n';
       g_lines.flush();
 
       // E4 글꼴 커버리지 (줄 글꼴별 한 번)
@@ -1119,11 +1241,13 @@ void process_doc(const fs::path& file, const Options& opt) {
         if (!f) continue;
         const std::string fname = font_name(f);
         if (!g_fonts_seen.insert({name, fname}).second) continue;
-        const auto cd = coverage(f, kDigits), cl = coverage(f, kLower), cu = coverage(f, kUpper), ch = coverage(f, kHangul);
+        const auto cd = coverage(f, kDigits), cl = coverage(f, kLower), cu = coverage(f, kUpper),
+                   ch = coverage(f, kHangul);
         std::size_t data_len = 0;
         FPDFFont_GetFontData(f, nullptr, 0, &data_len);
-        g_fonts << name << '\t' << fname << '\t' << FPDFFont_GetIsEmbedded(f) << '\t' << (fname.find('+') == 6 ? 1 : 0) << '\t'
-                << data_len << '\t' << fmt(100 * cd.ratio(), 0) << '\t' << fmt(100 * cl.ratio(), 0) << '\t'
+        g_fonts << name << '\t' << fname << '\t' << FPDFFont_GetIsEmbedded(f) << '\t'
+                << (fname.find('+') == 6 ? 1 : 0) << '\t' << data_len << '\t'
+                << fmt(100 * cd.ratio(), 0) << '\t' << fmt(100 * cl.ratio(), 0) << '\t'
                 << fmt(100 * cu.ratio(), 0) << '\t' << fmt(100 * ch.ratio(), 0) << '\n';
         g_fonts.flush();
       }
@@ -1138,19 +1262,27 @@ int main(int argc, char** argv) {
   std::vector<fs::path> files;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
-    if (a == "--pages" && i + 1 < argc) opt.pages = std::atoi(argv[++i]);
-    else if (a == "--scale" && i + 1 < argc) opt.scale = std::atof(argv[++i]);
-    else if (a == "--lines" && i + 1 < argc) opt.lines_per_page = std::atoi(argv[++i]);
-    else if (a == "--font" && i + 1 < argc) opt.cid_font = onpdf::path_from_utf8(argv[++i]);
-    else if (opt.out.empty()) opt.out = onpdf::path_from_utf8(a);
-    else files.push_back(onpdf::path_from_utf8(a));
+    if (a == "--pages" && i + 1 < argc)
+      opt.pages = std::atoi(argv[++i]);
+    else if (a == "--scale" && i + 1 < argc)
+      opt.scale = std::atof(argv[++i]);
+    else if (a == "--lines" && i + 1 < argc)
+      opt.lines_per_page = std::atoi(argv[++i]);
+    else if (a == "--font" && i + 1 < argc)
+      opt.cid_font = onpdf::path_from_utf8(argv[++i]);
+    else if (opt.out.empty())
+      opt.out = onpdf::path_from_utf8(a);
+    else
+      files.push_back(onpdf::path_from_utf8(a));
   }
   if (opt.out.empty() || files.empty()) {
-    std::cerr << "usage: onpdf_spike_text_edit <out-dir> [--pages N] [--scale S] [--lines K] [--font cid.ttf] a.pdf ...\n";
+    std::cerr << "usage: onpdf_spike_text_edit <out-dir> [--pages N] [--scale S] [--lines K] "
+                 "[--font cid.ttf] a.pdf ...\n";
     return 2;
   }
   fs::create_directories(opt.out);
-  if (!opt.cid_font.empty()) g_cid_font = std::make_shared<std::vector<std::uint8_t>>(read_file(opt.cid_font));
+  if (!opt.cid_font.empty())
+    g_cid_font = std::make_shared<std::vector<std::uint8_t>>(read_file(opt.cid_font));
 
   FPDF_LIBRARY_CONFIG cfg{};
   cfg.version = 2;
@@ -1159,10 +1291,16 @@ int main(int argc, char** argv) {
   g_pages.open(opt.out / "pages.tsv");
   g_lines.open(opt.out / "lines.tsv");
   g_fonts.open(opt.out / "fonts.tsv");
-  g_pages << "doc\tpage\tproducer\ttext_objs\tnested\tforms\tshadings\timages\tpaths\tchars_per_obj\tlines\textract_lines\t"
-             "matched_lines\tagree\tagree_pct\tmerged\tmulti_line_objs\tnonhoriz_lines\tmixed_font_lines\te0\te0_diff_px\te0_big\n";
-  g_lines << "doc\tpage\tline\tobjs\tspans_other\tin_form\tsize\tfonts\te2\te2_out_px\te2_out_big\te2_ms\te3a\te3a_out_px\t"
-             "e3a_width_ratio\te3a_dx\te3a_inside_pct\te3a_text\tsub_font\te3b\te3b_out_px\te3b_width_ratio\te3b_dx\te3b_inside_pct\te5d\te5d_out_px\te5d_out_big\tpdfium_texts\tqpdf_show_ops\tneeds_disp\te5n\te5n_out_big\te5n_width_ratio\te5n_dx\te5n_text\ttext\n";
+  g_pages << "doc\tpage\tproducer\ttext_objs\tnested\tforms\tshadings\timages\tpaths\tchars_per_"
+             "obj\tlines\textract_lines\t"
+             "matched_lines\tagree\tagree_pct\tmerged\tmulti_line_objs\tnonhoriz_lines\tmixed_font_"
+             "lines\te0\te0_diff_px\te0_big\n";
+  g_lines
+      << "doc\tpage\tline\tobjs\tspans_other\tin_form\tsize\tfonts\te2\te2_out_px\te2_out_big\te2_"
+         "ms\te3a\te3a_out_px\t"
+         "e3a_width_ratio\te3a_dx\te3a_inside_pct\te3a_text\tsub_font\te3b\te3b_out_px\te3b_width_"
+         "ratio\te3b_dx\te3b_inside_pct\te5d\te5d_out_px\te5d_out_big\tpdfium_texts\tqpdf_show_"
+         "ops\tneeds_disp\te5n\te5n_out_big\te5n_width_ratio\te5n_dx\te5n_text\ttext\n";
   g_fonts << "doc\tfont\tembedded\tsubset_tag\tdata_bytes\tdigits\tlower\tupper\thangul\n";
 
   for (const auto& f : files) {

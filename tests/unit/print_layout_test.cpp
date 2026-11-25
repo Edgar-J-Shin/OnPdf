@@ -1,12 +1,11 @@
-#include "onpdf/core/engine/pdfium_document.h"
 #include "onpdf/core/view/print_layout.h"
 
+#include "onpdf/core/engine/pdfium_document.h"
+
 #include "../test_support.h"
-
-#include <gtest/gtest.h>
-
 #include <cstddef>
 #include <cstdint>
+#include <gtest/gtest.h>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -24,9 +23,9 @@ constexpr PageSize kLetterPrintable{576, 756};  // 사방 18pt 여백
 TEST(PrintLayout, PagesInRanges) {
   EXPECT_EQ(pages_in_ranges({{0, 4}}, 5), (std::vector<int>{0, 1, 2, 3, 4}));
   EXPECT_EQ(pages_in_ranges({{2, 2}, {0, 1}}, 5), (std::vector<int>{2, 0, 1}));
-  EXPECT_EQ(pages_in_ranges({{3, 10}}, 5), (std::vector<int>{3, 4}));       // 범위 밖 자르기
+  EXPECT_EQ(pages_in_ranges({{3, 10}}, 5), (std::vector<int>{3, 4}));  // 범위 밖 자르기
   EXPECT_EQ(pages_in_ranges({{-3, 0}}, 5), (std::vector<int>{0}));
-  EXPECT_EQ(pages_in_ranges({{4, 1}}, 5), (std::vector<int>{}));            // 뒤집힌 구간
+  EXPECT_EQ(pages_in_ranges({{4, 1}}, 5), (std::vector<int>{}));                    // 뒤집힌 구간
   EXPECT_EQ(pages_in_ranges({{0, 1}, {1, 2}}, 5), (std::vector<int>{0, 1, 1, 2}));  // 겹침 유지
   EXPECT_TRUE(pages_in_ranges({{7, 9}}, 5).empty());
   EXPECT_TRUE(pages_in_ranges({{0, 1}}, 0).empty());
@@ -105,16 +104,18 @@ TEST(PrintLayout, ScalingModesForSmallAndLargePages) {
 TEST(PrintLayout, RejectsInvalidSizes) {
   EXPECT_FALSE(place_page({0, 792}, kLetterPrintable, PrintScaling::kFit));
   EXPECT_FALSE(place_page(kLetter, {576, -1}, PrintScaling::kFit));
-  EXPECT_FALSE(place_page({std::numeric_limits<double>::infinity(), 1}, kLetterPrintable, PrintScaling::kFit));
-  EXPECT_FALSE(place_page({std::numeric_limits<double>::quiet_NaN(), 1}, kLetterPrintable, PrintScaling::kFit));
+  EXPECT_FALSE(place_page({std::numeric_limits<double>::infinity(), 1}, kLetterPrintable,
+                          PrintScaling::kFit));
+  EXPECT_FALSE(place_page({std::numeric_limits<double>::quiet_NaN(), 1}, kLetterPrintable,
+                          PrintScaling::kFit));
 }
 
 TEST(PrintLayout, ChoosePrintDpi) {
   const Rect letter{0, 0, 576, 756};
   EXPECT_EQ(choose_print_dpi(1200, true, letter), 300);
   EXPECT_EQ(choose_print_dpi(150, true, letter), 150);
-  EXPECT_EQ(choose_print_dpi(0, true, letter), 300);       // 알 수 없는 해상도
-  EXPECT_EQ(choose_print_dpi(1200, false, letter), 150);   // 저해상도 권한
+  EXPECT_EQ(choose_print_dpi(0, true, letter), 300);      // 알 수 없는 해상도
+  EXPECT_EQ(choose_print_dpi(1200, false, letter), 150);  // 저해상도 권한
   // A0 용지 전체(2384×3370pt): 300 DPI 면 1억 px 이상 → 상한에 맞춰 하향
   const Rect a0{0, 0, 2384, 3370};
   const int dpi = choose_print_dpi(1200, true, a0);
@@ -128,13 +129,21 @@ TEST(PrintLayout, ChoosePrintDpi) {
 // ---------------------------------------------------------------- PDFium
 
 std::uint32_t pixel_at(const Bitmap& bmp, int x, int y) {
-  const auto* p = bmp.pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(bmp.stride) +
+  const auto* p = bmp.pixels.data() +
+                  static_cast<std::size_t>(y) * static_cast<std::size_t>(bmp.stride) +
                   static_cast<std::size_t>(x) * 4;
-  return (static_cast<std::uint32_t>(p[2]) << 16) | (static_cast<std::uint32_t>(p[1]) << 8) | p[0];  // RGB
+  return (static_cast<std::uint32_t>(p[2]) << 16) | (static_cast<std::uint32_t>(p[1]) << 8) |
+         p[0];  // RGB
 }
-bool is_greenish(std::uint32_t rgb) { return ((rgb >> 8) & 0xFF) > 120 && ((rgb >> 16) & 0xFF) < 60; }
-bool is_reddish(std::uint32_t rgb) { return ((rgb >> 16) & 0xFF) > 180 && ((rgb >> 8) & 0xFF) < 60; }
-bool is_white(std::uint32_t rgb) { return rgb == 0xFFFFFF; }
+bool is_greenish(std::uint32_t rgb) {
+  return ((rgb >> 8) & 0xFF) > 120 && ((rgb >> 16) & 0xFF) < 60;
+}
+bool is_reddish(std::uint32_t rgb) {
+  return ((rgb >> 16) & 0xFF) > 180 && ((rgb >> 8) & 0xFF) < 60;
+}
+bool is_white(std::uint32_t rgb) {
+  return rgb == 0xFFFFFF;
+}
 
 TEST(PrintRender, PrintFlagSelectsAnnotations) {
   auto doc = PdfiumDocument::open(testdata("print-flags.pdf"));
@@ -192,7 +201,8 @@ TEST(PrintPreferencesLoad, ViewerPreferences) {
   EXPECT_TRUE(prefs->no_scaling);
   EXPECT_EQ(prefs->copies, 2);
   ASSERT_EQ(prefs->page_ranges.size(), 1u);
-  EXPECT_EQ(prefs->page_ranges[0], (std::pair<int, int>{1, 1}));  // /PrintPageRange [2 2] → 0 기준 2쪽
+  EXPECT_EQ(prefs->page_ranges[0],
+            (std::pair<int, int>{1, 1}));  // /PrintPageRange [2 2] → 0 기준 2쪽
   EXPECT_EQ(prefs->duplex, Duplex::kFlipLongEdge);
 }
 

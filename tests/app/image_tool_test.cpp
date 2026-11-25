@@ -1,31 +1,29 @@
-// 이미지 도구 (#49, offscreen): 파일 → 놓기·선택, 드롭, 이동, 모서리 핸들 크기(비율·Shift), 삭제·취소, 기존 이미지, 실패 안내, 권한
+// 이미지 도구 (#49, offscreen): 파일 → 놓기·선택, 드롭, 이동, 모서리 핸들 크기(비율·Shift),
+// 삭제·취소, 기존 이미지, 실패 안내, 권한
+#include "onpdf/core/engine/pdfium_worker.h"
+#include "onpdf/core/platform/path.h"
+
+#include "../test_support.h"
 #include "document_view.h"
 #include "image_import.h"
 #include "main_window.h"
-#include "onpdf/core/engine/pdfium_worker.h"
-#include "onpdf/core/platform/path.h"
 #include "ui_dispatcher.h"
-
-#include "../test_support.h"
-
-#include <gtest/gtest.h>
-
 #include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
 #include <QClipboard>
-#include <QMimeData>
 #include <QElapsedTimer>
 #include <QFileDialog>
 #include <QImage>
 #include <QMessageBox>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QStatusBar>
 #include <QTimer>
-
 #include <filesystem>
 #include <fstream>
+#include <gtest/gtest.h>
 
 namespace onpdf::app {
 namespace {
@@ -72,7 +70,8 @@ class ImageToolTest : public ::testing::Test {
   bool open_path(const std::filesystem::path& path) {
     const QString file = QString::fromStdString(onpdf::path_to_utf8(path.filename()));
     window_.open_file(QString::fromStdString(onpdf::path_to_utf8(path)));
-    return spin_until([&] { return window_.windowTitle().contains(file) && view()->has_document(); });
+    return spin_until(
+        [&] { return window_.windowTitle().contains(file) && view()->has_document(); });
   }
   std::filesystem::path open_copy(const char* name) {
     const auto copy = dir_ / name;
@@ -81,16 +80,21 @@ class ImageToolTest : public ::testing::Test {
     return copy;
   }
   bool idle() { return !window_.edit_controller()->busy() && !window_.saving(); }
-  bool wait_idle() { return spin_until([&] { return idle(); }); }
+  bool wait_idle() {
+    return spin_until([&] { return idle(); });
+  }
   std::vector<engine::PageObjectInfo> images(int page) {
     std::vector<engine::PageObjectInfo> out;
     if (const auto* list = view()->page_objects(page)) {
-      for (const auto& o : *list) if (o.kind == engine::ObjectKind::kImage) out.push_back(o);
+      for (const auto& o : *list)
+        if (o.kind == engine::ObjectKind::kImage) out.push_back(o);
     }
     return out;
   }
   bool wait_images(int page, std::size_t n) {
-    return spin_until([&] { return idle() && view()->page_objects(page) != nullptr && images(page).size() == n; });
+    return spin_until([&] {
+      return idle() && view()->page_objects(page) != nullptr && images(page).size() == n;
+    });
   }
   // 왼쪽 절반 빨강(불투명), 오른쪽 절반 투명
   QString write_png(const char* name, int w = 120, int h = 80) {
@@ -112,7 +116,8 @@ class ImageToolTest : public ::testing::Test {
   }
   void send_mouse(QEvent::Type type, QPointF pos, Qt::MouseButton button, Qt::MouseButtons buttons,
                   Qt::KeyboardModifiers mods = Qt::NoModifier) {
-    QMouseEvent ev(type, pos, view()->viewport()->mapToGlobal(pos.toPoint()), button, buttons, mods);
+    QMouseEvent ev(type, pos, view()->viewport()->mapToGlobal(pos.toPoint()), button, buttons,
+                   mods);
     QApplication::sendEvent(view()->viewport(), &ev);
   }
   void click(QPointF at) {
@@ -174,7 +179,8 @@ TEST_F(ImageToolTest, ToolPlacesPngAndJpegAndSelectsNewImage) {
   EXPECT_NEAR(placed.bbox.x, 100, 0.5);
   EXPECT_NEAR(placed.bbox.w, 120, 0.5);
   EXPECT_EQ(placed.pixel_width, 120);
-  ASSERT_TRUE(spin_until([&] { return view()->selected_object().has_value(); })) << "넣은 이미지를 고른다";
+  ASSERT_TRUE(spin_until([&] { return view()->selected_object().has_value(); }))
+      << "넣은 이미지를 고른다";
   EXPECT_EQ(view()->tool(), AnnotationTool::kSelect);
   EXPECT_EQ(view()->selected_object()->kind, engine::ObjectKind::kImage);
   EXPECT_TRUE(window_.statusBar()->currentMessage().contains(QStringLiteral("120×80 px")));
@@ -200,14 +206,18 @@ TEST_F(ImageToolTest, MoveResizeDeleteAndUndo) {
   // 몸통 드래그 → 이동
   settle_clicks();
   drag(vp(0, 150, 425), vp(0, 190, 455));
-  ASSERT_TRUE(spin_until([&] { return wait_idle() && !images(0).empty() && std::abs(images(0)[0].bbox.x - 140) < 1.0; }));
+  ASSERT_TRUE(spin_until([&] {
+    return wait_idle() && !images(0).empty() && std::abs(images(0)[0].bbox.x - 140) < 1.0;
+  }));
   EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("객체 이동")));
   ASSERT_TRUE(spin_until([&] { return view()->selected_object().has_value(); }));
   // 우하 핸들 → 비율 유지 크기 조절 (100×50 → 폭 200)
   const auto b = images(0)[0].bbox;
   settle_clicks();
   drag(vp(0, b.right(), b.bottom()), vp(0, b.right() + 100, b.bottom() + 10));
-  ASSERT_TRUE(spin_until([&] { return wait_idle() && !images(0).empty() && std::abs(images(0)[0].bbox.w - 200) < 1.5; }));
+  ASSERT_TRUE(spin_until([&] {
+    return wait_idle() && !images(0).empty() && std::abs(images(0)[0].bbox.w - 200) < 1.5;
+  }));
   EXPECT_NEAR(images(0)[0].bbox.h, 100, 1.5) << "비율 유지";
   EXPECT_NEAR(images(0)[0].bbox.x, b.x, 0.5) << "반대 모서리 고정";
   EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("크기 변경")));
@@ -216,7 +226,9 @@ TEST_F(ImageToolTest, MoveResizeDeleteAndUndo) {
   const auto c = images(0)[0].bbox;
   settle_clicks();
   drag(vp(0, c.right(), c.bottom()), vp(0, c.right() - 50, c.bottom() + 40), Qt::ShiftModifier);
-  ASSERT_TRUE(spin_until([&] { return wait_idle() && !images(0).empty() && std::abs(images(0)[0].bbox.w - 150) < 1.5; }));
+  ASSERT_TRUE(spin_until([&] {
+    return wait_idle() && !images(0).empty() && std::abs(images(0)[0].bbox.w - 150) < 1.5;
+  }));
   EXPECT_NEAR(images(0)[0].bbox.h, 140, 1.5);
   // Delete → 취소
   ASSERT_TRUE(spin_until([&] { return view()->selected_object().has_value(); }));
@@ -229,7 +241,8 @@ TEST_F(ImageToolTest, MoveResizeDeleteAndUndo) {
   EXPECT_NEAR(images(0)[0].bbox.w, 150, 1.5) << "같은 객체가 돌아온다";
 }
 
-// 문서에 원래 있던(마크 없는) 이미지는 선택만 된다 — 옮기면 PDFium 이 원본 스트림을 다시 써 내용이 손상된다 (#57)
+// 문서에 원래 있던(마크 없는) 이미지는 선택만 된다 — 옮기면 PDFium 이 원본 스트림을 다시 써 내용이
+// 손상된다 (#57)
 TEST_F(ImageToolTest, ExistingImageIsSelectableButLocked) {
   open_copy("scanned.pdf");
   ASSERT_TRUE(wait_images(0, 1));
@@ -245,11 +258,13 @@ TEST_F(ImageToolTest, ExistingImageIsSelectableButLocked) {
   QObject::connect(view(), &DocumentView::locked_object_edit_attempted, [&] { ++attempts; });
   // 모서리 끌기(크기), 안쪽 끌기(이동), 화살표, Delete — 모두 문서를 바꾸지 않는다
   settle_clicks();
-  drag(vp(0, foreign.bbox.x + 50, foreign.bbox.y + 50), vp(0, foreign.bbox.x + 90, foreign.bbox.y + 70));
+  drag(vp(0, foreign.bbox.x + 50, foreign.bbox.y + 50),
+       vp(0, foreign.bbox.x + 90, foreign.bbox.y + 70));
   EXPECT_EQ(attempts, 1) << "선택한 이미지 안쪽 끌기는 안내 신호를 낸다";
   // 핸들이 없으므로 모서리 끌기는 크기 조절이 아니다 (다시 선택될 뿐)
   settle_clicks();
-  drag(vp(0, foreign.bbox.right() - 1, foreign.bbox.bottom() - 1), vp(0, foreign.bbox.right() - 200, foreign.bbox.bottom() - 200));
+  drag(vp(0, foreign.bbox.right() - 1, foreign.bbox.bottom() - 1),
+       vp(0, foreign.bbox.right() - 200, foreign.bbox.bottom() - 200));
   ASSERT_TRUE(spin_until([&] { return view()->selected_object().has_value(); }));
   ASSERT_TRUE(view()->selected_object_locked()) << "선택은 유지된다";
   attempts = 0;
@@ -272,13 +287,16 @@ TEST_F(ImageToolTest, UnreadableFileIsExplainedAndPermissionGates) {
   open_copy("simple.pdf");
   ASSERT_TRUE(wait_idle());
   const auto bogus = dir_ / "broken.png";
-  { std::ofstream(bogus) << "not an image"; }
+  {
+    std::ofstream(bogus) << "not an image";
+  }
   bool warned = false;
   when_dialog("image_open_failed", [&](QWidget* w) {
     warned = true;
     static_cast<QMessageBox*>(w)->button(QMessageBox::Ok)->click();
   });
-  EXPECT_FALSE(window_.add_image_file(QString::fromStdString(onpdf::path_to_utf8(bogus)), 0, {10, 10}, false));
+  EXPECT_FALSE(window_.add_image_file(QString::fromStdString(onpdf::path_to_utf8(bogus)), 0,
+                                      {10, 10}, false));
   EXPECT_TRUE(warned);
   EXPECT_FALSE(window_.isWindowModified());
   ASSERT_TRUE(open_path(testdata("encrypted-owner-only.pdf")));  // 내용 수정 금지
@@ -322,14 +340,16 @@ TEST_F(ImageToolTest, ArrowKeysNudgeAndMergeIntoOneUndo) {
   press(Qt::Key_Right);
   press(Qt::Key_Down, Qt::ShiftModifier);
   const bool moved = spin_until([&] {
-    return idle() && !images(0).empty() && std::abs(images(0)[0].bbox.x - 202) < 0.5 && std::abs(images(0)[0].bbox.y - 310) < 0.5;
+    return idle() && !images(0).empty() && std::abs(images(0)[0].bbox.x - 202) < 0.5 &&
+           std::abs(images(0)[0].bbox.y - 310) < 0.5;
   });
   ASSERT_TRUE(moved) << "bbox " << images(0)[0].bbox.x << "," << images(0)[0].bbox.y << " undo "
                      << window_.undo_action()->text().toStdString();
   EXPECT_TRUE(window_.undo_action()->text().contains(QStringLiteral("객체 이동")));
   ASSERT_TRUE(window_.edit_controller()->undo());
   ASSERT_TRUE(spin_until([&] {
-    return idle() && !images(0).empty() && std::abs(images(0)[0].bbox.x - 200) < 0.5 && std::abs(images(0)[0].bbox.y - 300) < 0.5;
+    return idle() && !images(0).empty() && std::abs(images(0)[0].bbox.x - 200) < 0.5 &&
+           std::abs(images(0)[0].bbox.y - 300) < 0.5;
   })) << "연타 3번이 한 번의 실행 취소로";
   // 선택 해제 뒤 화살표는 객체를 옮기지 않는다
   QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);

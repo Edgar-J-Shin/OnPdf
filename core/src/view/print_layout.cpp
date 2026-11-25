@@ -35,13 +35,14 @@ std::vector<PrintStep> print_sequence(const std::vector<int>& pages, int copies,
 namespace {
 
 bool valid_size(engine::PageSize size) {
-  return std::isfinite(size.width) && std::isfinite(size.height) && size.width > 0.0 && size.height > 0.0;
+  return std::isfinite(size.width) && std::isfinite(size.height) && size.width > 0.0 &&
+         size.height > 0.0;
 }
 
 }  // namespace
 
-std::optional<Placement> place_page(engine::PageSize page_pt, engine::PageSize printable_pt, PrintScaling scaling,
-                                    bool auto_rotate) {
+std::optional<Placement> place_page(engine::PageSize page_pt, engine::PageSize printable_pt,
+                                    PrintScaling scaling, bool auto_rotate) {
   if (!valid_size(page_pt) || !valid_size(printable_pt)) return std::nullopt;
   Placement out;
   const bool page_landscape = page_pt.width > page_pt.height;
@@ -52,11 +53,18 @@ std::optional<Placement> place_page(engine::PageSize page_pt, engine::PageSize p
     out.rotation = 270;
     std::swap(page_pt.width, page_pt.height);
   }
-  const double fit = std::min(printable_pt.width / page_pt.width, printable_pt.height / page_pt.height);
+  const double fit =
+      std::min(printable_pt.width / page_pt.width, printable_pt.height / page_pt.height);
   switch (scaling) {
-    case PrintScaling::kFit: out.scale = fit; break;
-    case PrintScaling::kActualSize: out.scale = 1.0; break;
-    case PrintScaling::kShrinkOversized: out.scale = std::min(1.0, fit); break;
+    case PrintScaling::kFit:
+      out.scale = fit;
+      break;
+    case PrintScaling::kActualSize:
+      out.scale = 1.0;
+      break;
+    case PrintScaling::kShrinkOversized:
+      out.scale = std::min(1.0, fit);
+      break;
   }
   const double w = page_pt.width * out.scale;
   const double h = page_pt.height * out.scale;
@@ -71,7 +79,8 @@ int choose_print_dpi(int printer_dpi, bool high_quality, const Rect& target_pt) 
   if (area_in2 > 0.0 && std::isfinite(area_in2)) {
     const double pixels = area_in2 * static_cast<double>(dpi) * static_cast<double>(dpi);
     if (pixels > static_cast<double>(kMaxPrintPixels)) {
-      dpi = static_cast<int>(std::floor(std::sqrt(static_cast<double>(kMaxPrintPixels) / area_in2)));
+      dpi =
+          static_cast<int>(std::floor(std::sqrt(static_cast<double>(kMaxPrintPixels) / area_in2)));
     }
   }
   return std::max(dpi, kMinPrintDpi);
