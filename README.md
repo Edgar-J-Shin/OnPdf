@@ -2,7 +2,7 @@
 
 PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편집기입니다.
 
-> 현재 단계: **v0.5.0** — 뷰어·주석·쪽 조작·텍스트/이미지 추가·폼 채우기에 이어 기존 텍스트 줄 단위 수정(M4)까지 나왔습니다. 다음은 M5(성능·설치 파일·다국어·문서화, v1.0)입니다. 변경 내역은 [CHANGELOG.md](CHANGELOG.md) 를 참고하세요.
+> 현재 단계: **v0.5.1** — M5 의 코드 범위(배포물 자동 생성, 영어 UI, 인쇄 미리보기, 자간 유지)까지 나왔고 [Releases](https://github.com/Edgar-J-Shin/OnPdf/releases) 에서 Windows zip·macOS DMG 를 받을 수 있습니다. v1.0 전에 코드 서명·공증, Windows 설치기, macOS x64 가 남았습니다. 변경 내역은 [CHANGELOG.md](CHANGELOG.md) 를 참고하세요.
 
 ## 목표
 
@@ -20,7 +20,7 @@ PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편
 | M2 | 주석, 페이지 조작(회전·삭제·재배열·병합·분할), 저장, 실행 취소 | v0.2 (완료) |
 | M3 | 텍스트·이미지 추가, 객체 편집, 폼 채우기, 폰트 임베딩 | v0.3 (완료) |
 | M4 | 기존 텍스트 줄 단위 수정, 서식 변경, 시스템 글꼴 대체, 폭 맞춤 | v0.5 (완료) |
-| M5 | 성능, Windows 설치 파일·macOS DMG, 코드 서명, 다국어, 문서화 | v1.0 |
+| M5 | 배포물 자동 생성, 다국어, 인쇄 미리보기, 자간 유지 (v0.5.1 완료) · 코드 서명, Windows 설치기, macOS x64 | v1.0 |
 
 자세한 계획은 [pdf-editor-plan.md](pdf-editor-plan.md) 를 참고하세요.
 
