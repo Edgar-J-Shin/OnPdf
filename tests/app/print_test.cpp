@@ -12,12 +12,15 @@
 #include <QDropEvent>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QInputDialog>
 #include <QMessageBox>
 #include <QMimeData>
 #include <QPageRanges>
 #include <QPageSize>
+#include <QPrintDialog>
 #include <QPrinter>
 #include <QProgressDialog>
+#include <QStringList>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QUrl>
@@ -247,15 +250,151 @@ TEST_F(PrintTest, GrayscaleAndLowResolutionRequests) {
   EXPECT_EQ(find_pixels(*p, blue).count, 0);  // 파란색이 회색으로
 }
 
-TEST_F(PrintTest, PermissionDeniedDisablesPrinting) {
+// 인쇄 금지 문서: 동작은 켜 두고(권한 암호 해제 안내로 이어진다, #23) 인쇄 자체는 거절한다
+TEST_F(PrintTest, PermissionDeniedOffersUnlockInstead) {
   ASSERT_TRUE(open("encrypted-owner-only.pdf"));
-  EXPECT_FALSE(window_.print_action()->isEnabled());
-  EXPECT_FALSE(window_.print_action()->statusTip().isEmpty());
+  EXPECT_TRUE(window_.print_action()->isEnabled());
+  EXPECT_EQ(window_.print_action()->statusTip(),
+            QCoreApplication::translate(
+                "onpdf::app::MainWindow",
+                "This document does not allow printing. You can unlock it with its permissions "
+                "password"));
   auto printer = pdf_printer("denied.pdf");
   EXPECT_FALSE(window_.print_with(*printer));
   EXPECT_EQ(window_.print_job(), nullptr);
   ASSERT_TRUE(open("simple.pdf"));
   EXPECT_TRUE(window_.print_action()->isEnabled());
+  EXPECT_EQ(window_.print_action()->statusTip(),
+            QCoreApplication::translate("onpdf::app::MainWindow", "Print the document"));
+}
+
+// ---- 권한 암호로 인쇄 해제 (#23) ----
+
+QString mw_tr(const char* source) {
+  return QCoreApplication::translate("onpdf::app::MainWindow", source);
+}
+
+// 해제 흐름의 모달 창에 자동으로 답한다: 안내 상자 → 수락, 암호 창 → passwords 를 차례로 (다 쓰면
+// 취소), 해제 뒤 자동으로 뜨는 인쇄 대화상자 → 닫기. labels 에 암호 창의 라벨을 모은다
+struct UnlockDriver {
+  QStringList passwords;
+  QStringList labels;
+  bool question_seen = false;
+  int print_dialogs_closed = 0;
+  QTimer poll;
+  explicit UnlockDriver(QStringList pw) : passwords(std::move(pw)) {
+    poll.setInterval(10);
+    QObject::connect(&poll, &QTimer::timeout, &poll, [this] {
+      QWidget* modal = QApplication::activeModalWidget();
+      if (modal == nullptr) return;
+      if (auto* box = qobject_cast<QMessageBox*>(modal);
+          box != nullptr && box->objectName() == QStringLiteral("print_unlock_question")) {
+        question_seen = true;
+        for (QAbstractButton* button : box->buttons()) {
+          if (box->buttonRole(button) == QMessageBox::AcceptRole) {
+            button->click();
+            return;
+          }
+        }
+      }
+      if (auto* input = qobject_cast<QInputDialog*>(modal);
+          input != nullptr && input->objectName() == QStringLiteral("print_unlock_password")) {
+        labels << input->labelText();
+        if (passwords.isEmpty()) {
+          input->reject();
+        } else {
+          input->setTextValue(passwords.takeFirst());
+          input->accept();
+        }
+        return;
+      }
+      if (auto* print = qobject_cast<QPrintDialog*>(modal); print != nullptr) {
+        ++print_dialogs_closed;
+        print->reject();
+      }
+    });
+    poll.start();
+  }
+};
+
+TEST_F(PrintTest, OwnerPasswordUnlocksPrinting) {
+  ASSERT_TRUE(open("encrypted-owner-only.pdf"));
+  ASSERT_FALSE(window_.document_view()->has_document() &&
+               window_.print_action()->statusTip() == mw_tr("Print the document"));
+  window_.set_auto_print_after_unlock(false);  // 네이티브 인쇄 대화상자는 offscreen 에서 못 닫는다
+  UnlockDriver driver({QStringLiteral("owner")});
+  window_.print_action()->trigger();
+  // 소유자 암호로 다시 열리면 권한이 전부 켜진다
+  ASSERT_TRUE(spin_until([&] {
+    return window_.print_action()->statusTip() == mw_tr("Print the document") &&
+           QApplication::activeModalWidget() == nullptr;
+  }));
+  EXPECT_TRUE(driver.question_seen);
+  ASSERT_EQ(driver.labels.size(), 1);
+  EXPECT_TRUE(driver.labels[0].contains(QStringLiteral("encrypted-owner-only.pdf")));
+  EXPECT_TRUE(window_.document_view()->has_document());
+  EXPECT_EQ(window_.print_action()->statusTip(), mw_tr("Print the document"));
+  auto printer = pdf_printer("unlocked.pdf");
+  ASSERT_TRUE(print_and_wait(*printer));
+  auto out = open_output("unlocked.pdf");
+  ASSERT_TRUE(out);
+  EXPECT_EQ(out->info().page_count, 2);
+}
+
+TEST_F(PrintTest, WrongPermissionsPasswordAsksAgainAndCancelKeepsDocument) {
+  ASSERT_TRUE(open("encrypted-owner-only.pdf"));
+  UnlockDriver driver({QStringLiteral("nope")});  // 두 번째 창은 취소된다
+  window_.print_action()->trigger();
+  ASSERT_TRUE(spin_until([&] { return driver.labels.size() >= 2; }));
+  EXPECT_TRUE(driver.labels[1].startsWith(mw_tr("Wrong password.")));
+  ASSERT_TRUE(spin_until([&] { return QApplication::activeModalWidget() == nullptr; }));
+  EXPECT_TRUE(window_.document_view()->has_document()) << "틀린 암호는 기존 문서를 유지한다";
+  EXPECT_EQ(window_.print_action()->statusTip(),
+            mw_tr("This document does not allow printing. You can unlock it with its permissions "
+                  "password"));
+  EXPECT_EQ(driver.print_dialogs_closed, 0);
+}
+
+TEST_F(PrintTest, UserPasswordIsNotThePermissionsPassword) {
+  ASSERT_TRUE(open("encrypted-owner-only.pdf"));
+  UnlockDriver driver({QString()});  // 빈 사용자 암호: 열리지만 권한은 그대로
+  window_.print_action()->trigger();
+  ASSERT_TRUE(spin_until([&] { return driver.labels.size() >= 2; }));
+  EXPECT_TRUE(driver.labels[1].startsWith(mw_tr("That is not the permissions password.")));
+  ASSERT_TRUE(spin_until([&] { return QApplication::activeModalWidget() == nullptr; }));
+  EXPECT_TRUE(window_.document_view()->has_document());
+  EXPECT_EQ(driver.print_dialogs_closed, 0);
+}
+
+TEST_F(PrintTest, ModifiedDocumentAsksToSaveBeforeUnlock) {
+  // 인쇄 금지 + 내용 수정 허용: 텍스트 상자를 넣어 수정 상태로 만든다
+  ASSERT_TRUE(open("perm-modify-only.pdf"));
+  ASSERT_TRUE(window_.set_text_font(
+      QString::fromStdString(onpdf::path_to_utf8(testdata("fonts") / "NotoSansKR-subset.ttf"))));
+  ASSERT_TRUE(window_.add_text(0, {100.0, 100.0}, QStringLiteral("Modified")));
+  ASSERT_TRUE(spin_until([&] {
+    return window_.edit_controller()->is_modified() && !window_.edit_controller()->busy();
+  }));
+  bool save_question = false;
+  QTimer poll;
+  poll.setInterval(10);
+  QObject::connect(&poll, &QTimer::timeout, &poll, [&] {
+    auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+    if (box == nullptr) return;
+    if (box->objectName() == QStringLiteral("print_unlock_question")) {
+      for (QAbstractButton* button : box->buttons()) {
+        if (box->buttonRole(button) == QMessageBox::AcceptRole) button->click();
+      }
+    } else if (box->objectName() == QStringLiteral("save_changes_question")) {
+      save_question = true;
+      box->reject();  // 취소 → 해제 중단
+    }
+  });
+  poll.start();
+  window_.print_action()->trigger();
+  ASSERT_TRUE(spin_until([&] { return save_question; }));
+  ASSERT_TRUE(spin_until([&] { return QApplication::activeModalWidget() == nullptr; }));
+  EXPECT_TRUE(window_.edit_controller()->is_modified()) << "취소하면 문서는 그대로다";
 }
 
 TEST_F(PrintTest, CancelLargeDocumentKeepsUiResponsive) {

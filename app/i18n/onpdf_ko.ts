@@ -262,6 +262,14 @@ Apache License 2.0</translation>
         <translation>/ %1 쪽</translation>
     </message>
     <message>
+        <source>Printing unlocked</source>
+        <translation>인쇄가 허용되었습니다</translation>
+    </message>
+    <message>
+        <source>That is not the permissions password.</source>
+        <translation>권한 암호가 아닙니다.</translation>
+    </message>
+    <message>
         <source>%1 pt</source>
         <translation>%1pt</translation>
     </message>
@@ -1006,6 +1014,32 @@ The original file was not changed.</source>
         <translation>병합·분할이 끝난 뒤 닫을 수 있습니다</translation>
     </message>
     <message>
+        <source>This document does not allow printing. You can unlock it with its permissions password</source>
+        <translation>이 문서는 인쇄가 허용되지 않습니다. 권한 암호로 해제할 수 있습니다</translation>
+    </message>
+    <message>
+        <source>Printing Not Allowed</source>
+        <translation>인쇄 허용 안 됨</translation>
+    </message>
+    <message>
+        <source>This document does not allow printing.
+If you know its permissions (owner) password, you can unlock printing.</source>
+        <translation>이 문서는 인쇄가 허용되지 않습니다.
+권한(소유자) 암호를 알면 인쇄를 해제할 수 있습니다.</translation>
+    </message>
+    <message>
+        <source>Enter Permissions Password…</source>
+        <translation>권한 암호 입력…</translation>
+    </message>
+    <message>
+        <source>Permissions Password</source>
+        <translation>권한 암호</translation>
+    </message>
+    <message>
+        <source>Permissions password for %1:</source>
+        <translation>%1 의 권한 암호:</translation>
+    </message>
+    <message>
         <source>This document does not allow printing</source>
         <translation>이 문서는 인쇄가 허용되지 않습니다</translation>
     </message>
@@ -1096,6 +1130,10 @@ The original file was not changed.</source>
         <translation>끝에서부터 다시 찾습니다</translation>
     </message>
     <message>
+        <source>Wrong password.</source>
+        <translation>암호가 틀렸습니다.</translation>
+    </message>
+    <message>
         <source>Password Required</source>
         <translation>암호 필요</translation>
     </message>
@@ -1179,6 +1217,51 @@ The original file was not changed.</source>
     <message>
         <source>(Untitled)</source>
         <translation>(제목 없음)</translation>
+    </message>
+</context>
+<context>
+    <name>onpdf::app::PrintPreviewDialog</name>
+    <message>
+        <source>Print Preview</source>
+        <translation>인쇄 미리보기</translation>
+    </message>
+    <message>
+        <source>Fit to Page</source>
+        <translation>용지에 맞춤</translation>
+    </message>
+    <message>
+        <source>Actual Size</source>
+        <translation>실제 크기</translation>
+    </message>
+    <message>
+        <source>Shrink Oversized Pages</source>
+        <translation>큰 쪽만 축소</translation>
+    </message>
+    <message>
+        <source>Grayscale</source>
+        <translation>흑백</translation>
+    </message>
+    <message>
+        <source>Settings…</source>
+        <translation>설정…</translation>
+    </message>
+    <message>
+        <source>Change printer, paper, page range or copies</source>
+        <translation>프린터·용지·쪽 범위·매수를 바꾼다</translation>
+    </message>
+    <message>
+        <source>Scaling:</source>
+        <translation>배율:</translation>
+    </message>
+    <message>
+        <source>Print</source>
+        <translation>인쇄</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n sheet(s)</source>
+        <translation>
+            <numerusform>%n장</numerusform>
+        </translation>
     </message>
 </context>
 <context>

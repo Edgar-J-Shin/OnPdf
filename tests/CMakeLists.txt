@@ -94,6 +94,7 @@ if(ONPDF_BUILD_APP)
     app/search_test.cpp
     app/sidebar_test.cpp
     app/print_test.cpp
+    app/print_preview_test.cpp
     app/edit_test.cpp
     app/annotation_test.cpp
     app/merge_split_test.cpp

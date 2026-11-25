@@ -16,6 +16,7 @@ add_library(onpdf_app_lib STATIC
   outline_panel.h outline_panel.cpp
   thumbnail_panel.h thumbnail_panel.cpp
   print_job.h print_job.cpp
+  print_preview_dialog.h print_preview_dialog.cpp
   edit_controller.h edit_controller.cpp
   annotation_dialog.h annotation_dialog.cpp
   image_import.h image_import.cpp
