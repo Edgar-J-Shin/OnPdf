@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """OnPdf 앱 아이콘 생성기 (#99). 표준 라이브러리만 쓰고 결정적이다(난수 없음).
 
-    python3 packaging/windows/make_icon.py app/onpdf.ico [--png out-dir]
+    python3 packaging/windows/make_icon.py app/onpdf.ico [--icns app/onpdf.icns] [--png out-dir]
 
 디자인: 둥근 파란 사각형 위 흰 문서(접힌 모서리), 회색 글줄 3개 + 빨간 글줄 1개(줄 수정을 상징).
-768px 로 그린 뒤 박스 평균으로 16·24·32·48·64·128·256 을 만들고(안티앨리어싱), ICO 에는 PNG 항목으로
-담는다(Windows Vista+). --png 를 주면 크기별 PNG 도 쓴다(문서·macOS 아이콘 재료).
+1536px 로 그린 뒤 박스 평균으로 16~512 를 만들고(안티앨리어싱), ICO 에는 16~256 을 PNG 항목으로 담는다
+(Windows Vista+). --icns 는 macOS 번들 아이콘(PNG 항목 icp4~ic09 + 레티나 ic11~ic14, 16~512)을 쓴다.
+--png 를 주면 크기별 PNG 도 쓴다.
 """
 
 from __future__ import annotations
@@ -15,8 +16,12 @@ import sys
 import zlib
 from pathlib import Path
 
-BASE = 768
-SIZES = (16, 24, 32, 48, 64, 128, 256)
+BASE = 1536  # 모든 크기의 정수 배수
+SIZES = (16, 24, 32, 48, 64, 128, 256, 512)
+ICO_SIZES = (16, 24, 32, 48, 64, 128, 256)
+# macOS .icns: 타입 → 픽셀 크기 (PNG 항목, macOS 10.7+). ic11~ic14 는 @2x 변형이라 같은 PNG 를 쓴다
+ICNS_TYPES = ((b"icp4", 16), (b"icp5", 32), (b"icp6", 64), (b"ic07", 128), (b"ic08", 256), (b"ic09", 512),
+              (b"ic11", 32), (b"ic12", 64), (b"ic13", 256), (b"ic14", 512))
 
 BLUE = (30, 91, 184)
 WHITE = (255, 255, 255)
@@ -109,6 +114,14 @@ def png(size: int, rgba: bytes) -> bytes:
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
 
 
+def icns(pngs: dict[int, bytes]) -> bytes:
+    body = b""
+    for kind, size in ICNS_TYPES:
+        blob = pngs[size]
+        body += kind + struct.pack(">I", 8 + len(blob)) + blob
+    return b"icns" + struct.pack(">I", 8 + len(body)) + body
+
+
 def ico(images: list[tuple[int, bytes]]) -> bytes:
     header = struct.pack("<HHH", 0, 1, len(images))
     entries = b""
@@ -127,17 +140,21 @@ def main(argv: list[str]) -> int:
         return 2
     out = Path(argv[1])
     png_dir = Path(argv[argv.index("--png") + 1]) if "--png" in argv else None
+    icns_out = Path(argv[argv.index("--icns") + 1]) if "--icns" in argv else None
     base = render_base()
-    images = []
+    pngs: dict[int, bytes] = {}
     for size in SIZES:
-        blob = png(size, downsample(base, size))
-        images.append((size, blob))
+        pngs[size] = png(size, downsample(base, size))
         if png_dir is not None:
             png_dir.mkdir(parents=True, exist_ok=True)
-            (png_dir / f"onpdf-{size}.png").write_bytes(blob)
+            (png_dir / f"onpdf-{size}.png").write_bytes(pngs[size])
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(ico(images))
-    print(f"{out}: {len(images)} images, {out.stat().st_size} bytes")
+    out.write_bytes(ico([(size, pngs[size]) for size in ICO_SIZES]))
+    print(f"{out}: {len(ICO_SIZES)} images, {out.stat().st_size} bytes")
+    if icns_out is not None:
+        icns_out.parent.mkdir(parents=True, exist_ok=True)
+        icns_out.write_bytes(icns(pngs))
+        print(f"{icns_out}: {len(ICNS_TYPES)} entries, {icns_out.stat().st_size} bytes")
     return 0
 
 

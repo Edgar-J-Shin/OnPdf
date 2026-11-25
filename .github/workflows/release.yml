@@ -138,6 +138,7 @@ jobs:
           & $signtool.FullName sign /f "$env:RUNNER_TEMP/cert.pfx" /p $env:CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "$env:STAGE/onpdf_app.exe"
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Remove-Item "$env:RUNNER_TEMP/cert.pfx"
+          "SIGNED=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Check DLL dependencies
         shell: pwsh
         run: |
@@ -181,7 +182,9 @@ jobs:
           $korean = Join-Path (Split-Path $iscc) "Languages\Korean.isl"
           Write-Output "Korean.isl present: $(Test-Path $korean)"
           $stage = (Resolve-Path $env:STAGE).Path
-          & $iscc "/DAppVersion=$env:VERSION" "/DStageDir=$stage" "/DRepoDir=$PWD" "/DOutputDir=$PWD" packaging/windows/onpdf.iss
+          $defines = @("/DAppVersion=$env:VERSION", "/DStageDir=$stage", "/DRepoDir=$PWD", "/DOutputDir=$PWD")
+          if ($env:SIGNED) { $defines += "/DSigned=1" }  # 서명된 빌드에는 "서명 없음" 안내를 넣지 않는다
+          & $iscc @defines packaging/windows/onpdf.iss
           if ($LASTEXITCODE -ne 0) { exit 1 }
           $setup = "OnPdf-$env:VERSION-windows-x64-setup.exe"
           Get-Item $setup | Select-Object Name, Length
@@ -221,6 +224,19 @@ jobs:
           if ($null -eq $openwith -or $null -eq $openwith.PSObject.Properties['OnPdf.Document']) { Write-Output "::error::OpenWithProgids registration missing"; exit 1 }
           $default = (Get-ItemProperty -Path "HKCU:\Software\Classes\.pdf" -ErrorAction SilentlyContinue).'(default)'
           if ($default -ne 'OnPdf.Document') { Write-Output "::error::pdfdefault task did not set the .pdf default (got '$default')"; exit 1 }
+          # 업그레이드 경로 (#101): 이전 설치에만 있던 파일을 심고 같은 설치기를 다시 돌리면 사라져야 한다
+          $stale = Join-Path $appdir "plugins\stale.dll"
+          New-Item -ItemType Directory -Force -Path (Split-Path $stale) | Out-Null
+          Set-Content -Path $stale -Value "stale"
+          $p2 = Start-Process -FilePath (Resolve-Path $env:SETUP) -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$log.upgrade") -PassThru
+          if (-not $p2.WaitForExit(180000)) { $p2.Kill(); Get-Content "$log.upgrade"; Write-Output "::error::silent upgrade timed out"; exit 1 }
+          if ($p2.ExitCode -ne 0) { Get-Content "$log.upgrade"; Write-Output "::error::silent upgrade failed: $($p2.ExitCode)"; exit 1 }
+          if (Test-Path $stale) { Write-Output "::error::stale file survived the upgrade"; exit 1 }
+          if (-not (Test-Path $exe)) { Get-Content "$log.upgrade"; Write-Output "::error::exe missing after upgrade"; exit 1 }
+          $t2 = Start-Process -FilePath $exe -ArgumentList @('--self-test', "`"$(Join-Path $dir '한글 파일명.pdf')`"") -PassThru
+          if (-not $t2.WaitForExit(120000)) { $t2.Kill(); Write-Output "::error::self-test after upgrade timed out"; exit 1 }
+          Write-Output "self-test after upgrade -> $($t2.ExitCode)"
+          if ($t2.ExitCode -ne 0) { exit 1 }
           $unins = Get-ChildItem $appdir -Filter "unins*.exe" | Select-Object -First 1
           if ($null -eq $unins) { Write-Output "::error::uninstaller not found"; exit 1 }
           $u = Start-Process -FilePath $unins.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -PassThru

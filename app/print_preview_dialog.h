@@ -66,6 +66,8 @@ class PrintPreviewView : public QAbstractScrollArea {
   static constexpr double kMaxPreviewScale = 150.0 / 72.0;  // 쪽 포인트당 픽셀 상한
   static constexpr int kMargin = 16;                        // 논리 픽셀
   static constexpr int kGap = 16;
+  static constexpr double kRescaleThreshold =
+      0.12;  // 이보다 작은 배율 변화는 옛 이미지를 늘려 쓴다
 
  protected:
   void paintEvent(QPaintEvent* event) override;
@@ -85,6 +87,7 @@ class PrintPreviewView : public QAbstractScrollArea {
 
   void relayout();  // 확대·장 위치·스크롤 범위. 렌더 배율이 바뀌면 세대↑
   void bump_generation();
+  void apply_wanted_scale();  // wanted_scale_ 가 base_scale_ 와 12% 넘게 다르면 세대↑
   void cancel_all();
   void schedule_request();
   void request_visible();
@@ -103,6 +106,8 @@ class PrintPreviewView : public QAbstractScrollArea {
   bool grayscale_ = false;
   double zoom_ = 1.0;        // 용지 포인트 → 논리 픽셀
   float base_scale_ = 0.0f;  // 렌더 배율 (쪽 포인트당 픽셀, 1/64 양자화)
+  float wanted_scale_ =
+      0.0f;  // 창 크기 변경이 요구하는 배율 — 디바운스 뒤 12% 넘게 다르면 적용 (#101)
   double sheet_h_px_ = 0.0;  // 용지 높이(논리 픽셀) + 간격
   int generation_ = 0;
   QCache<int, Entry> cache_{kCacheBytes / 1024};
