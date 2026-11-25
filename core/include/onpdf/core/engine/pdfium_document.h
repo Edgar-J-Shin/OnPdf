@@ -147,6 +147,9 @@ class PdfiumDocument final : public EditableDocument {
   [[nodiscard]] int spacing_reapplications() const noexcept {
     return spacing_reapplications_;
   }  // 테스트용: 실제로 수술·다시 열기를 한 횟수
+  [[nodiscard]] int spacing_previews() const noexcept {
+    return spacing_previews_;
+  }  // 테스트용: 저장 + qpdf 미리 보기를 한 횟수 (#94 — 폭 캐시가 맞으면 하지 않는다)
   // 현재 문서를 메모리에 저장 (FPDF_SaveAsCopy, 비증분). 수술·상태 토큰용
   [[nodiscard]] Result<std::vector<std::uint8_t>> save_to_memory() const;
 
@@ -267,8 +270,16 @@ class PdfiumDocument final : public EditableDocument {
   std::size_t state_bytes_ = 0;
   std::size_t state_byte_limit_ = static_cast<std::size_t>(256) << 20;
   DocumentStateId next_state_ = 1;
-  std::set<int> spacing_pending_;   // 자간 재적용 후보 쪽 (#87)
+  std::set<int> spacing_pending_;  // 자간 재적용 후보 쪽 (#87)
+  // 마지막 정산에서 자간이 맞다고 확인한 객체 폭 (쪽 → 객체 id → 사용자 단위, #94). 현재 폭이 전부
+  // 같으면 Tc 가 남아 있는 것이라(잃으면 자연 폭으로 바뀐다) 저장·qpdf 없이 건너뛴다. 문서를 다시
+  // 열거나(replace_bytes) 쪽 번호가 바뀌면(구조 편집) 비운다
+  std::unordered_map<int, std::unordered_map<std::string, double>> spacing_widths_;
+  // 문서 구조 때문에 재적용이 불가능한 쪽(kUnsupported — PDFium 객체 수 ≠ qpdf 표시 연산자 수,
+  // #94): 한 번 알리고 다음 replace_bytes 전까지 건너뛴다
+  std::set<int> spacing_failed_pages_;
   int spacing_reapplications_ = 0;  // 테스트용 카운터
+  int spacing_previews_ = 0;        // 테스트용 카운터
   std::unordered_map<int, std::unordered_set<std::string>>
       dropped_marks_;  // 쪽 → drop_detached 로 버린 마크 id (복원 뒤 되살아나면 지운다)
   // 폼 필 환경 (#51). 마지막에 선언 → 가장 먼저 소멸 (FPDFDOC_ExitFormFillEnvironment 는 문서를
