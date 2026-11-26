@@ -1,0 +1,113 @@
+name: Spike macOS x64
+
+# #107 검증용 (머지하지 않는다): Intel 용 x64 앱을 CI 에서 만들 수 있는지, 최소 macOS 13 이 되는지.
+#  - intel-native: macos-15-intel 러너에서 공식 Qt(aqtinstall, universal 바이너리)로 네이티브 빌드
+#  - arm64-cross:  macos-latest(arm64) 러너에서 같은 Qt 로 x86_64 교차 빌드 + Rosetta 로 self-test
+# 둘 다 vcpkg 트리플릿 x64-osx-13(배포 타깃 13.0), PDFium mac-x64, CMAKE_OSX_DEPLOYMENT_TARGET=13.0.
+
+on:
+  push:
+    branches: [spike/107-macos-x64]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: intel-native, os: macos-15-intel, cross: false }
+          - { name: arm64-cross,  os: macos-latest,   cross: true }
+    env:
+      QT_VERSION: "6.9.*"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: lukka/get-cmake@latest
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          cache: true
+      - name: Runner and Qt facts
+        run: |
+          sw_vers; uname -m; xcodebuild -version | head -1
+          echo "QtCore archs: $(lipo -archs "$QT_ROOT_DIR/lib/QtCore.framework/QtCore")"
+          otool -l "$QT_ROOT_DIR/lib/QtCore.framework/QtCore" | awk '/minos/{print "QtCore minos " $2; exit}'
+          if grep -n "AGL" "$QT_ROOT_DIR/lib/cmake/Qt6/FindWrapOpenGL.cmake"; then echo "AGL still referenced"; else echo "no AGL reference in FindWrapOpenGL.cmake"; fi
+          echo "Rosetta: $(arch -x86_64 /usr/bin/true 2>/dev/null && echo yes || echo no)"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg_cache
+          key: vcpkg-spike-${{ matrix.name }}-${{ hashFiles('vcpkg.json') }}
+      - run: |
+          mkdir -p "${{ github.workspace }}/vcpkg_cache"
+          echo "VCPKG_BINARY_SOURCES=clear;files,${{ github.workspace }}/vcpkg_cache,readwrite" >> "$GITHUB_ENV"
+      - uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgJsonGlob: vcpkg.json
+      - name: Fetch PDFium (mac-x64) and bundled font
+        run: |
+          python3 third_party/fetch_pdfium.py --platform mac-x64
+          python3 third_party/fetch_fonts.py
+      - name: Configure and build (x86_64, macOS 13)
+        run: |
+          cmake --preset release-app \
+            -DONPDF_MACOS_MIN=13.0 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DONPDF_PDFIUM_PLATFORM=mac-x64 \
+            -DVCPKG_OVERLAY_TRIPLETS="$PWD/tests/spike/macos-x64/triplets" \
+            -DVCPKG_TARGET_TRIPLET=x64-osx-13
+          cmake --build --preset release-app
+        env:
+          QT_ROOT: ${{ env.QT_ROOT_DIR }}
+      - name: Install, deploy Qt, finish bundle
+        run: |
+          stage=stage
+          cmake --install build/release-app --prefix "$stage"
+          mv "$stage/onpdf_app.app" "$stage/OnPdf.app"
+          "$QT_ROOT_DIR/bin/macdeployqt" "$stage/OnPdf.app"
+          python3 packaging/finish_macos_bundle.py "$stage/OnPdf.app"
+          codesign --force --deep -s - "$stage/OnPdf.app"
+          codesign --verify --deep --strict "$stage/OnPdf.app"
+          echo "APP=$PWD/$stage/OnPdf.app" >> "$GITHUB_ENV"
+      - name: Bundle facts
+        run: |
+          echo "== archs =="
+          for f in "$APP/Contents/MacOS/onpdf_app" "$APP/Contents/Frameworks/libpdfium.dylib" "$APP/Contents/Frameworks/QtCore.framework/QtCore"; do
+            echo "$(basename "$f"): $(lipo -archs "$f")"
+          done
+          echo "== minos (max over all Mach-O) =="
+          find "$APP" -type f | while read -r f; do
+            if file "$f" | grep -q "Mach-O"; then
+              m=$(otool -l "$f" | awk '/minos/{print $2; exit}')
+              echo "$m $(echo "$f" | sed "s|$APP/||")"
+            fi
+          done | sort -t. -k1,1n -k2,2n | tail -5
+          echo "== Info.plist =="
+          plutil -extract LSMinimumSystemVersion raw "$APP/Contents/Info.plist"
+          du -sh "$APP"
+      - name: Self-test (x86_64)
+        run: |
+          runner=""
+          if [[ "${{ matrix.cross }}" == "true" ]]; then
+            if ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+              echo "installing Rosetta"; sudo softwareupdate --install-rosetta --agree-to-license
+            fi
+            runner="arch -x86_64"
+          fi
+          dir="$RUNNER_TEMP/한글 경로"; mkdir -p "$dir"
+          for src in testdata/simple.pdf "testdata/한글 파일명.pdf"; do
+            cp "$src" "$dir/"
+            $runner "$APP/Contents/MacOS/onpdf_app" --self-test "$dir/$(basename "$src")"
+          done
+      - name: DMG
+        run: |
+          root="$RUNNER_TEMP/dmgroot"; mkdir -p "$root"; cp -R "$APP" "$root/"; ln -s /Applications "$root/Applications"
+          hdiutil create -volname "OnPdf spike" -srcfolder "$root" -format UDZO -ov "OnPdf-spike-${{ matrix.name }}.dmg"
+          ls -l OnPdf-spike-*.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spike-${{ matrix.name }}
+          path: OnPdf-spike-*.dmg
