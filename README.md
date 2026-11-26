@@ -37,7 +37,7 @@ PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편
 
 - **Windows x64**: `OnPdf-<버전>-windows-x64-setup.exe` 를 실행합니다(권장 — 관리자 권한 없이 사용자 폴더에 설치, 시작 메뉴·"연결 프로그램" 등록, 앱 및 기능에서 제거). 설치 없이 쓰려면 `OnPdf-<버전>-windows-x64.zip` 을 풀고 `onpdf_app.exe` 를 실행합니다. 코드 서명 인증서가 아직 없어 SmartScreen 경고가 뜨면 "추가 정보 → 실행" 을 누르세요. "PDF 파일을 OnPdf 로 열기" 를 켜도 Windows 가 기본 앱 확인을 요청할 수 있습니다(설정 → 앱 → 기본 앱).
 - **macOS 13 이상**: Apple Silicon 은 `OnPdf-<버전>-macos-arm64.dmg`, Intel Mac 은 `OnPdf-<버전>-macos-x64.dmg` 를 열어 `OnPdf.app` 을 응용 프로그램 폴더로 끌어 놓습니다. 공증 전 빌드는 처음 한 번 Control-클릭 → "열기" 가 필요합니다.
-- 내려받은 파일은 같은 릴리스의 `SHA256SUMS.txt` 로 확인할 수 있습니다.
+- 내려받은 파일은 같은 릴리스의 `SHA256SUMS.txt` 로 확인할 수 있습니다. 코드 서명·공증은 인증서가 준비되면 켭니다([docs/signing.md](docs/signing.md)).
 
 ## 빌드
 
@@ -65,7 +65,7 @@ cli/          렌더·병합·검증용 명령줄 도구
 tests/        단위 테스트, 렌더링 회귀 테스트
 testdata/     테스트 PDF (라이선스가 명확한 파일만)
 third_party/  PDFium 바이너리 다운로드 스크립트
-docs/         설계 문서, 기여 가이드
+docs/         설계 문서, 기여 가이드, 서명·공증 설정(signing.md)
 ```
 
 ## 기여
