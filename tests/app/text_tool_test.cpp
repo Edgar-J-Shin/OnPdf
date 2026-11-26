@@ -31,7 +31,9 @@ using onpdf::test::ScopedTempDir;
 using onpdf::test::testdata;
 
 template <class Pred>
-bool spin_until(Pred pred, int timeout_ms = 10000) {
+// 느린 CI 러너(Windows)에서 줄 수정·대화상자 테스트가 10초를 넘긴 적이 있다 (#105) → print_test
+// 보다 넉넉히
+bool spin_until(Pred pred, int timeout_ms = 30000) {
   QElapsedTimer timer;
   timer.start();
   while (!pred()) {

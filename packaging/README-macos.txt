@@ -9,7 +9,8 @@ OnPdf — PDF 뷰어·편집기 (macOS, Apple Silicon)
   그래도 열리지 않으면 터미널에서: xattr -dr com.apple.quarantine /Applications/OnPdf.app
 
 요구 사항
-  macOS @MACOS_MIN@ 이상, Apple Silicon(arm64). Intel Mac 용은 아직 없습니다.
+  macOS @MACOS_MIN@ 이상, @MACOS_ARCH@. 다른 아키텍처용 DMG 는 같은 릴리스에 있습니다
+  (Apple Silicon: -macos-arm64.dmg, Intel: -macos-x64.dmg).
 
 라이선스
   OnPdf 는 Apache License 2.0 입니다. 함께 들어 있는 구성 요소(Qt — LGPL v3, 동적 링크; PDFium; qpdf;

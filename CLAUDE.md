@@ -11,7 +11,7 @@ Your goal is to write Safe, Testable, and Maintainable modern C++ (C++23, std::e
 Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜치 `develop`, 릴리스 `main`)
 1인 개발(주 10~15시간). 전체 계획서: [pdf-editor-plan.md](pdf-editor-plan.md) — 범위·로드맵·위험 대응은 이 문서가 기준이다.
 
-**현재 단계**: v0.5.2 릴리스(2026-11-26: Windows 설치기(#99), 앱 아이콘·업그레이드 정리·미리보기 개선(#101)) — M5 2단계에서 남은 것은 코드 서명·공증(인증서 필요), macOS x64·13 지원. 수동 QA: Windows 실기기 설치기(설치·연결 프로그램·업그레이드·제거), 실제 프린터에서 미리보기와 출력 비교, 영어·한국어 시스템 화면, Adobe Reader·Chrome·Edge 에서 고친 줄·추가한 한글 텍스트·주석·CFF 변환 글꼴 표시. 그 뒤 v1.0
+**현재 단계**: v0.5.3 릴리스(2026-11-27: Intel Mac DMG·최소 macOS 13·공식 Qt(#108), CI 자동 재시도(#105)). M5 코드 범위 완료 — 남은 것은 코드 서명·공증(인증서 생기면 비밀 값만)과 수동 QA: Intel Mac·macOS 13 기기에서 DMG 실행, Windows 실기기 설치기(설치·연결 프로그램·업그레이드·제거), 실제 프린터에서 미리보기와 출력 비교, 영어·한국어 시스템 화면, Adobe Reader·Chrome·Edge 에서 고친 줄·추가한 한글 텍스트·주석·CFF 변환 글꼴 표시. 그 뒤 v1.0
 
 | 마일스톤 | 핵심 | 완료 기준 |
 |---|---|---|
@@ -30,7 +30,7 @@ Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜
 - UI: Qt 6.7+ Widgets(+ LinguistTools), **동적 링크**(LGPL 준수). UI 원문은 영어, 한국어는 번역(#8)
 - 글자 배치·서브셋: HarfBuzz(vcpkg, `default-features: false`, `harfbuzz::harfbuzz-subset`) — **edit 에만** 링크. FreeType 은 쓰지 않는다(PDFium 공유 라이브러리가 `FT_*` 154개를 내보내 Linux 에서 충돌 위험). 번들 글꼴 Noto Sans KR(OFL)은 `third_party/fetch_fonts.py` 로 받아 앱 빌드가 `bin/fonts/` 로 복사한다(저장소에 없음)
 - 테스트: GoogleTest + 렌더링 이미지 비교
-- CI: GitHub Actions — `windows-latest`·`macos-latest` 는 Qt 앱·app 테스트까지(`dev-app`), `ubuntu-latest` 는 core(`dev`) + testdata 결정성 검사
+- CI: GitHub Actions — `windows-latest`·`macos-latest` 는 Qt 앱·app 테스트까지(`dev-app`, Qt 는 릴리스와 같은 공식 6.9.x — #108), `ubuntu-latest` 는 core(`dev`) + testdata 결정성 검사. 호스트 러너 배정 실패("not acquired by Runner", 15분 뒤 취소)로 끝난 실행은 `retry.yml`(`workflow_run`) 이 실패한 잡만 자동으로 다시 돌린다(시도 3회 상한, #105). 앱 테스트의 `spin_until` 상한은 30초(느린 Windows 러너)
 - 설치 파일: Windows 는 Inno Setup(`packaging/windows/onpdf.iss`, #99) + 무설치 zip, macOS 는 DMG. 앱 아이콘은 `packaging/windows/make_icon.py`(표준 라이브러리, 결정적) → `app/onpdf.ico`(Windows: `app/onpdf.rc` 로 exe 에) + `app/onpdf.icns`(macOS: 번들 `Resources`, `CFBundleIconFile`) — 둘 다 커밋, 디자인을 바꾸면 둘 다 다시 만든다(#101). 설치기는 같은 AppId 의 이전 설치를 조용히 제거한 뒤 설치해 빠진 파일이 남지 않는다(리허설이 stale 파일로 검증); 서명된 빌드(`/DSigned=1`)는 "서명 없음" 안내를 넣지 않는다
 
 # Build Commands
@@ -104,7 +104,7 @@ tests/spike/  기술 검증 실험 (ONPDF_BUILD_SPIKES=ON 에서만 빌드, ctes
 tests/        단위 테스트, 렌더링 회귀, 왕복 테스트
 testdata/     테스트 PDF + 기준 PNG
 third_party/  PDFium 바이너리 다운로드 스크립트
-packaging/    배포물: finish_macos_bundle.py, windows/onpdf.iss(Inno Setup)·make_icon.py, README-*.txt
+packaging/    배포물: finish_macos_bundle.py(--thin), vcpkg-triplets/(macOS 13 타깃), windows/onpdf.iss(Inno Setup)·make_icon.py, README-*.txt
 docs/         설계 문서, 기여 가이드
 ```
 
@@ -189,7 +189,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 - `main`: 릴리스 브랜치. `release/x.y.z`·`hotfix/x.y.z` 만 머지하고 태그 `vx.y.z` 를 단다. 직접 push 금지
 - **작업 시작 절차**: ① GitHub 이슈 생성(제목 접두 `M0:`~`M5:`, 마일스톤 지정, 필요 시 라벨) → ② `develop` 에서 브랜치 분기 → ③ 구현 → ④ PR(base `develop`, 본문에 `Closes #N`) → ⑤ CI 통과 후 머지 커밋(`gh pr merge --merge`)
 - 브랜치 이름: `feature/<이슈번호>-<slug>`, `fix/<이슈번호>-<slug>`, `chore/<이슈번호>-<slug>`, `spike/<이슈번호>-<slug>`, `release/x.y.z`, `hotfix/x.y.z` (slug 는 영문 소문자·하이픈)
-- 릴리스: `develop` → `release/x.y.z` 분기 → 버전·CHANGELOG 정리 → `main` 머지 → 태그 → `main` 을 `develop` 에 백머지. 태그 푸시 → `.github/workflows/release.yml`(#90) 이 Windows x64 무설치 zip(windeployqt + MSVC 런타임 DLL) + **Inno Setup 설치기**(#99: 같은 stage 폴더 입력, 사용자별 기본·전체 선택, `HKA` 레지스트리로 ProgId `OnPdf.Document`·`.pdf\OpenWithProgids`·`Applications\onpdf_app.exe` 항상 등록, 기본 앱은 꺼진 작업 `pdfdefault`, 제거는 우리 값일 때만 지움, Korean.isl 은 `#ifexist`; 리허설이 조용한 설치 → 설치된 exe `--self-test` 한글 경로 → 레지스트리 확인 → 조용한 제거 → 폴더·키 잔여 검사를 통과해야 아티팩트)·macOS arm64 DMG(macdeployqt → `packaging/finish_macos_bundle.py` 가 쓰지 않는 플러그인·프레임워크 제거·설치 이름 정리·번들 밖 의존 검사)를 만들고, 각 배포물로 `--self-test`(한글 경로 포함)를 돌려 **둘 다 통과해야** Release(본문 = `scripts/changelog_section.py` 가 꺼낸 CHANGELOG 절 + `SHA256SUMS.txt`)를 만든다. 태그와 `CMakeLists.txt` 버전이 다르면 실패. 서명은 비밀 값(`WINDOWS_CERT_*`, `MACOS_CERT_*`·`APPLE_*`)이 전부 있을 때만, 하나도 없으면 서명 없이(macOS ad-hoc), 일부만 있으면 실패. 수동 실행(`workflow_dispatch`, ref·publish)으로 브랜치 빌드만 점검할 수 있다. macOS 최소 버전은 Homebrew Qt 의 `minos`(현재 14.x)로 Info.plist 에 적는다 — 13 지원·설치기·x64 는 2단계
+- 릴리스: `develop` → `release/x.y.z` 분기 → 버전·CHANGELOG 정리 → `main` 머지 → 태그 → `main` 을 `develop` 에 백머지. 태그 푸시 → `.github/workflows/release.yml`(#90) 이 Windows x64 무설치 zip(windeployqt + MSVC 런타임 DLL) + **Inno Setup 설치기**(#99: 같은 stage 폴더 입력, 사용자별 기본·전체 선택, `HKA` 레지스트리로 ProgId `OnPdf.Document`·`.pdf\OpenWithProgids`·`Applications\onpdf_app.exe` 항상 등록, 기본 앱은 꺼진 작업 `pdfdefault`, 제거는 우리 값일 때만 지움, Korean.isl 은 `#ifexist`; 리허설이 조용한 설치 → 설치된 exe `--self-test` 한글 경로 → 레지스트리 확인 → 조용한 제거 → 폴더·키 잔여 검사를 통과해야 아티팩트)·macOS DMG(macdeployqt → `packaging/finish_macos_bundle.py` 가 쓰지 않는 플러그인·프레임워크 제거·설치 이름 정리·번들 밖 의존 검사)를 만들고, 각 배포물로 `--self-test`(한글 경로 포함)를 돌려 **둘 다 통과해야** Release(본문 = `scripts/changelog_section.py` 가 꺼낸 CHANGELOG 절 + `SHA256SUMS.txt`)를 만든다. 태그와 `CMakeLists.txt` 버전이 다르면 실패. 서명은 비밀 값(`WINDOWS_CERT_*`, `MACOS_CERT_*`·`APPLE_*`)이 전부 있을 때만, 하나도 없으면 서명 없이(macOS ad-hoc), 일부만 있으면 실패. 수동 실행(`workflow_dispatch`, ref·publish)으로 브랜치 빌드만 점검할 수 있다. **macOS DMG 는 2종**(#108): `macos` 매트릭스 잡이 같은 arm64 러너에서 arm64 는 네이티브, x64 는 `CMAKE_OSX_ARCHITECTURES=x86_64` 교차 빌드 + Rosetta `--self-test`. Qt 는 **공식 6.9.x**(aqtinstall, universal·minos 12 — Homebrew Qt 는 arm64 전용·러너 OS 기준이라 쓰지 않는다), vcpkg 오버레이 트리플릿 `packaging/vcpkg-triplets/<arch>-osx-13`, `finish_macos_bundle.py --thin <arch>` 로 universal 을 한 슬라이스만. 최소 macOS 는 **13.0 을 선언**(`ONPDF_MACOS_MIN`·`CMAKE_OSX_DEPLOYMENT_TARGET`)하고 검증 단계가 번들 안 모든 Mach-O 의 minos ≤ 13.0·아키텍처·`LSMinimumSystemVersion` 을 확인한다(PDFium 두 아키텍처 모두 13.0)
 - 커밋 메시지: 제목 영어 명령형 72자 이내, 본문 한국어 가능
 - 변경 기록은 `CHANGELOG.md`, 제3자 고지는 `THIRD_PARTY_NOTICES.md` (PDFium, qpdf, Qt, FreeType, HarfBuzz)
 - 커밋 금지: `build/`, `vcpkg_installed/`, PDFium/qpdf 바이너리, 라이선스 불명확한 PDF, 코드 서명 인증서

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """macdeployqt 뒤 앱 번들을 정리하고 검증한다 (#90). 표준 라이브러리 + otool 만 쓴다.
 
-    python3 packaging/finish_macos_bundle.py path/to/OnPdf.app
+    python3 packaging/finish_macos_bundle.py path/to/OnPdf.app [--thin x86_64|arm64]
 
 1. 쓰지 않는 플러그인을 지운다 — Homebrew Qt 의 macdeployqt 는 다른 Homebrew 모듈(qtpdf·qtsvg·qtvirtualkeyboard)에
    의존하는 플러그인을 넣고 그 의존은 풀지 못한다. 사용자 Mac 에서는 로드되지 않을 뿐 아니라 가상 키보드는 QML·Quick
@@ -11,6 +11,8 @@
    고친 뒤에는 서명이 깨지므로 이 스크립트 다음에 서명한다.
 4. 모든 Mach-O 의 의존을 확인한다: @rpath·@loader_path·@executable_path 는 번들 안에서 찾아져야 하고, 시스템 경로
    (/System, /usr/lib) 밖의 절대 경로(예 /opt/homebrew)는 없어야 한다. 하나라도 어기면 종료 코드 1.
+5. --thin <arch>: 공식 Qt 바이너리처럼 universal(fat) 인 Mach-O 를 그 아키텍처만 남긴다(lipo -thin) — 한 아키텍처용
+   DMG 의 크기를 절반으로 (#108). otool 출력의 "(architecture …):" 머리글은 의존이 아니므로 건너뛴다.
 """
 
 from __future__ import annotations
@@ -38,10 +40,15 @@ def is_macho(path: Path) -> bool:
     return magic in (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca")
 
 
+def is_header(line: str) -> bool:
+    """otool 이 파일마다(fat 이면 슬라이스마다) 찍는 "path:" / "path (architecture x86_64):" 머리글"""
+    return line.endswith(":")
+
+
 def install_id(binary: Path) -> str | None:
     """dylib 자신의 설치 이름 (LC_ID_DYLIB). 실행 파일·번들이면 None"""
     out = subprocess.run(["otool", "-D", str(binary)], capture_output=True, text=True, check=True).stdout
-    lines = [line.strip() for line in out.splitlines()[1:] if line.strip()]
+    lines = [line.strip() for line in out.splitlines() if line.strip() and not is_header(line.strip())]
     return lines[0] if lines else None
 
 
@@ -50,13 +57,26 @@ def deps(binary: Path) -> list[str]:
     out = subprocess.run(["otool", "-L", str(binary)], capture_output=True, text=True, check=True).stdout
     own = install_id(binary)
     result = []
-    for line in out.splitlines()[1:]:
+    for line in out.splitlines():
         line = line.strip()
-        if line:
+        if line and not is_header(line):
             name = line.split(" (")[0]
-            if name != own:
+            if name != own and name not in result:
                 result.append(name)
     return result
+
+
+def thin(app: Path, arch: str) -> int:
+    """fat Mach-O 를 arch 슬라이스만 남긴다. 바꾼 파일 수"""
+    changed = 0
+    for path in sorted(app.rglob("*")):
+        if path.is_symlink() or not path.is_file() or not is_macho(path):
+            continue
+        archs = subprocess.run(["lipo", "-archs", str(path)], capture_output=True, text=True, check=True).stdout.split()
+        if len(archs) > 1 and arch in archs:
+            subprocess.run(["lipo", "-thin", arch, str(path), "-output", str(path)], check=True, capture_output=True)
+            changed += 1
+    return changed
 
 
 def resolve(dep: str, binary: Path, contents: Path) -> Path | None:
@@ -78,10 +98,12 @@ def framework_root(path: Path, frameworks: Path) -> Path:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
+    if len(argv) not in (2, 4) or (len(argv) == 4 and argv[2] != "--thin"):
         print(__doc__.strip(), file=sys.stderr)
         return 2
-    app = Path(argv[1])
+    app = Path(argv[1]).resolve()
+    if len(argv) == 4:
+        print(f"thinned {thin(app, argv[3])} fat binaries to {argv[3]}")
     contents = app / "Contents"
     frameworks = contents / "Frameworks"
     plugins = contents / "PlugIns"
@@ -116,13 +138,13 @@ def main(argv: list[str]) -> int:
                 continue
             reachable.add(root)
             queue.append(target.resolve())
-    for entry in sorted(frameworks.iterdir()):
+    for entry in sorted(frameworks.iterdir()) if frameworks.exists() else []:  # 개발 빌드(macdeployqt 전)는 Frameworks 가 없다
         if entry not in reachable:
             shutil.rmtree(entry) if entry.is_dir() and not entry.is_symlink() else entry.unlink()
             print(f"removed unused {entry.name}")
 
     # 설치 이름 정리: Frameworks 안 Mach-O 의 ID 가 절대 경로면 @rpath/<Frameworks 기준 경로>
-    for path in sorted(frameworks.rglob("*")):
+    for path in sorted(frameworks.rglob("*")) if frameworks.exists() else []:
         if path.is_symlink() or not path.is_file() or not is_macho(path):
             continue
         own = install_id(path)

@@ -1,6 +1,7 @@
 name: Release
 
-# 배포물(#90): v* 태그를 푸시하면 Windows x64 무설치 압축본과 macOS arm64 DMG 를 만들어 GitHub Release 에 올린다.
+# 배포물(#90): v* 태그를 푸시하면 Windows x64 설치기·무설치 압축본과 macOS DMG 2종(arm64·x64, 최소 macOS 13 — #108)을 만들어
+# GitHub Release 에 올린다.
 # 각 배포물은 올리기 전에 자기 실행 파일로 --self-test (qpdf·번들 글꼴·PDFium 렌더·플랫폼 플러그인) 를 통과해야 하고,
 # 두 플랫폼이 모두 성공했을 때만 Release 를 만든다(반쪽 릴리스 금지).
 # 수동 실행(workflow_dispatch)은 브랜치나 태그를 골라 빌드·점검만 하거나(publish=false), 태그면 Release 에 올린다.
@@ -88,7 +89,7 @@ jobs:
           arch: x64
       - uses: jurplel/install-qt-action@v4
         with:
-          version: "6.8.*"
+          version: "6.9.*"
           cache: true
       # ci.yml 과 같은 vcpkg 바이너리 캐시 (키가 같아 CI 가 만든 캐시를 재사용한다)
       - uses: actions/cache@v4
@@ -269,27 +270,35 @@ jobs:
             OnPdf-*-windows-x64-setup.exe
           if-no-files-found: error
 
-  macos-arm64:
-    name: macos-arm64
+  macos:
+    name: macos-${{ matrix.arch }}
     needs: version
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 둘 다 arm64 러너(#108, 스파이크 #107): arm64 는 네이티브, x64 는 교차 빌드 + Rosetta self-test.
+          # Qt 는 공식 6.9.x(universal, minos 12) — Homebrew Qt 는 arm64 전용·러너 OS(14.x) 기준이라 못 쓴다
+          - { arch: arm64, cmake_arch: arm64,  triplet: arm64-osx-13, pdfium: mac-arm64, runner: "",             label: "Apple Silicon(arm64)" }
+          - { arch: x64,   cmake_arch: x86_64, triplet: x64-osx-13,   pdfium: mac-x64,   runner: "arch -x86_64", label: "Intel(x86_64)" }
     env:
       VERSION: ${{ needs.version.outputs.version }}
+      MACOS_MIN: "13.0"  # 선언하는 최소 버전 — 아래 검증 단계가 번들의 모든 Mach-O 가 이 이하인지 확인한다
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.BUILD_REF }}
       - uses: lukka/get-cmake@latest
-      # ci.yml 과 같은 Homebrew Qt (공식 6.8 사전 빌드는 Xcode 16 SDK 에서 AGL 링크 실패)
-      - name: Install Qt (Homebrew)
-        run: |
-          brew install qt
-          echo "QT_ROOT_DIR=$(brew --prefix qt)" >> "$GITHUB_ENV"
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.9.*"
+          cache: true
       - uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/vcpkg_cache
-          key: vcpkg-macos-arm64-${{ hashFiles('vcpkg.json') }}
-          restore-keys: vcpkg-macos-arm64-
+          key: vcpkg-macos-${{ matrix.arch }}-13-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-macos-${{ matrix.arch }}-13-
       - run: |
           mkdir -p "${{ github.workspace }}/vcpkg_cache"
           echo "VCPKG_BINARY_SOURCES=clear;files,${{ github.workspace }}/vcpkg_cache,readwrite" >> "$GITHUB_ENV"
@@ -298,14 +307,17 @@ jobs:
           vcpkgJsonGlob: vcpkg.json
       - name: Fetch PDFium and bundled font
         run: |
-          python3 third_party/fetch_pdfium.py --platform mac-arm64
+          python3 third_party/fetch_pdfium.py --platform ${{ matrix.pdfium }}
           python3 third_party/fetch_fonts.py
       - name: Configure and build
         run: |
-          # Homebrew Qt 는 러너 OS 로 빌드돼 앱의 실제 최소 macOS 가 그 버전이다 — Info.plist 에 정직하게 적는다
-          minos=$(otool -l "$QT_ROOT_DIR/lib/QtCore.framework/QtCore" | awk '/minos/{print $2; exit}')
-          echo "MACOS_MIN=$minos" >> "$GITHUB_ENV"
-          cmake --preset release-app -DONPDF_MACOS_MIN="$minos"
+          cmake --preset release-app \
+            -DONPDF_MACOS_MIN="$MACOS_MIN" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_MIN" \
+            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.cmake_arch }} \
+            -DONPDF_PDFIUM_PLATFORM=${{ matrix.pdfium }} \
+            -DVCPKG_OVERLAY_TRIPLETS="$PWD/packaging/vcpkg-triplets" \
+            -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
           cmake --build --preset release-app
         env:
           QT_ROOT: ${{ env.QT_ROOT_DIR }}
@@ -314,10 +326,27 @@ jobs:
           stage=stage
           cmake --install build/release-app --prefix "$stage"
           mv "$stage/onpdf_app.app" "$stage/OnPdf.app"
-          "$QT_ROOT_DIR/bin/macdeployqt" "$stage/OnPdf.app"
-          # 쓰지 않는 플러그인·프레임워크 제거, 설치 이름 정리, 번들 밖 의존이 없는지 검증 (실패하면 잡 실패)
-          python3 packaging/finish_macos_bundle.py "$stage/OnPdf.app"
+          "$QT_ROOT_DIR/bin/macdeployqt" "$PWD/$stage/OnPdf.app"
+          # 쓰지 않는 플러그인·프레임워크 제거, 설치 이름 정리, 번들 밖 의존 검사, universal Qt 를 이 아키텍처만
+          python3 packaging/finish_macos_bundle.py "$stage/OnPdf.app" --thin ${{ matrix.cmake_arch }}
           echo "APP=$PWD/$stage/OnPdf.app" >> "$GITHUB_ENV"
+      - name: Verify architecture and minimum macOS
+        run: |
+          for f in MacOS/onpdf_app Frameworks/libpdfium.dylib Frameworks/QtCore.framework/QtCore; do
+            a=$(lipo -archs "$APP/Contents/$f")
+            [[ "$a" == "${{ matrix.cmake_arch }}" ]] || { echo "::error::$f archs: $a"; exit 1; }
+          done
+          # 번들 안 모든 Mach-O 의 minos 최댓값 (LC_BUILD_VERSION, 없으면 LC_VERSION_MIN_MACOSX)
+          worst=$(find "$APP" -type f -print0 | xargs -0 file | awk -F: '/Mach-O/{print $1}' | while read -r f; do
+              otool -l "$f" | awk -v f="$f" '/^ *minos /{print $2, f; exit} /LC_VERSION_MIN_MACOSX/{m=1} m&&/^ *version /{print $2, f; exit}'
+            done | sort -t. -k1,1n -k2,2n | tail -1)
+          echo "highest minimum macOS in the bundle: $worst"
+          v=${worst%% *}
+          highest=$(printf '%s\n' "$v" "$MACOS_MIN" | sort -t. -k1,1n -k2,2n | tail -1)
+          [[ "$highest" == "$MACOS_MIN" ]] || { echo "::error::a binary needs macOS $v > $MACOS_MIN: $worst"; exit 1; }
+          plist=$(plutil -extract LSMinimumSystemVersion raw "$APP/Contents/Info.plist")
+          [[ "$plist" == "$MACOS_MIN" ]] || { echo "::error::LSMinimumSystemVersion is $plist"; exit 1; }
+          du -sh "$APP"
       - name: Sign (optional) and self-test
         env:
           CERT: ${{ secrets.MACOS_CERT_P12 }}
@@ -347,10 +376,15 @@ jobs:
             echo "NOTARIZE=1" >> "$GITHUB_ENV"
           fi
           codesign --verify --deep --strict "$APP"
+          # x64 는 Rosetta 로 실행한다 (arm64 러너). 없으면 설치
+          runner="${{ matrix.runner }}"
+          if [[ -n "$runner" ]] && ! $runner /usr/bin/true 2>/dev/null; then
+            sudo softwareupdate --install-rosetta --agree-to-license
+          fi
           dir="$RUNNER_TEMP/한글 경로"; mkdir -p "$dir"
           for src in testdata/simple.pdf "testdata/한글 파일명.pdf"; do
             cp "$src" "$dir/"
-            "$APP/Contents/MacOS/onpdf_app" --self-test "$dir/$(basename "$src")"
+            $runner "$APP/Contents/MacOS/onpdf_app" --self-test "$dir/$(basename "$src")"
           done
       - name: Create DMG
         env:
@@ -361,8 +395,8 @@ jobs:
           root="$RUNNER_TEMP/dmgroot"; mkdir -p "$root"
           cp -R "$APP" "$root/"
           ln -s /Applications "$root/Applications"
-          sed "s/@MACOS_MIN@/$MACOS_MIN/g" packaging/README-macos.txt > "$root/README.txt"
-          dmg="OnPdf-$VERSION-macos-arm64.dmg"
+          sed -e "s/@MACOS_MIN@/$MACOS_MIN/g" -e "s/@MACOS_ARCH@/${{ matrix.label }}/g" packaging/README-macos.txt > "$root/README.txt"
+          dmg="OnPdf-$VERSION-macos-${{ matrix.arch }}.dmg"
           hdiutil create -volname "OnPdf $VERSION" -srcfolder "$root" -format UDZO -ov "$dmg"
           if [[ "$NOTARIZE" == "1" ]]; then
             xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
@@ -371,13 +405,13 @@ jobs:
           ls -l "$dmg"
       - uses: actions/upload-artifact@v4
         with:
-          name: macos-arm64
-          path: OnPdf-*-macos-arm64.dmg
+          name: macos-${{ matrix.arch }}
+          path: OnPdf-*-macos-${{ matrix.arch }}.dmg
           if-no-files-found: error
 
   publish:
     name: publish
-    needs: [version, windows-x64, macos-arm64]
+    needs: [version, windows-x64, macos]
     if: needs.version.outputs.is_tag == 'true' && (github.event_name == 'push' || inputs.publish)
     runs-on: ubuntu-latest
     permissions:

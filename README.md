@@ -2,7 +2,7 @@
 
 PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편집기입니다.
 
-> 현재 단계: **v0.5.2** — [Releases](https://github.com/Edgar-J-Shin/OnPdf/releases) 에서 Windows 설치 파일·무설치 zip 과 macOS DMG 를 받을 수 있습니다. v1.0 전에 코드 서명·공증과 macOS x64 가 남았습니다. 변경 내역은 [CHANGELOG.md](CHANGELOG.md) 를 참고하세요.
+> 현재 단계: **v0.5.3** — [Releases](https://github.com/Edgar-J-Shin/OnPdf/releases) 에서 Windows 설치 파일·무설치 zip 과 macOS DMG(Apple Silicon·Intel, macOS 13 이상)를 받을 수 있습니다. v1.0 전에 코드 서명·공증이 남았습니다. 변경 내역은 [CHANGELOG.md](CHANGELOG.md) 를 참고하세요.
 
 ## 목표
 
@@ -20,7 +20,7 @@ PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편
 | M2 | 주석, 페이지 조작(회전·삭제·재배열·병합·분할), 저장, 실행 취소 | v0.2 (완료) |
 | M3 | 텍스트·이미지 추가, 객체 편집, 폼 채우기, 폰트 임베딩 | v0.3 (완료) |
 | M4 | 기존 텍스트 줄 단위 수정, 서식 변경, 시스템 글꼴 대체, 폭 맞춤 | v0.5 (완료) |
-| M5 | 배포물 자동 생성, 다국어, 인쇄 미리보기, 자간 유지 (v0.5.1 완료) · 코드 서명, Windows 설치기, macOS x64 | v1.0 |
+| M5 | 배포물 자동 생성, 다국어, 인쇄 미리보기, 자간 유지, Windows 설치기, macOS x64·13 (v0.5.3 완료) · 코드 서명·공증 | v1.0 |
 
 자세한 계획은 [pdf-editor-plan.md](pdf-editor-plan.md) 를 참고하세요.
 
@@ -36,7 +36,7 @@ PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편
 [Releases](https://github.com/Edgar-J-Shin/OnPdf/releases) 에서 내려받습니다.
 
 - **Windows x64**: `OnPdf-<버전>-windows-x64-setup.exe` 를 실행합니다(권장 — 관리자 권한 없이 사용자 폴더에 설치, 시작 메뉴·"연결 프로그램" 등록, 앱 및 기능에서 제거). 설치 없이 쓰려면 `OnPdf-<버전>-windows-x64.zip` 을 풀고 `onpdf_app.exe` 를 실행합니다. 코드 서명 인증서가 아직 없어 SmartScreen 경고가 뜨면 "추가 정보 → 실행" 을 누르세요. "PDF 파일을 OnPdf 로 열기" 를 켜도 Windows 가 기본 앱 확인을 요청할 수 있습니다(설정 → 앱 → 기본 앱).
-- **macOS (Apple Silicon)**: `OnPdf-<버전>-macos-arm64.dmg` 를 열어 `OnPdf.app` 을 응용 프로그램 폴더로 끌어 놓습니다. 공증 전 빌드는 처음 한 번 Control-클릭 → "열기" 가 필요합니다. 최소 macOS 버전은 DMG 안 README.txt 에 적혀 있습니다. Intel Mac 용은 아직 없습니다.
+- **macOS 13 이상**: Apple Silicon 은 `OnPdf-<버전>-macos-arm64.dmg`, Intel Mac 은 `OnPdf-<버전>-macos-x64.dmg` 를 열어 `OnPdf.app` 을 응용 프로그램 폴더로 끌어 놓습니다. 공증 전 빌드는 처음 한 번 Control-클릭 → "열기" 가 필요합니다.
 - 내려받은 파일은 같은 릴리스의 `SHA256SUMS.txt` 로 확인할 수 있습니다.
 
 ## 빌드
