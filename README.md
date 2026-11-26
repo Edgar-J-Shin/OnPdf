@@ -2,7 +2,7 @@
 
 PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편집기입니다.
 
-> 현재 단계: **v0.5.1** — M5 의 코드 범위(배포물 자동 생성, 영어 UI, 인쇄 미리보기, 자간 유지)까지 나왔고 [Releases](https://github.com/Edgar-J-Shin/OnPdf/releases) 에서 Windows zip·macOS DMG 를 받을 수 있습니다. v1.0 전에 코드 서명·공증, Windows 설치기, macOS x64 가 남았습니다. 변경 내역은 [CHANGELOG.md](CHANGELOG.md) 를 참고하세요.
+> 현재 단계: **v0.5.2** — [Releases](https://github.com/Edgar-J-Shin/OnPdf/releases) 에서 Windows 설치 파일·무설치 zip 과 macOS DMG 를 받을 수 있습니다. v1.0 전에 코드 서명·공증과 macOS x64 가 남았습니다. 변경 내역은 [CHANGELOG.md](CHANGELOG.md) 를 참고하세요.
 
 ## 목표
 
