@@ -1,0 +1,50 @@
+name: Retry lost jobs
+
+# 호스트 러너 배정 실패(#105): macOS 러너가 부족하면 잡이 "The job was not acquired by Runner of type hosted even
+# after multiple attempts" 로 15분 뒤 취소된다 — 코드와 무관하고 다시 돌리면 된다. CI·Release 실행이 그 사유로
+# 끝나면 실패한 잡만 자동으로 다시 돌린다(성공한 잡의 산출물은 유지되므로 Release 의 publish 도 이어진다).
+# 같은 실행은 시도 3회까지만. 다른 이유의 실패는 건드리지 않는다.
+# (workflow_run 은 기본 브랜치의 워크플로우 파일로만 동작한다)
+
+on:
+  workflow_run:
+    workflows: [CI, Release]
+    types: [completed]
+
+permissions:
+  actions: write
+  checks: read
+
+jobs:
+  retry:
+    name: retry
+    if: github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'cancelled'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+      RUN_NAME: ${{ github.event.workflow_run.name }}
+    steps:
+      - name: Re-run jobs cancelled for lack of a runner
+        run: |
+          echo "$RUN_NAME run $RUN_ID attempt $ATTEMPT: ${{ github.event.workflow_run.conclusion }}"
+          if [ "$ATTEMPT" -ge 3 ]; then
+            echo "attempt $ATTEMPT: giving up"
+            exit 0
+          fi
+          lost=0
+          for job in $(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100" \
+                         --jq '.jobs[] | select(.conclusion == "cancelled") | .id'); do
+            if gh api "repos/$REPO/check-runs/$job/annotations" --jq '.[].message' | grep -q "not acquired by Runner"; then
+              echo "job $job was cancelled for lack of a runner"
+              lost=1
+            fi
+          done
+          if [ "$lost" = 1 ]; then
+            gh run rerun "$RUN_ID" --failed -R "$REPO"
+            echo "re-ran the failed jobs of run $RUN_ID"
+          else
+            echo "no runner-capacity cancellations — nothing to retry"
+          fi

@@ -30,7 +30,7 @@ Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜
 - UI: Qt 6.7+ Widgets(+ LinguistTools), **동적 링크**(LGPL 준수). UI 원문은 영어, 한국어는 번역(#8)
 - 글자 배치·서브셋: HarfBuzz(vcpkg, `default-features: false`, `harfbuzz::harfbuzz-subset`) — **edit 에만** 링크. FreeType 은 쓰지 않는다(PDFium 공유 라이브러리가 `FT_*` 154개를 내보내 Linux 에서 충돌 위험). 번들 글꼴 Noto Sans KR(OFL)은 `third_party/fetch_fonts.py` 로 받아 앱 빌드가 `bin/fonts/` 로 복사한다(저장소에 없음)
 - 테스트: GoogleTest + 렌더링 이미지 비교
-- CI: GitHub Actions — `windows-latest`·`macos-latest` 는 Qt 앱·app 테스트까지(`dev-app`), `ubuntu-latest` 는 core(`dev`) + testdata 결정성 검사
+- CI: GitHub Actions — `windows-latest`·`macos-latest` 는 Qt 앱·app 테스트까지(`dev-app`), `ubuntu-latest` 는 core(`dev`) + testdata 결정성 검사. 호스트 러너 배정 실패("not acquired by Runner", 15분 뒤 취소)로 끝난 실행은 `retry.yml`(`workflow_run`) 이 실패한 잡만 자동으로 다시 돌린다(시도 3회 상한, #105). 앱 테스트의 `spin_until` 상한은 30초(느린 Windows 러너)
 - 설치 파일: Windows 는 Inno Setup(`packaging/windows/onpdf.iss`, #99) + 무설치 zip, macOS 는 DMG. 앱 아이콘은 `packaging/windows/make_icon.py`(표준 라이브러리, 결정적) → `app/onpdf.ico`(Windows: `app/onpdf.rc` 로 exe 에) + `app/onpdf.icns`(macOS: 번들 `Resources`, `CFBundleIconFile`) — 둘 다 커밋, 디자인을 바꾸면 둘 다 다시 만든다(#101). 설치기는 같은 AppId 의 이전 설치를 조용히 제거한 뒤 설치해 빠진 파일이 남지 않는다(리허설이 stale 파일로 검증); 서명된 빌드(`/DSigned=1`)는 "서명 없음" 안내를 넣지 않는다
 
 # Build Commands
