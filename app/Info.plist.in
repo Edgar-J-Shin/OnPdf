@@ -12,6 +12,8 @@
   </array>
   <key>CFBundleName</key>
   <string>OnPdf</string>
+  <key>CFBundleIconFile</key>
+  <string>onpdf.icns</string>
   <key>CFBundleDisplayName</key>
   <string>OnPdf</string>
   <key>CFBundleExecutable</key>

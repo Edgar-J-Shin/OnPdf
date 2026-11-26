@@ -204,6 +204,27 @@ TEST_F(PrintPreviewTest, LargeDocumentRendersOnlyVisibleSheets) {
   EXPECT_LE(view->pending_requests(), PrintPreviewView::kMaxConcurrent);
 }
 
+// 창 크기를 조금 바꾸면 옛 이미지를 늘려 쓰고(세대 유지), 크게 바꾸면 디바운스 뒤 한 번만 다시
+// 렌더한다 (#101)
+TEST_F(PrintPreviewTest, SmallResizeKeepsRenders) {
+  auto handle = open("simple.pdf");
+  ASSERT_TRUE(handle.valid());
+  auto printer = this->printer();
+  auto dialog = make_dialog(handle, *printer);
+  PrintPreviewView* view = dialog->view();
+  ASSERT_TRUE(settle(view));
+  const int generation = view->generation();
+  const int requested = view->requested_total();
+  dialog->resize(dialog->width() + 20, dialog->height());  // ≈3%
+  ASSERT_TRUE(settle(view));
+  EXPECT_EQ(view->generation(), generation) << "작은 변화는 캐시를 비우지 않는다";
+  EXPECT_EQ(view->requested_total(), requested);
+  dialog->resize(dialog->width() * 2, dialog->height());  // 100%
+  ASSERT_TRUE(settle(view));
+  EXPECT_EQ(view->generation(), generation + 1) << "큰 변화는 디바운스 뒤 한 번";
+  EXPECT_GT(view->requested_total(), requested);
+}
+
 TEST_F(PrintPreviewTest, SetRequestRebuildsSheetsAndDropsOldRenders) {
   auto handle = open("mixed-sizes.pdf");
   ASSERT_TRUE(handle.valid());

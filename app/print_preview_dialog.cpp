@@ -106,15 +106,21 @@ void PrintPreviewView::relayout() {
       0, std::max(0, static_cast<int>(std::ceil(total)) - viewport()->height()));
   verticalScrollBar()->setPageStep(viewport()->height());
   verticalScrollBar()->setSingleStep(static_cast<int>(sheet_h_px_ / 10.0) + 1);
-  // 렌더 배율: 화면 배율 × dpr, 150dpi 상당 상한, 1/64 양자화 — 바뀌면 캐시가 맞지 않는다
+  // 렌더 배율: 화면 배율 × dpr, 150dpi 상당 상한, 1/64 양자화. 창 크기를 끄는 동안 매번 캐시를
+  // 비우지 않도록 디바운스 뒤(request_visible) 12% 넘게 달라졌을 때만 적용한다 — 그동안은 옛
+  // 이미지를 늘려 그린다 (#101)
   const double raw = std::min(zoom_ * devicePixelRatioF(), kMaxPreviewScale);
-  const auto base = static_cast<float>(std::max(1.0, std::round(raw * 64.0)) / 64.0);
-  if (base != base_scale_) {
-    base_scale_ = base;
-    bump_generation();
-  }
+  wanted_scale_ = static_cast<float>(std::max(1.0, std::round(raw * 64.0)) / 64.0);
+  if (base_scale_ <= 0.0f) apply_wanted_scale();  // 첫 배치
   viewport()->update();
   schedule_request();
+}
+
+void PrintPreviewView::apply_wanted_scale() {
+  if (wanted_scale_ <= 0.0f || wanted_scale_ == base_scale_) return;
+  if (base_scale_ > 0.0f && std::abs(wanted_scale_ / base_scale_ - 1.0) < kRescaleThreshold) return;
+  base_scale_ = wanted_scale_;
+  bump_generation();
 }
 
 QRectF PrintPreviewView::sheet_rect(int sheet) const {
@@ -149,6 +155,7 @@ void PrintPreviewView::schedule_request() {
 }
 
 void PrintPreviewView::request_visible() {
+  apply_wanted_scale();  // 크기 변경이 끝난 뒤 한 번만 배율을 바꾼다
   if (!handle_.valid() || sheet_count() == 0 || base_scale_ <= 0.0f) return;
   const auto [first, last] = visible_sheets();
   if (last < first) return;

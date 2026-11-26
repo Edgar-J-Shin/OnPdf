@@ -17,12 +17,13 @@
   #define OutputDir "."
 #endif
 #define AppName "OnPdf"
+; 고정 GUID — 바꾸면 이전 설치를 다른 앱으로 보아 업그레이드가 안 된다. AppId 와 제거 키({GUID}_is1) 가 같이 쓴다
+#define AppGuid "6F5FEE03-64B4-45E4-A23D-1AC76FAB33AC"
 #define AppExe "onpdf_app.exe"
 #define ProgId "OnPdf.Document"
 
 [Setup]
-; 고정 GUID — 바꾸면 이전 설치를 다른 앱으로 보아 업그레이드가 안 된다
-AppId={{6F5FEE03-64B4-45E4-A23D-1AC76FAB33AC}
+AppId={{{#AppGuid}}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
@@ -44,7 +45,11 @@ UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
 ChangesAssociations=yes
 OutputDir={#OutputDir}
+#ifdef OutputBase
+OutputBaseFilename={#OutputBase}
+#else
 OutputBaseFilename=OnPdf-{#AppVersion}-windows-x64-setup
+#endif
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -93,6 +98,49 @@ Root: HKA; Subkey: "Software\Classes\.pdf"; ValueType: string; ValueData: "{#Pro
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
+// 업그레이드: 같은 AppId 의 이전 설치가 있으면 그 제거기를 조용히 먼저 돌린다 — 새 버전에서 빠진 파일이
+// {app} 에 남지 않게 (#101). 사용자 문서는 {app} 에 없다. 제거기는 자기 삭제 때문에 비동기로 끝나므로 잠시
+// 기다린다
+function PreviousUninstaller(var Path: String): Boolean;
+var
+  Key: String;
+begin
+  // SetupSetting("AppId") 는 이스케이프된 '{{GUID}' 를 돌려줘 키 이름과 다르다 → GUID 로 직접 만든다
+  Key := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{{#AppGuid}}_is1';
+  Result := RegQueryStringValue(HKEY_AUTO, Key, 'UninstallString', Path);
+  if not Result then
+    Result := RegQueryStringValue(HKEY_CURRENT_USER, Key, 'UninstallString', Path);
+  if not Result then
+    Result := RegQueryStringValue(HKEY_LOCAL_MACHINE, Key, 'UninstallString', Path);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Uninstaller: String;
+  ResultCode: Integer;
+  I: Integer;
+begin
+  Result := '';
+  if PreviousUninstaller(Uninstaller) then
+  begin
+    Uninstaller := RemoveQuotes(Uninstaller);
+    if FileExists(Uninstaller) then
+    begin
+      Log('Uninstalling the previous version first: ' + Uninstaller);
+      if Exec(Uninstaller, '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+      begin
+        for I := 0 to 30 do
+        begin
+          if not FileExists(Uninstaller) then Break;
+          Sleep(1000);
+        end;
+      end
+      else
+        Log('Previous uninstaller could not be started; continuing with the upgrade');
+    end;
+  end;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Value: String;
@@ -102,8 +150,10 @@ begin
       RegDeleteValue(HKEY_AUTO, 'Software\Classes\.pdf', '');
 end;
 
+#ifndef Signed
 procedure InitializeWizard();
 begin
-  // 서명 인증서가 생기기 전까지: 첫 화면에 SmartScreen 안내 (P1)
+  // 서명 인증서가 생기기 전까지: 첫 화면에 SmartScreen 안내. 워크플로우가 서명하면 /DSigned=1 로 뺀다 (#101)
   WizardForm.WelcomeLabel2.Caption := WizardForm.WelcomeLabel2.Caption + #13#10#13#10 + CustomMessage('Unsigned');
 end;
+#endif
