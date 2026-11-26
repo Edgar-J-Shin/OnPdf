@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### 추가
+- **Intel Mac 용 DMG**(`OnPdf-<버전>-macos-x64.dmg`)와 **최소 macOS 13**: 두 DMG 모두 macOS 13(Ventura) 이상에서 열린다(이전에는 Apple Silicon·macOS 14 이상만). Qt 를 공식 바이너리로 바꿔 DMG 크기도 줄었다 (#108)
+
 ## [0.5.2] - 2026-11-26
 
 Windows 설치 파일. 릴리스에 `OnPdf-<버전>-windows-x64-setup.exe` 가 무설치 zip·macOS DMG 와 함께 올라가고, Windows exe 와 macOS 번들에 앱 아이콘이 생겼다. 새 설치기는 이전 설치를 정리한 뒤 설치한다(이번 0.5.2 는 0.5.1 zip 사용자에게는 첫 설치). 코드 서명·공증, macOS x64 는 다음 단계.
