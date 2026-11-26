@@ -138,6 +138,7 @@ jobs:
           & $signtool.FullName sign /f "$env:RUNNER_TEMP/cert.pfx" /p $env:CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "$env:STAGE/onpdf_app.exe"
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Remove-Item "$env:RUNNER_TEMP/cert.pfx"
+          "SIGNED=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Check DLL dependencies
         shell: pwsh
         run: |
@@ -171,6 +172,89 @@ jobs:
             Write-Output "self-test $pdf -> $($p.ExitCode)"
             if ($p.ExitCode -ne 0) { exit 1 }
           }
+      - name: Build the installer (Inno Setup)
+        shell: pwsh
+        run: |
+          # zip 과 같은 stage 폴더가 입력이다 (#99). 러너에 Inno Setup 6 가 없으면 choco 로 받는다
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y; if ($LASTEXITCODE -ne 0) { exit 1 } }
+          if (-not (Test-Path $iscc)) { Write-Output "::error::ISCC.exe not found"; exit 1 }
+          $korean = Join-Path (Split-Path $iscc) "Languages\Korean.isl"
+          Write-Output "Korean.isl present: $(Test-Path $korean)"
+          $stage = (Resolve-Path $env:STAGE).Path
+          $defines = @("/DAppVersion=$env:VERSION", "/DStageDir=$stage", "/DRepoDir=$PWD", "/DOutputDir=$PWD")
+          if ($env:SIGNED) { $defines += "/DSigned=1" }  # 서명된 빌드에는 "서명 없음" 안내를 넣지 않는다
+          & $iscc @defines packaging/windows/onpdf.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $setup = "OnPdf-$env:VERSION-windows-x64-setup.exe"
+          Get-Item $setup | Select-Object Name, Length
+          "SETUP=$setup" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # 업그레이드 점검용 "이전 버전" 설치기 (#101): 새 버전에 없는 파일(plugins\stale.dll)을 하나 더 싣는다.
+          # 제거기는 자기가 설치한 파일만 지우므로, 이 파일이 업그레이드 뒤 사라져야 이전 설치 정리가 동작한 것이다
+          $old = Join-Path $env:RUNNER_TEMP "stage-old"
+          Copy-Item $stage $old -Recurse
+          New-Item -ItemType Directory -Force -Path (Join-Path $old "plugins") | Out-Null
+          Set-Content -Path (Join-Path $old "plugins\stale.dll") -Value "stale"
+          & $iscc "/DAppVersion=$env:VERSION" "/DStageDir=$old" "/DRepoDir=$PWD" "/DOutputDir=$env:RUNNER_TEMP" "/DOutputBase=old-setup" packaging/windows/onpdf.iss | Select-Object -Last 1
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          "OLD_SETUP=$(Join-Path $env:RUNNER_TEMP 'old-setup.exe')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Sign the installer (optional)
+        shell: pwsh
+        env:
+          CERT: ${{ secrets.WINDOWS_CERT_PFX }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          if (-not $env:CERT -and -not $env:CERT_PASSWORD) { Write-Output "::warning::Windows 서명 비밀이 없어 설치기도 서명 없이 배포한다"; exit 0 }
+          if (-not $env:CERT -or -not $env:CERT_PASSWORD) { Write-Output "::error::Windows 서명 비밀이 일부만 있다"; exit 1 }
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP/cert.pfx", [Convert]::FromBase64String($env:CERT))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin" -Recurse -Filter signtool.exe | Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          & $signtool.FullName sign /f "$env:RUNNER_TEMP/cert.pfx" /p $env:CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $env:SETUP
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Remove-Item "$env:RUNNER_TEMP/cert.pfx"
+      - name: Self-test the installer
+        shell: pwsh
+        run: |
+          # "이전 버전"(stale.dll 포함) 조용한 설치 → 실제 설치기로 업그레이드(이전 설치 정리로 stale.dll 이 사라져야 함)
+          # → 설치된 exe 로 한글 경로 self-test → 레지스트리 확인 → 조용한 제거 → 잔여 검사
+          $appdir = Join-Path $env:LOCALAPPDATA "Programs\OnPdf"
+          $exe = Join-Path $appdir "onpdf_app.exe"
+          $stale = Join-Path $appdir "plugins\stale.dll"
+          $oldlog = Join-Path $env:RUNNER_TEMP "install-old.log"
+          $p0 = Start-Process -FilePath $env:OLD_SETUP -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$oldlog") -PassThru
+          if (-not $p0.WaitForExit(120000)) { $p0.Kill(); Get-Content $oldlog; Write-Output "::error::old-version install timed out"; exit 1 }
+          if ($p0.ExitCode -ne 0) { Get-Content $oldlog; Write-Output "::error::old-version install failed: $($p0.ExitCode)"; exit 1 }
+          if (-not (Test-Path $stale)) { Write-Output "::error::old-version install did not place plugins\stale.dll"; exit 1 }
+          $log = Join-Path $env:RUNNER_TEMP "install.log"
+          $p = Start-Process -FilePath (Resolve-Path $env:SETUP) -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/TASKS=pdfdefault', "/LOG=$log") -PassThru
+          if (-not $p.WaitForExit(180000)) { $p.Kill(); Get-Content $log; Write-Output "::error::silent upgrade timed out"; exit 1 }
+          if ($p.ExitCode -ne 0) { Get-Content $log; Write-Output "::error::silent upgrade failed: $($p.ExitCode)"; exit 1 }
+          if (Test-Path $stale) { Get-Content $log | Select-String -Pattern "previous|Uninstall" | Select-Object -First 10; Write-Output "::error::stale file from the previous version survived the upgrade"; exit 1 }
+          if (-not (Test-Path $exe)) { Get-Content $log; Write-Output "::error::installed exe not found after upgrade: $exe"; exit 1 }
+          Write-Output "upgrade removed the previous version's stale file"
+          $dir = Join-Path $env:RUNNER_TEMP "설치 점검"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Copy-Item "testdata/한글 파일명.pdf" $dir
+          $t = Start-Process -FilePath $exe -ArgumentList @('--self-test', "`"$(Join-Path $dir '한글 파일명.pdf')`"") -PassThru
+          if (-not $t.WaitForExit(120000)) { $t.Kill(); Write-Output "::error::installed self-test timed out"; exit 1 }
+          Write-Output "installed self-test -> $($t.ExitCode)"
+          if ($t.ExitCode -ne 0) { exit 1 }
+          $openwith = Get-ItemProperty -Path "HKCU:\Software\Classes\.pdf\OpenWithProgids" -ErrorAction SilentlyContinue
+          if ($null -eq $openwith -or $null -eq $openwith.PSObject.Properties['OnPdf.Document']) { Write-Output "::error::OpenWithProgids registration missing"; exit 1 }
+          $default = (Get-ItemProperty -Path "HKCU:\Software\Classes\.pdf" -ErrorAction SilentlyContinue).'(default)'
+          if ($default -ne 'OnPdf.Document') { Write-Output "::error::pdfdefault task did not set the .pdf default (got '$default')"; exit 1 }
+          $unins = Get-ChildItem $appdir -Filter "unins*.exe" | Select-Object -First 1
+          if ($null -eq $unins) { Write-Output "::error::uninstaller not found"; exit 1 }
+          $u = Start-Process -FilePath $unins.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -PassThru
+          if (-not $u.WaitForExit(120000)) { $u.Kill(); Write-Output "::error::silent uninstall timed out"; exit 1 }
+          if ($u.ExitCode -ne 0) { Write-Output "::error::silent uninstall failed: $($u.ExitCode)"; exit 1 }
+          # 제거기는 자기 자신을 지우려고 비동기로 끝난다 → 잠시 기다린다
+          $gone = $false
+          for ($i = 0; $i -lt 30; $i++) { if (-not (Test-Path $appdir)) { $gone = $true; break }; Start-Sleep -Seconds 1 }
+          if (-not $gone) { Get-ChildItem $appdir -Recurse | Select-Object FullName; Write-Output "::error::install folder remains after uninstall"; exit 1 }
+          if (Test-Path "HKCU:\Software\Classes\OnPdf.Document") { Write-Output "::error::ProgId remains after uninstall"; exit 1 }
+          $default = (Get-ItemProperty -Path "HKCU:\Software\Classes\.pdf" -ErrorAction SilentlyContinue).'(default)'
+          if ($default -eq 'OnPdf.Document') { Write-Output "::error::.pdf default still points to OnPdf after uninstall"; exit 1 }
+          Write-Output "installer self-test OK"
       - name: Archive
         shell: pwsh
         run: |
@@ -180,7 +264,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64
-          path: OnPdf-*-windows-x64.zip
+          path: |
+            OnPdf-*-windows-x64.zip
+            OnPdf-*-windows-x64-setup.exe
           if-no-files-found: error
 
   macos-arm64:
