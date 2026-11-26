@@ -29,6 +29,12 @@ jobs:
         with:
           version: ${{ env.QT_VERSION }}
           cache: true
+      - name: Pick the newest Xcode (std::jthread needs libc++ 20 = Xcode 26)
+        run: |
+          ls -d /Applications/Xcode*.app
+          newest=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [[ -n "$newest" ]]; then sudo xcode-select -s "$newest"; fi
+          xcodebuild -version | head -1
       - name: Runner and Qt facts
         run: |
           sw_vers; uname -m; xcodebuild -version | head -1
