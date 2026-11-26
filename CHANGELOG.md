@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-27
+
+Intel Mac 지원과 최소 macOS 13. macOS 배포물이 Apple Silicon·Intel DMG 2종이 되고 둘 다 macOS 13(Ventura) 이상에서 열린다(이전: Apple Silicon·macOS 14+). Qt 를 공식 바이너리로 바꿔 Apple Silicon DMG 는 44 MB → 24 MB. M5 의 코드 범위는 이것으로 모두 들어갔고, 코드 서명·공증만 인증서를 기다린다.
+
 ### 추가
 - **Intel Mac 용 DMG**(`OnPdf-<버전>-macos-x64.dmg`)와 **최소 macOS 13**: 두 DMG 모두 macOS 13(Ventura) 이상에서 열린다(이전에는 Apple Silicon·macOS 14 이상만). Qt 를 공식 바이너리로 바꿔 DMG 크기도 줄었다 (#108)
 
