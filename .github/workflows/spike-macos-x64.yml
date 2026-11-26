@@ -67,8 +67,9 @@ jobs:
           stage=stage
           cmake --install build/release-app --prefix "$stage"
           mv "$stage/onpdf_app.app" "$stage/OnPdf.app"
-          "$QT_ROOT_DIR/bin/macdeployqt" "$stage/OnPdf.app"
-          python3 packaging/finish_macos_bundle.py "$stage/OnPdf.app"
+          "$QT_ROOT_DIR/bin/macdeployqt" "$PWD/$stage/OnPdf.app"
+          # 공식 Qt 프레임워크는 universal → x86_64 만 남긴다 (크기 측정)
+          python3 packaging/finish_macos_bundle.py "$stage/OnPdf.app" --thin x86_64
           codesign --force --deep -s - "$stage/OnPdf.app"
           codesign --verify --deep --strict "$stage/OnPdf.app"
           echo "APP=$PWD/$stage/OnPdf.app" >> "$GITHUB_ENV"
