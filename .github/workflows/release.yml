@@ -1,6 +1,7 @@
 name: Release
 
-# 배포물(#90): v* 태그를 푸시하면 Windows x64 무설치 압축본과 macOS arm64 DMG 를 만들어 GitHub Release 에 올린다.
+# 배포물(#90): v* 태그를 푸시하면 Windows x64 설치기·무설치 압축본과 macOS DMG 2종(arm64·x64, 최소 macOS 13 — #108)을 만들어
+# GitHub Release 에 올린다.
 # 각 배포물은 올리기 전에 자기 실행 파일로 --self-test (qpdf·번들 글꼴·PDFium 렌더·플랫폼 플러그인) 를 통과해야 하고,
 # 두 플랫폼이 모두 성공했을 때만 Release 를 만든다(반쪽 릴리스 금지).
 # 수동 실행(workflow_dispatch)은 브랜치나 태그를 골라 빌드·점검만 하거나(publish=false), 태그면 Release 에 올린다.
@@ -88,7 +89,383 @@ jobs:
           arch: x64
       - uses: jurplel/install-qt-action@v4
         with:
-          version: "6.8.*"
+          version: "6.9.*"
+          cache: true
+      # ci.yml 과 같은 vcpkg 바이너리 캐시 (키가 같아 CI 가 만든 캐시를 재사용한다)
+      - uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg_cache
+          key: vcpkg-windows-x64-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-windows-x64-
+      - shell: bash
+        run: |
+          mkdir -p "${{ github.workspace }}/vcpkg_cache"
+          echo "VCPKG_BINARY_SOURCES=clear;files,${{ github.workspace }}/vcpkg_cache,readwrite" >> "$GITHUB_ENV"
+      - uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgJsonGlob: vcpkg.json
+      - name: Fetch PDFium and bundled font
+        run: |
+          python3 third_party/fetch_pdfium.py --platform win-x64
+          python3 third_party/fetch_fonts.py
+      - name: Configure and build
+        run: |
+          cmake --preset release-app
+          cmake --build --preset release-app
+        env:
+          QT_ROOT: ${{ env.QT_ROOT_DIR }}
+      - name: Install and deploy Qt
+        shell: pwsh
+        run: |
+          $stage = "stage/OnPdf-$env:VERSION-windows-x64"
+          cmake --install build/release-app --prefix $stage
+          # 쓰지 않는 플러그인 종류는 뺀다: TLS·네트워크 정보(네트워크 안 씀)·SVG 아이콘·터치 입력 — Qt6Network·Qt6Svg 도 따라 빠진다
+          & "$env:QT_ROOT_DIR/bin/windeployqt.exe" --release --no-translations --no-system-d3d-compiler --no-opengl-sw --no-compiler-runtime --skip-plugin-types "tls,networkinformation,iconengines,generic" "$stage/onpdf_app.exe"
+          # MSVC 런타임 DLL 을 앱 옆에 둔다 (vc_redist 설치 없이 실행 — 앱 로컬 배포)
+          $crt = Get-ChildItem "$env:VCToolsRedistDir/x64" -Directory -Filter "Microsoft.VC*.CRT" | Select-Object -First 1
+          Copy-Item "$($crt.FullName)/*.dll" $stage
+          Copy-Item packaging/README-windows.txt "$stage/README.txt"
+          "STAGE=$stage" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Sign (optional)
+        shell: pwsh
+        env:
+          CERT: ${{ secrets.WINDOWS_CERT_PFX }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          if (-not $env:CERT -and -not $env:CERT_PASSWORD) { Write-Output "::warning::Windows 서명 비밀이 없어 서명 없이 배포한다"; exit 0 }
+          if (-not $env:CERT -or -not $env:CERT_PASSWORD) { Write-Output "::error::Windows 서명 비밀이 일부만 있다"; exit 1 }
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP/cert.pfx", [Convert]::FromBase64String($env:CERT))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin" -Recurse -Filter signtool.exe | Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          & $signtool.FullName sign /f "$env:RUNNER_TEMP/cert.pfx" /p $env:CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "$env:STAGE/onpdf_app.exe"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Remove-Item "$env:RUNNER_TEMP/cert.pfx"
+          "SIGNED=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Check DLL dependencies
+        shell: pwsh
+        run: |
+          # 모든 exe·dll 의 가져오기 표를 훑어 배포 폴더·System32 에 없는 DLL 을 이름으로 보고한다.
+          # (빠진 DLL 이 있으면 앱이 "찾을 수 없습니다" 대화상자를 띄워 self-test 가 끝나지 않는다)
+          $present = Get-ChildItem $env:STAGE -Filter *.dll -Recurse | ForEach-Object { $_.Name }
+          $missing = @()
+          foreach ($bin in Get-ChildItem $env:STAGE -Include *.exe,*.dll -Recurse) {
+            $deps = (dumpbin /nologo /dependents $bin.FullName) | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim() }
+            foreach ($d in $deps) {
+              if ($d -match '^(api|ext)-ms-') { continue }
+              if ($present -contains $d) { continue }
+              if (Test-Path (Join-Path "$env:SystemRoot\System32" $d)) { continue }
+              $missing += "$($bin.Name) -> $d"
+            }
+          }
+          if ($missing.Count -gt 0) { $missing | ForEach-Object { Write-Output "::error::missing DLL: $_" }; exit 1 }
+          Write-Output "DLL dependencies OK ($($present.Count) DLLs)"
+      - name: Self-test the packaged app
+        shell: pwsh
+        run: |
+          # 한글 경로에서도 열리는지 (경로 변환은 path_from_utf8 규칙)
+          $dir = Join-Path $env:RUNNER_TEMP "한글 경로"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          foreach ($src in @("testdata/simple.pdf", "testdata/한글 파일명.pdf")) {
+            $pdf = Join-Path $dir (Split-Path $src -Leaf)
+            Copy-Item $src $pdf
+            # GUI 실행 파일이라 표준 출력이 없다 — 종료 코드로 판정. 대화상자 등으로 멈추면 2분 뒤 실패
+            $p = Start-Process -FilePath "$env:STAGE/onpdf_app.exe" -ArgumentList @('--self-test', "`"$pdf`"") -PassThru
+            if (-not $p.WaitForExit(120000)) { $p.Kill(); Write-Output "::error::self-test timed out: $pdf"; exit 1 }
+            Write-Output "self-test $pdf -> $($p.ExitCode)"
+            if ($p.ExitCode -ne 0) { exit 1 }
+          }
+      - name: Build the installer (Inno Setup)
+        shell: pwsh
+        run: |
+          # zip 과 같은 stage 폴더가 입력이다 (#99). 러너에 Inno Setup 6 가 없으면 choco 로 받는다
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y; if ($LASTEXITCODE -ne 0) { exit 1 } }
+          if (-not (Test-Path $iscc)) { Write-Output "::error::ISCC.exe not found"; exit 1 }
+          $korean = Join-Path (Split-Path $iscc) "Languages\Korean.isl"
+          Write-Output "Korean.isl present: $(Test-Path $korean)"
+          $stage = (Resolve-Path $env:STAGE).Path
+          $defines = @("/DAppVersion=$env:VERSION", "/DStageDir=$stage", "/DRepoDir=$PWD", "/DOutputDir=$PWD")
+          if ($env:SIGNED) { $defines += "/DSigned=1" }  # 서명된 빌드에는 "서명 없음" 안내를 넣지 않는다
+          & $iscc @defines packaging/windows/onpdf.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $setup = "OnPdf-$env:VERSION-windows-x64-setup.exe"
+          Get-Item $setup | Select-Object Name, Length
+          "SETUP=$setup" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # 업그레이드 점검용 "이전 버전" 설치기 (#101): 새 버전에 없는 파일(plugins\stale.dll)을 하나 더 싣는다.
+          # 제거기는 자기가 설치한 파일만 지우므로, 이 파일이 업그레이드 뒤 사라져야 이전 설치 정리가 동작한 것이다
+          $old = Join-Path $env:RUNNER_TEMP "stage-old"
+          Copy-Item $stage $old -Recurse
+          New-Item -ItemType Directory -Force -Path (Join-Path $old "plugins") | Out-Null
+          Set-Content -Path (Join-Path $old "plugins\stale.dll") -Value "stale"
+          & $iscc "/DAppVersion=$env:VERSION" "/DStageDir=$old" "/DRepoDir=$PWD" "/DOutputDir=$env:RUNNER_TEMP" "/DOutputBase=old-setup" packaging/windows/onpdf.iss | Select-Object -Last 1
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          "OLD_SETUP=$(Join-Path $env:RUNNER_TEMP 'old-setup.exe')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Sign the installer (optional)
+        shell: pwsh
+        env:
+          CERT: ${{ secrets.WINDOWS_CERT_PFX }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          if (-not $env:CERT -and -not $env:CERT_PASSWORD) { Write-Output "::warning::Windows 서명 비밀이 없어 설치기도 서명 없이 배포한다"; exit 0 }
+          if (-not $env:CERT -or -not $env:CERT_PASSWORD) { Write-Output "::error::Windows 서명 비밀이 일부만 있다"; exit 1 }
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP/cert.pfx", [Convert]::FromBase64String($env:CERT))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin" -Recurse -Filter signtool.exe | Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          & $signtool.FullName sign /f "$env:RUNNER_TEMP/cert.pfx" /p $env:CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $env:SETUP
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Remove-Item "$env:RUNNER_TEMP/cert.pfx"
+      - name: Self-test the installer
+        shell: pwsh
+        run: |
+          # "이전 버전"(stale.dll 포함) 조용한 설치 → 실제 설치기로 업그레이드(이전 설치 정리로 stale.dll 이 사라져야 함)
+          # → 설치된 exe 로 한글 경로 self-test → 레지스트리 확인 → 조용한 제거 → 잔여 검사
+          $appdir = Join-Path $env:LOCALAPPDATA "Programs\OnPdf"
+          $exe = Join-Path $appdir "onpdf_app.exe"
+          $stale = Join-Path $appdir "plugins\stale.dll"
+          $oldlog = Join-Path $env:RUNNER_TEMP "install-old.log"
+          $p0 = Start-Process -FilePath $env:OLD_SETUP -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$oldlog") -PassThru
+          if (-not $p0.WaitForExit(120000)) { $p0.Kill(); Get-Content $oldlog; Write-Output "::error::old-version install timed out"; exit 1 }
+          if ($p0.ExitCode -ne 0) { Get-Content $oldlog; Write-Output "::error::old-version install failed: $($p0.ExitCode)"; exit 1 }
+          if (-not (Test-Path $stale)) { Write-Output "::error::old-version install did not place plugins\stale.dll"; exit 1 }
+          $log = Join-Path $env:RUNNER_TEMP "install.log"
+          $p = Start-Process -FilePath (Resolve-Path $env:SETUP) -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/TASKS=pdfdefault', "/LOG=$log") -PassThru
+          if (-not $p.WaitForExit(180000)) { $p.Kill(); Get-Content $log; Write-Output "::error::silent upgrade timed out"; exit 1 }
+          if ($p.ExitCode -ne 0) { Get-Content $log; Write-Output "::error::silent upgrade failed: $($p.ExitCode)"; exit 1 }
+          if (Test-Path $stale) { Get-Content $log | Select-String -Pattern "previous|Uninstall" | Select-Object -First 10; Write-Output "::error::stale file from the previous version survived the upgrade"; exit 1 }
+          if (-not (Test-Path $exe)) { Get-Content $log; Write-Output "::error::installed exe not found after upgrade: $exe"; exit 1 }
+          Write-Output "upgrade removed the previous version's stale file"
+          $dir = Join-Path $env:RUNNER_TEMP "설치 점검"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Copy-Item "testdata/한글 파일명.pdf" $dir
+          $t = Start-Process -FilePath $exe -ArgumentList @('--self-test', "`"$(Join-Path $dir '한글 파일명.pdf')`"") -PassThru
+          if (-not $t.WaitForExit(120000)) { $t.Kill(); Write-Output "::error::installed self-test timed out"; exit 1 }
+          Write-Output "installed self-test -> $($t.ExitCode)"
+          if ($t.ExitCode -ne 0) { exit 1 }
+          $openwith = Get-ItemProperty -Path "HKCU:\Software\Classes\.pdf\OpenWithProgids" -ErrorAction SilentlyContinue
+          if ($null -eq $openwith -or $null -eq $openwith.PSObject.Properties['OnPdf.Document']) { Write-Output "::error::OpenWithProgids registration missing"; exit 1 }
+          $default = (Get-ItemProperty -Path "HKCU:\Software\Classes\.pdf" -ErrorAction SilentlyContinue).'(default)'
+          if ($default -ne 'OnPdf.Document') { Write-Output "::error::pdfdefault task did not set the .pdf default (got '$default')"; exit 1 }
+          $unins = Get-ChildItem $appdir -Filter "unins*.exe" | Select-Object -First 1
+          if ($null -eq $unins) { Write-Output "::error::uninstaller not found"; exit 1 }
+          $u = Start-Process -FilePath $unins.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -PassThru
+          if (-not $u.WaitForExit(120000)) { $u.Kill(); Write-Output "::error::silent uninstall timed out"; exit 1 }
+          if ($u.ExitCode -ne 0) { Write-Output "::error::silent uninstall failed: $($u.ExitCode)"; exit 1 }
+          # 제거기는 자기 자신을 지우려고 비동기로 끝난다 → 잠시 기다린다
+          $gone = $false
+          for ($i = 0; $i -lt 30; $i++) { if (-not (Test-Path $appdir)) { $gone = $true; break }; Start-Sleep -Seconds 1 }
+          if (-not $gone) { Get-ChildItem $appdir -Recurse | Select-Object FullName; Write-Output "::error::install folder remains after uninstall"; exit 1 }
+          if (Test-Path "HKCU:\Software\Classes\OnPdf.Document") { Write-Output "::error::ProgId remains after uninstall"; exit 1 }
+          $default = (Get-ItemProperty -Path "HKCU:\Software\Classes\.pdf" -ErrorAction SilentlyContinue).'(default)'
+          if ($default -eq 'OnPdf.Document') { Write-Output "::error::.pdf default still points to OnPdf after uninstall"; exit 1 }
+          Write-Output "installer self-test OK"
+      - name: Archive
+        shell: pwsh
+        run: |
+          $name = Split-Path $env:STAGE -Leaf
+          Compress-Archive -Path $env:STAGE -DestinationPath "$name.zip"
+          Get-Item "$name.zip" | Select-Object Name, Length
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: |
+            OnPdf-*-windows-x64.zip
+            OnPdf-*-windows-x64-setup.exe
+          if-no-files-found: error
+
+  macos:
+    name: macos-${{ matrix.arch }}
+    needs: version
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 둘 다 arm64 러너(#108, 스파이크 #107): arm64 는 네이티브, x64 는 교차 빌드 + Rosetta self-test.
+          # Qt 는 공식 6.9.x(universal, minos 12) — Homebrew Qt 는 arm64 전용·러너 OS(14.x) 기준이라 못 쓴다
+          - { arch: arm64, cmake_arch: arm64,  triplet: arm64-osx-13, pdfium: mac-arm64, runner: "",             label: "Apple Silicon(arm64)" }
+          - { arch: x64,   cmake_arch: x86_64, triplet: x64-osx-13,   pdfium: mac-x64,   runner: "arch -x86_64", label: "Intel(x86_64)" }
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      MACOS_MIN: "13.0"  # 선언하는 최소 버전 — 아래 검증 단계가 번들의 모든 Mach-O 가 이 이하인지 확인한다
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_REF }}
+      - uses: lukka/get-cmake@latest
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.9.*"
+          cache: true
+      - uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg_cache
+          key: vcpkg-macos-${{ matrix.arch }}-13-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-macos-${{ matrix.arch }}-13-
+      - run: |
+          mkdir -p "${{ github.workspace }}/vcpkg_cache"
+          echo "VCPKG_BINARY_SOURCES=clear;files,${{ github.workspace }}/vcpkg_cache,readwrite" >> "$GITHUB_ENV"
+      - uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgJsonGlob: vcpkg.json
+      - name: Fetch PDFium and bundled font
+        run: |
+          python3 third_party/fetch_pdfium.py --platform ${{ matrix.pdfium }}
+          python3 third_party/fetch_fonts.py
+      - name: Configure and build
+        run: |
+          cmake --preset release-app \
+            -DONPDF_MACOS_MIN="$MACOS_MIN" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_MIN" \
+            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.cmake_arch }} \
+            -DONPDF_PDFIUM_PLATFORM=${{ matrix.pdfium }} \
+            -DVCPKG_OVERLAY_TRIPLETS="$PWD/packaging/vcpkg-triplets" \
+            -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
+          cmake --build --preset release-app
+        env:
+          QT_ROOT: ${{ env.QT_ROOT_DIR }}
+      - name: Install and deploy Qt
+        run: |
+          stage=stage
+          cmake --install build/release-app --prefix "$stage"
+          mv "$stage/onpdf_app.app" "$stage/OnPdf.app"
+          "$QT_ROOT_DIR/bin/macdeployqt" "$PWD/$stage/OnPdf.app"
+          # 쓰지 않는 플러그인·프레임워크 제거, 설치 이름 정리, 번들 밖 의존 검사, universal Qt 를 이 아키텍처만
+          python3 packaging/finish_macos_bundle.py "$stage/OnPdf.app" --thin ${{ matrix.cmake_arch }}
+          echo "APP=$PWD/$stage/OnPdf.app" >> "$GITHUB_ENV"
+      - name: Verify architecture and minimum macOS
+        run: |
+          for f in MacOS/onpdf_app Frameworks/libpdfium.dylib Frameworks/QtCore.framework/QtCore; do
+            a=$(lipo -archs "$APP/Contents/$f")
+            [[ "$a" == "${{ matrix.cmake_arch }}" ]] || { echo "::error::$f archs: $a"; exit 1; }
+          done
+          # 번들 안 모든 Mach-O 의 minos 최댓값 (LC_BUILD_VERSION, 없으면 LC_VERSION_MIN_MACOSX)
+          worst=$(find "$APP" -type f -print0 | xargs -0 file | awk -F: '/Mach-O/{print $1}' | while read -r f; do
+              otool -l "$f" | awk -v f="$f" '/^ *minos /{print $2, f; exit} /LC_VERSION_MIN_MACOSX/{m=1} m&&/^ *version /{print $2, f; exit}'
+            done | sort -t. -k1,1n -k2,2n | tail -1)
+          echo "highest minimum macOS in the bundle: $worst"
+          v=${worst%% *}
+          highest=$(printf '%s\n' "$v" "$MACOS_MIN" | sort -t. -k1,1n -k2,2n | tail -1)
+          [[ "$highest" == "$MACOS_MIN" ]] || { echo "::error::a binary needs macOS $v > $MACOS_MIN: $worst"; exit 1; }
+          plist=$(plutil -extract LSMinimumSystemVersion raw "$APP/Contents/Info.plist")
+          [[ "$plist" == "$MACOS_MIN" ]] || { echo "::error::LSMinimumSystemVersion is $plist"; exit 1; }
+          du -sh "$APP"
+      - name: Sign (optional) and self-test
+        env:
+          CERT: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          present=0; for v in "$CERT" "$CERT_PASSWORD" "$APPLE_ID" "$APPLE_TEAM_ID" "$APPLE_APP_PASSWORD"; do [[ -n "$v" ]] && present=$((present+1)); done
+          if [[ $present -eq 0 ]]; then
+            echo "::warning::macOS 서명 비밀이 없어 ad-hoc 서명으로 배포한다 (첫 실행 때 Gatekeeper 경고)"
+            codesign --force --deep -s - "$APP"
+            echo "NOTARIZE=0" >> "$GITHUB_ENV"
+          elif [[ $present -ne 5 ]]; then
+            echo "::error::macOS 서명 비밀이 일부만 있다"; exit 1
+          else
+            keychain="$RUNNER_TEMP/build.keychain"
+            security create-keychain -p temp "$keychain"
+            security set-keychain-settings "$keychain"
+            security unlock-keychain -p temp "$keychain"
+            echo "$CERT" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+            security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple: -s -k temp "$keychain"
+            security list-keychains -d user -s "$keychain"
+            identity=$(security find-identity -v -p codesigning "$keychain" | awk -F'"' '/Developer ID Application/{print $2; exit}')
+            codesign --force --deep --options runtime --timestamp -s "$identity" "$APP"
+            echo "NOTARIZE=1" >> "$GITHUB_ENV"
+          fi
+          codesign --verify --deep --strict "$APP"
+          # x64 는 Rosetta 로 실행한다 (arm64 러너). 없으면 설치
+          runner="${{ matrix.runner }}"
+          if [[ -n "$runner" ]] && ! $runner /usr/bin/true 2>/dev/null; then
+            sudo softwareupdate --install-rosetta --agree-to-license
+          fi
+          dir="$RUNNER_TEMP/한글 경로"; mkdir -p "$dir"
+          for src in testdata/simple.pdf "testdata/한글 파일명.pdf"; do
+            cp "$src" "$dir/"
+            $runner "$APP/Contents/MacOS/onpdf_app" --self-test "$dir/$(basename "$src")"
+          done
+      - name: Create DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          root="$RUNNER_TEMP/dmgroot"; mkdir -p "$root"
+          cp -R "$APP" "$root/"
+          ln -s /Applications "$root/Applications"
+          sed -e "s/@MACOS_MIN@/$MACOS_MIN/g" -e "s/@MACOS_ARCH@/${{ matrix.label }}/g" packaging/README-macos.txt > "$root/README.txt"
+          dmg="OnPdf-$VERSION-macos-${{ matrix.arch }}.dmg"
+          hdiutil create -volname "OnPdf $VERSION" -srcfolder "$root" -format UDZO -ov "$dmg"
+          if [[ "$NOTARIZE" == "1" ]]; then
+            xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+            xcrun stapler staple "$dmg"
+          fi
+          ls -l "$dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: OnPdf-*-macos-${{ matrix.arch }}.dmg
+          if-no-files-found: error
+
+  publish:
+        description: 태그면 GitHub Release 에 올린다
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  # 태그·브랜치 이름, 또는 PR 이면 머지 커밋
+  BUILD_REF: ${{ inputs.ref || (github.event_name == 'pull_request' && github.sha) || github.ref_name }}
+
+jobs:
+  version:
+    name: version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      is_tag: ${{ steps.v.outputs.is_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_REF }}
+      - id: v
+        shell: bash
+        run: |
+          project=$(sed -n 's/^  VERSION \([0-9.]*\)$/\1/p' CMakeLists.txt | head -1)
+          if [[ "$BUILD_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            tag_version="${BUILD_REF#v}"
+            if [[ "$tag_version" != "$project" ]]; then
+              echo "::error::태그 $BUILD_REF 와 CMakeLists.txt 버전 $project 가 다르다"
+              exit 1
+            fi
+            echo "version=$tag_version" >> "$GITHUB_OUTPUT"
+            echo "is_tag=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$project-dev.$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+            echo "is_tag=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  windows-x64:
+    name: windows-x64
+    needs: version
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_REF }}
+      - uses: lukka/get-cmake@latest
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.9.*"
           cache: true
       # ci.yml 과 같은 vcpkg 바이너리 캐시 (키가 같아 CI 가 만든 캐시를 재사용한다)
       - uses: actions/cache@v4
@@ -377,7 +754,7 @@ jobs:
 
   publish:
     name: publish
-    needs: [version, windows-x64, macos-arm64]
+    needs: [version, windows-x64, macos]
     if: needs.version.outputs.is_tag == 'true' && (github.event_name == 'push' || inputs.publish)
     runs-on: ubuntu-latest
     permissions:
