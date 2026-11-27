@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### 추가
+- **왕복 테스트 코퍼스 260개**(v1.0 게이트): PDFium·qpdf·pdf.js·PDFBox 의 공개 테스트 PDF 260개(라이선스 확인, 암호 30·손상 8 포함)를 열기 → 저장 → 다시 열기 → qpdf 검사로 왕복해 깨지는 파일 0건을 CI 가 매 PR 마다 확인한다. 파일은 저장소에 넣지 않고 목록(출처·sha256)만 커밋, `testdata/gen/fetch_corpus.py` 로 받는다. 후보 2,206개 전수 실행에서 OnPdf 의 저장 결함은 없었고, PDFium 자체가 처리하지 못하는 입력 3개(렌더 폭탄 2, JPX 디코더 크래시 1)는 기록 후 제외 (#119)
+
 ## [0.5.3] - 2026-11-27
 
 Intel Mac 지원과 최소 macOS 13. macOS 배포물이 Apple Silicon·Intel DMG 2종이 되고 둘 다 macOS 13(Ventura) 이상에서 열린다(이전: Apple Silicon·macOS 14+). Qt 를 공식 바이너리로 바꿔 Apple Silicon DMG 는 44 MB → 24 MB. M5 의 코드 범위는 이것으로 모두 들어갔고, 코드 서명·공증만 인증서를 기다린다.

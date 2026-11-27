@@ -34,3 +34,6 @@ third_party/fonts/
 .claude/workflow/
 .claude/settings.local.json
 .claude/res/
+
+# Round-trip corpus (#119): downloaded by testdata/gen/fetch_corpus.py
+testdata/corpus/

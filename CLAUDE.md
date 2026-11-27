@@ -11,7 +11,7 @@ Your goal is to write Safe, Testable, and Maintainable modern C++ (C++23, std::e
 Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜치 `develop`, 릴리스 `main`)
 1인 개발(주 10~15시간). 전체 계획서: [pdf-editor-plan.md](pdf-editor-plan.md) — 범위·로드맵·위험 대응은 이 문서가 기준이다.
 
-**현재 단계**: v0.5.3 릴리스(2026-11-27)로 M5 코드 범위 완료. **v1.0 게이트(#117)**: ① 코드 서명·공증(`docs/signing.md`; Windows 는 클라우드 서명 전환 #116 — 인증서·구독은 사용자 준비) ② 실기기·타 뷰어 수동 QA(Windows 10/11 설치기, Intel Mac·macOS 13 DMG, 실제 프린터, Adobe Reader·Chrome·Edge 표시, 영어·한국어 화면) ③ 왕복 테스트 PDF 200개. 설정 화면·충돌 보고는 1.1(2026-11-27 결정). CI 관찰: #112(Windows 텍스트 도구 테스트 간헐 멈춤 — 수정 반영, 재발 없으면 닫음)
+**현재 단계**: v0.5.3 릴리스(2026-11-27)로 M5 코드 범위 완료. **v1.0 게이트(#117)**: ① 코드 서명·공증(`docs/signing.md`; Windows 는 클라우드 서명 전환 #116 — 인증서·구독은 사용자 준비) ② 실기기·타 뷰어 수동 QA(Windows 10/11 설치기, Intel Mac·macOS 13 DMG, 실제 프린터, Adobe Reader·Chrome·Edge 표시, 영어·한국어 화면) ③ 왕복 테스트 PDF 200개 — **완료**(#119: 공개 코퍼스 260개 `testdata/corpus.tsv`, `onpdf_corpus_tests` 전부 통과, CI 매 PR). 설정 화면·충돌 보고는 1.1(2026-11-27 결정). CI 관찰: #112(Windows 텍스트 도구 테스트 간헐 멈춤 — 수정 반영, 재발 없으면 닫음)
 
 | 마일스톤 | 핵심 | 완료 기준 |
 |---|---|---|
@@ -20,7 +20,7 @@ Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜
 | M2 주석·페이지 | 주석, 페이지 조작, 저장, 실행 취소 | Adobe Reader 에서 동일 표시 → v0.2 |
 | M3 객체 편집 | 텍스트·이미지 추가, 폼, 폰트 임베딩 | 한글 텍스트 타 뷰어 정상 → v0.3 |
 | M4 텍스트 수정 | 줄 단위 수정(qpdf 콘텐츠 수술 — #55), 폰트 대체 | 50개 문서: 줄 밖 보존 + 폭 ±5% → v0.5 |
-| M5 마무리 | 배포물·설치기·DMG 2종·다국어·인쇄 미리보기 (v0.5.3 완료) · 서명·공증 | 서명 + 실기기·타 뷰어 QA + 왕복 200개(#117) → v1.0. 설정·충돌 보고는 1.1 |
+| M5 마무리 | 배포물·설치기·DMG 2종·다국어·인쇄 미리보기 (v0.5.3 완료) · 왕복 코퍼스 260개(#119 완료) · 서명·공증 | 서명 + 실기기·타 뷰어 QA(#117) → v1.0. 설정·충돌 보고는 1.1 |
 
 # Tech Stack
 - Language: C++23 (std::expected 사용), CMake ≥ 3.25 + vcpkg(manifest 모드), Ninja
@@ -43,10 +43,11 @@ export VCPKG_ROOT=$HOME/vcpkg
 export QT_ROOT=$(brew --prefix qt)      # dev-app preset 이 CMAKE_PREFIX_PATH 로 넘긴다 (Homebrew qt 6.12)
 python3 third_party/fetch_pdfium.py     # PDFium 사전 빌드 받기 (버전: third_party/pdfium-version.txt)
 python3 third_party/fetch_fonts.py      # 번들 글꼴 Noto Sans KR 받기 (없으면 앱의 텍스트 추가 도구가 비활성; 테스트는 저장소 서브셋을 쓴다)
+python3 testdata/gen/fetch_corpus.py    # 왕복 코퍼스 260개 받기 (testdata/corpus/, 약 10MB — 없으면 onpdf_corpus_tests 가 SKIP; CI 는 필수)
 # vcpkg 의 harfbuzz 는 meson 빌드라 python ≥ 3.10 이 PATH 에 있어야 한다 (macOS 기본 3.9 → brew python 을 앞에)
 cmake --preset dev                      # configure (vcpkg manifest 설치 포함)
 cmake --build --preset dev              # build all → build/dev/bin/
-ctest --preset dev                      # unit + rendering regression + roundtrip(열기→저장→다시 열기, qpdf 있으면 --check)
+ctest --preset dev                      # unit + rendering regression + roundtrip(열기→저장→다시 열기 + qpdf 라이브러리 검사) + corpus(공개 PDF 260개)
 ./build/dev/bin/onpdf_cli info in.pdf                                # 쪽 크기 + 인쇄 권한·문서 인쇄 기본값
 ./build/dev/bin/onpdf_cli render in.pdf out.png --page 0 --scale 2 [--print]   # --print: 인쇄용 렌더(FPDF_PRINTING)
 ./build/dev/bin/onpdf_cli tiles in.pdf out-dir --page 0 --scale 2   # 타일 PNG + stitched.png + full.png
@@ -66,7 +67,7 @@ ctest --preset dev-app                                         # app 테스트(o
 cmake --build --preset dev-app --target update_translations    # tr() 를 바꾼 뒤 app/i18n/*.ts 갱신 → 한국어 번역 채우기 (#8)
 ```
 
-- 테스트 PDF: `python3 testdata/gen/make_all.py` 로 전부 생성(표준 라이브러리만, 결정적). `--check` 가 CI 에서 커밋본과 비교. 파일별 기대값은 `testdata/manifest.tsv`, 절차는 `testdata/README.md`. 왕복 테스트의 구조 검사는 qpdf **라이브러리**(`QpdfTools::check`)라 외부 명령이 없어도 돈다
+- 테스트 PDF: `python3 testdata/gen/make_all.py` 로 전부 생성(표준 라이브러리만, 결정적). `--check` 가 CI 에서 커밋본과 비교. 파일별 기대값은 `testdata/manifest.tsv`, 절차는 `testdata/README.md`. 왕복 테스트의 구조 검사는 qpdf **라이브러리**(`QpdfTools::check`)라 외부 명령이 없어도 돈다. **왕복 코퍼스(#119)**: 공개 PDF 260개(PDFium·qpdf·pdf.js·PDFBox 테스트 자료, 라이선스 근거·선정 규칙은 `testdata/README.md`)는 `testdata/corpus.tsv`(출처·sha256·expect·암호·태그)만 커밋하고 `testdata/gen/fetch_corpus.py` 가 받는다(gitignore). `onpdf_corpus_tests` 가 `tests/roundtrip/roundtrip_checks.h` 의 공용 검사(`expect_roundtrip`)를 돌리며, 원본부터 qpdf 가 거절하는 파일(`qpdf-broken`)은 저장본의 qpdf 오류를 참고만 한다. PDFium 판을 올리면 `--probe` 로 기대값 재측정
 - `core` 는 `stb` 로 PNG 를 읽고 쓴다. 새 의존성은 `vcpkg.json` 에 추가하고 `builtin-baseline` 을 유지한다
 - 빌드 산출물은 `build/<preset>/` 아래에만 생성한다 (소스 트리 내 빌드 금지). 실행 파일과 PDFium 공유 라이브러리는 `build/<preset>/bin/`
 - PDFium/qpdf 바이너리는 저장소에 커밋하지 않는다 — `third_party/` 스크립트로 받아온다
@@ -171,7 +172,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 # Testing Strategy
 - **단위 테스트** (`tests/unit`): core/edit. 모든 Command 는 실행 → 취소 → 재실행 후 문서 상태 비교 테스트 필수.
 - **렌더링 회귀** (`tests/render`): 테스트 PDF → PNG → 기준 이미지와 픽셀 비교. 렌더링·편집 기능 변경 시 반드시 갱신. 테스트는 `PdfiumLibrary::Options::use_system_fonts=false` 로 내장 폰트만 써서 플랫폼 간 결과를 같게 한다 (시스템 폰트 의존 테스트는 별도 표시).
-- **왕복 테스트** (`tests/roundtrip`): 열기 → 저장 → 다시 열기 후 페이지 수·텍스트·렌더링 일치 + `qpdf --check`.
+- **왕복 테스트** (`tests/roundtrip`): 열기 → 저장 → 다시 열기 후 페이지 수·텍스트·렌더링 일치 + qpdf 라이브러리 검사. manifest 46개(`onpdf_roundtrip_tests`) + 공개 코퍼스 260개(`onpdf_corpus_tests`, #119).
 - 한글 문서, 스캔본, 폼, 암호화 파일을 테스트 집합에 항상 포함한다. `tests/unit/testdata_manifest_test.cpp` 가 `manifest.tsv` 의 전 파일을 열어 검증하므로 새 PDF 는 manifest 한 줄로 테스트에 들어간다.
 - CI: 푸시마다 빌드 + 단위 테스트, PR 마다 렌더링 회귀까지.
 
