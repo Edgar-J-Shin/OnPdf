@@ -31,7 +31,7 @@ struct DocumentHandle::State {
           [w, doc_id](bool cancelled) {
             if (!cancelled && w->is_worker_thread()) w->unregister_document(doc_id);
           },
-          Priority::kHigh);
+          Priority::kHigh, TaskKind::kOther, -1);
     } catch (...) {
       // 할당 실패 등. 워커 종료 시 documents.clear() 가 어차피 해제한다.
     }
@@ -45,7 +45,8 @@ struct DocumentHandleAccess {
   static std::shared_ptr<PdfiumWorkerImpl> impl_of(PdfiumWorker& worker) { return worker.impl_; }
 
   template <class T, class Fn>
-  static TaskHandle post_document_task(const DocumentHandle& handle, Priority priority, Fn fn,
+  static TaskHandle post_document_task(const DocumentHandle& handle, Priority priority,
+                                       TaskKind kind, int page, Fn fn,
                                        std::function<void(Result<T>)> on_done);
   template <class T>
   static std::future<Result<T>> to_future(
@@ -71,6 +72,7 @@ struct DocumentHandleAccess {
     info.permissions = doc->edit_permissions();
     info.signature_count = doc->signature_count();
     info.form_type = doc->form_type();
+    info.hazards = doc->render_hazards();  // 열 때 한 번 검사 (#121)
 
     std::shared_ptr<State> state(new State(), [](State* s) {
       s->request_close();
@@ -104,7 +106,7 @@ struct DocumentHandleAccess {
           }
           on_done(std::move(result));  // 정확히 한 번
         },
-        priority);
+        priority, TaskKind::kOpen, -1);
   }
 
   template <class Opener>
@@ -178,7 +180,8 @@ const DocumentInfo& DocumentHandle::info() const {
 // 문서 작업을 워커에 넣고 콜백을 정확히 한 번 부른다. fn(doc) 는 워커 스레드에서 실행된다.
 template <class T, class Fn>
 TaskHandle DocumentHandleAccess::post_document_task(const DocumentHandle& handle, Priority priority,
-                                                    Fn fn, std::function<void(Result<T>)> on_done) {
+                                                    TaskKind kind, int page, Fn fn,
+                                                    std::function<void(Result<T>)> on_done) {
   assert(on_done && "콜백은 비어 있을 수 없다");
   const std::shared_ptr<DocumentHandle::State>& state_ref = handle.state_;
   if (!state_ref) {
@@ -211,7 +214,7 @@ TaskHandle DocumentHandleAccess::post_document_task(const DocumentHandle& handle
         }
         on_done(std::move(result));  // 정확히 한 번
       },
-      priority);
+      priority, kind, page);
 }
 
 template <class T>
@@ -228,7 +231,7 @@ TaskHandle DocumentHandle::render_page(int page_index, const RenderOptions& opti
                                        std::function<void(Result<Bitmap>)> on_done) const {
   RenderOptions opts = options;
   return DocumentHandleAccess::post_document_task<Bitmap>(
-      *this, priority,
+      *this, priority, TaskKind::kRender, page_index,
       [page_index, opts](PdfiumDocument& doc) { return doc.render_page(page_index, opts); },
       std::move(on_done));
 }
@@ -246,7 +249,7 @@ TaskHandle DocumentHandle::render_region(int page_index, const RenderOptions& op
                                          std::function<void(Result<Bitmap>)> on_done) const {
   RenderOptions opts = options;
   return DocumentHandleAccess::post_document_task<Bitmap>(
-      *this, priority,
+      *this, priority, TaskKind::kRender, page_index,
       [page_index, opts, region_px](PdfiumDocument& doc) {
         return doc.render_region(page_index, opts, region_px);
       },
@@ -266,7 +269,8 @@ TaskHandle DocumentHandle::load_annotations(
     int page_index, Priority priority,
     std::function<void(Result<std::vector<AnnotationInfo>>)> on_done) const {
   return DocumentHandleAccess::post_document_task<std::vector<AnnotationInfo>>(
-      *this, priority, [page_index](PdfiumDocument& doc) { return doc.annotations(page_index); },
+      *this, priority, TaskKind::kQuery, -1,
+      [page_index](PdfiumDocument& doc) { return doc.annotations(page_index); },
       std::move(on_done));
 }
 
@@ -282,7 +286,8 @@ TaskHandle DocumentHandle::load_text_objects(
     int page_index, Priority priority,
     std::function<void(Result<std::vector<TextObjectInfo>>)> on_done) const {
   return DocumentHandleAccess::post_document_task<std::vector<TextObjectInfo>>(
-      *this, priority, [page_index](PdfiumDocument& doc) { return doc.text_objects(page_index); },
+      *this, priority, TaskKind::kQuery, -1,
+      [page_index](PdfiumDocument& doc) { return doc.text_objects(page_index); },
       std::move(on_done));
 }
 
@@ -298,8 +303,8 @@ TaskHandle DocumentHandle::load_text_lines(
     int page_index, Priority priority,
     std::function<void(Result<std::vector<TextLineInfo>>)> on_done) const {
   return DocumentHandleAccess::post_document_task<std::vector<TextLineInfo>>(
-      *this, priority, [page_index](PdfiumDocument& doc) { return doc.text_lines(page_index); },
-      std::move(on_done));
+      *this, priority, TaskKind::kQuery, -1,
+      [page_index](PdfiumDocument& doc) { return doc.text_lines(page_index); }, std::move(on_done));
 }
 
 std::future<Result<std::vector<TextLineInfo>>> DocumentHandle::load_text_lines(
@@ -314,7 +319,8 @@ TaskHandle DocumentHandle::load_page_objects(
     int page_index, Priority priority,
     std::function<void(Result<std::vector<PageObjectInfo>>)> on_done) const {
   return DocumentHandleAccess::post_document_task<std::vector<PageObjectInfo>>(
-      *this, priority, [page_index](PdfiumDocument& doc) { return doc.page_objects(page_index); },
+      *this, priority, TaskKind::kQuery, -1,
+      [page_index](PdfiumDocument& doc) { return doc.page_objects(page_index); },
       std::move(on_done));
 }
 
@@ -322,7 +328,8 @@ TaskHandle DocumentHandle::load_form_widgets(
     int page_index, Priority priority,
     std::function<void(Result<std::vector<FormWidgetInfo>>)> on_done) const {
   return DocumentHandleAccess::post_document_task<std::vector<FormWidgetInfo>>(
-      *this, priority, [page_index](PdfiumDocument& doc) { return doc.form_widgets(page_index); },
+      *this, priority, TaskKind::kQuery, -1,
+      [page_index](PdfiumDocument& doc) { return doc.form_widgets(page_index); },
       std::move(on_done));
 }
 
@@ -330,8 +337,8 @@ TaskHandle DocumentHandle::load_text(
     int page_index, Priority priority,
     std::function<void(Result<view::PageTextIndex>)> on_done) const {
   return DocumentHandleAccess::post_document_task<view::PageTextIndex>(
-      *this, priority, [page_index](PdfiumDocument& doc) { return doc.load_text(page_index); },
-      std::move(on_done));
+      *this, priority, TaskKind::kQuery, -1,
+      [page_index](PdfiumDocument& doc) { return doc.load_text(page_index); }, std::move(on_done));
 }
 
 std::future<Result<view::PageTextIndex>> DocumentHandle::load_text(int page_index,
@@ -346,7 +353,7 @@ TaskHandle DocumentHandle::search_page(
     int page_index, std::string query, view::SearchOptions options, Priority priority,
     std::function<void(Result<view::PageSearchResult>)> on_done) const {
   return DocumentHandleAccess::post_document_task<view::PageSearchResult>(
-      *this, priority,
+      *this, priority, TaskKind::kQuery, -1,
       [page_index, query = std::move(query), options](PdfiumDocument& doc) {
         return doc.search_page(page_index, query, options);
       },
@@ -366,7 +373,8 @@ std::future<Result<view::PageSearchResult>> DocumentHandle::search_page(int page
 TaskHandle DocumentHandle::load_outline(Priority priority,
                                         std::function<void(Result<view::Outline>)> on_done) const {
   return DocumentHandleAccess::post_document_task<view::Outline>(
-      *this, priority, [](PdfiumDocument& doc) { return doc.load_outline(); }, std::move(on_done));
+      *this, priority, TaskKind::kQuery, -1, [](PdfiumDocument& doc) { return doc.load_outline(); },
+      std::move(on_done));
 }
 
 std::future<Result<view::Outline>> DocumentHandle::load_outline(Priority priority) const {
@@ -379,7 +387,7 @@ std::future<Result<view::Outline>> DocumentHandle::load_outline(Priority priorit
 TaskHandle DocumentHandle::resolve_location(int page_index, Point user_pt, Priority priority,
                                             std::function<void(Result<Point>)> on_done) const {
   return DocumentHandleAccess::post_document_task<Point>(
-      *this, priority,
+      *this, priority, TaskKind::kQuery, -1,
       [page_index, user_pt](PdfiumDocument& doc) {
         return doc.resolve_location(page_index, user_pt);
       },
@@ -396,8 +404,8 @@ std::future<Result<Point>> DocumentHandle::resolve_location(int page_index, Poin
 TaskHandle DocumentHandle::modify(std::function<Result<ChangeSet>(EditableDocument&)> edit,
                                   std::function<void(Result<ChangeSet>)> on_done) const {
   return DocumentHandleAccess::post_document_task<ChangeSet>(
-      *this, Priority::kHigh, [edit = std::move(edit)](PdfiumDocument& doc) { return edit(doc); },
-      std::move(on_done));
+      *this, Priority::kHigh, TaskKind::kModify, -1,
+      [edit = std::move(edit)](PdfiumDocument& doc) { return edit(doc); }, std::move(on_done));
 }
 
 std::future<Result<ChangeSet>> DocumentHandle::modify(
@@ -412,7 +420,7 @@ TaskHandle DocumentHandle::save(std::filesystem::path target, SaveOptions option
                                 std::function<void(Result<SaveResult>)> on_done) const {
   if (info().signature_count > 0) options.incremental = true;  // 서명 보존
   return DocumentHandleAccess::post_document_task<SaveResult>(
-      *this, Priority::kNormal,
+      *this, Priority::kNormal, TaskKind::kSave, -1,
       [target = std::move(target), options = std::move(options)](PdfiumDocument& doc) {
         return save_document_safely(doc, target, options);
       },

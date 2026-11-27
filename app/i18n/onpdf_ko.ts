@@ -45,6 +45,10 @@
 <context>
     <name>onpdf::app::DocumentView</name>
     <message>
+        <source>This page cannot be displayed (hazardous pattern)</source>
+        <translation>이 쪽은 표시할 수 없습니다 (위험한 패턴)</translation>
+    </message>
+    <message>
         <source>Page %1</source>
         <translation>%1 쪽</translation>
     </message>
@@ -1043,6 +1047,14 @@ If you know its permissions (owner) password, you can unlock printing.</source>
         <source>This document does not allow printing</source>
         <translation>이 문서는 인쇄가 허용되지 않습니다</translation>
     </message>
+    <message numerus="yes">
+        <source>Rendering %1 has not finished for %n second(s). The document may contain hostile content.
+If you force quit, unsaved changes are lost.</source>
+        <translation>
+            <numerusform>%1을(를) 그리는 렌더링이 %n초째 끝나지 않습니다. 문서에 위험한 내용이 있을 수 있습니다.
+강제 종료하면 저장하지 않은 변경은 잃습니다.</numerusform>
+        </translation>
+    </message>
     <message>
         <source>Print the document</source>
         <translation>문서를 인쇄한다</translation>
@@ -1196,6 +1208,42 @@ If you know its permissions (owner) password, you can unlock printing.</source>
         <translation>링크: %1</translation>
     </message>
     <message>
+        <source>page %1 of &apos;%2&apos;</source>
+        <translation>&apos;%2&apos;의 %1쪽</translation>
+    </message>
+    <message>
+        <source>Not responding</source>
+        <translation>응답 없음</translation>
+    </message>
+    <message>
+        <source>Force quit</source>
+        <translation>강제 종료</translation>
+    </message>
+    <message>
+        <source>Keep waiting</source>
+        <translation>계속 기다리기</translation>
+    </message>
+    <message>
+        <source>Page %1 cannot be displayed: %2</source>
+        <translation>%1쪽을 표시할 수 없습니다: %2</translation>
+    </message>
+    <message>
+        <source>Page %1 cannot be displayed, so annotations, text and images cannot be added</source>
+        <translation>%1쪽은 표시할 수 없어 주석·텍스트·이미지를 넣을 수 없습니다</translation>
+    </message>
+    <message>
+        <source>Pages that cannot be displayed</source>
+        <translation>표시할 수 없는 쪽</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n page(s) of this document contain a pattern that cannot be rendered safely and will stay blank: %1.
+Other pages, search, editing and saving work as usual.</source>
+        <translation>
+            <numerusform>이 문서의 %n쪽에 안전하게 그릴 수 없는 패턴이 있어 빈 쪽으로 둡니다: %1쪽.
+다른 쪽과 검색·편집·저장은 평소처럼 됩니다.</numerusform>
+        </translation>
+    </message>
+    <message>
         <source>%1 · %2% · cache %3 MB · tile %4 ms</source>
         <translation>%1 · %2% · 캐시 %3 MB · 타일 %4 ms</translation>
     </message>
@@ -1265,6 +1313,13 @@ If you know its permissions (owner) password, you can unlock printing.</source>
     </message>
 </context>
 <context>
+    <name>onpdf::app::PrintPreviewView</name>
+    <message>
+        <source>This page cannot be displayed (hazardous pattern)</source>
+        <translation>이 쪽은 표시할 수 없습니다 (위험한 패턴)</translation>
+    </message>
+</context>
+<context>
     <name>onpdf::app::SearchBar</name>
     <message>
         <source>Find in document</source>
@@ -1317,6 +1372,13 @@ If you know its permissions (owner) password, you can unlock printing.</source>
     <message>
         <source>+ (too many)</source>
         <translation>+ (너무 많음)</translation>
+    </message>
+</context>
+<context>
+    <name>onpdf::app::ThumbnailPanel</name>
+    <message>
+        <source>Cannot display</source>
+        <translation>표시 불가</translation>
     </message>
 </context>
 </TS>

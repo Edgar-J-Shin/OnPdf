@@ -4,6 +4,7 @@
 // PDFium 과 무관하므로 어느 스레드에서든 부를 수 있다 (한 번에 하나씩 — 호출자가 직렬화).
 // 출력은 호출자가 write_files_safely 의 임시 파일을 넘겨 "임시 → 검증 → 교체" 를 지킨다
 
+#include "onpdf/core/engine/render_hazard.h"
 #include "onpdf/core/error.h"
 #include "onpdf/core/page_ranges.h"
 
@@ -118,6 +119,13 @@ class QpdfTools {
   // 요구한다 (#53 검증용)
   [[nodiscard]] static Result<int> direct_annotation_count(const std::filesystem::path& file,
                                                            std::string_view password = {});
+  // 렌더 위험 검사 (#121): 쪽마다 /Resources(상속)·Form XObject·패턴 자신의 자원·주석 /AP 를 깊이 8,
+  // 방문 집합으로 걷어 타일링 패턴(PatternType 1)의 쪽당 타일 수 ≈ 쪽 면적(MediaBox) /
+  // (|XStep·YStep|·|det(Matrix)|) 를 추정한다. kMaxPatternTilesPerPage 를 넘거나 0·비유한이면
+  // RenderHazard(쪽마다 가장 큰 것 하나). 열지 못하면 kPasswordRequired/kInvalidFormat — 호출자는
+  // "위험 없음" 으로 두고 PDFium 에 맡긴다
+  [[nodiscard]] static Result<std::vector<RenderHazard>> scan_render_hazards(
+      const std::vector<std::uint8_t>& bytes, std::string_view password = {});
 };
 
 }  // namespace onpdf::engine

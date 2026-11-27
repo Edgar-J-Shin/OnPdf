@@ -47,3 +47,4 @@ text-lines-form.pdf	ok			4	612	792	0	gen	Apache-2.0	Form XObject 1단계 줄(수
 text-lines-type3.pdf	ok			1	612	792	0	gen	Apache-2.0	Type3 줄(대체 글꼴)·임베딩 CID 한글 줄(원본 글꼴 재사용)·보이지 않는 3 Tr 줄(불가)	82
 text-lines-kern.pdf	ok			1	612	792	0	gen	Apache-2.0	줄 폭 맞춤(#77): TJ 넓힘·Tc 자간·끝 공백·좁힘 커닝·보통·큰 자간(한계)·배열 문자열 하나 TJ 줄	139
 text-lines-split.pdf	ok			1	612	792	0	gen	Apache-2.0	/Contents 배열이 피연산자와 연산자 사이에서 나뉜 쪽(Word·LiveCycle 식, #81): 이어 붙여 세고 스트림별로 지운다	46
+pattern-bomb.pdf	ok			4	612	792	0	gen	Apache-2.0	렌더 위험(#121): 1쪽 정상(36pt 스텝 패턴), 2쪽 /XStep 0.001 타일링 패턴 폭탄, 3쪽 Form XObject 안 폭탄, 4쪽 Square 주석 AP 안 폭탄 — 2~4쪽 렌더는 kRenderRefused	33

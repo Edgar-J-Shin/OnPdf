@@ -4,6 +4,7 @@
 #include "onpdf/core/engine/editable_document.h"
 #include "onpdf/core/engine/form.h"
 #include "onpdf/core/engine/pdfium_handles.h"
+#include "onpdf/core/engine/render_hazard.h"
 #include "onpdf/core/engine/render_types.h"
 #include "onpdf/core/error.h"
 #include "onpdf/core/geometry.h"
@@ -17,6 +18,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -165,6 +167,10 @@ class PdfiumDocument final : public EditableDocument {
   [[nodiscard]] const std::string& password() const noexcept { return password_; }
   // 열 때 읽은 원본 바이트 (증분 저장 검증: 새 파일 앞부분과 같아야 한다)
   [[nodiscard]] const std::vector<std::uint8_t>& original_bytes() const noexcept { return data_; }
+  // 렌더 위험(#121): PDFium 이 끝내지 못하는 쪽(타일링 패턴 폭탄). 첫 호출(또는 첫 렌더·구조
+  // 편집) 때 qpdf 로 한 번 검사해 쪽별로 캐시한다. 그 쪽의 render_page/render_region 은 PDFium 을
+  // 부르지 않고 kRenderRefused. 쪽 번호 순
+  [[nodiscard]] std::vector<RenderHazard> render_hazards() const;
   [[nodiscard]] Result<Bitmap> render_page(int page_index, const RenderOptions& options) const;
   // 쪽을 options.scale 로 렌더한 픽셀 평면에서 region_px 사각형만 그린다 (타일 렌더).
   // options.rotation 은 무시한다 — 쪽 크기(page_size)가 이미 /Rotate 를 반영하므로 회전 0 기준.
@@ -230,11 +236,17 @@ class PdfiumDocument final : public EditableDocument {
   [[nodiscard]] Result<bool> reapply_spacing(int page_index);
 
   // 보조 문서: 삭제 취소용 쪽 사본 또는 삽입 소스 파일. data 가 doc 보다 오래 살아야 한다 (선언
-  // 순서)
+  // 순서). hazards 는 스냅샷 쪽별 렌더 위험(#121) — 삽입할 때 끼운 쪽에 이식한다 (쪽 사본은 바이트가
+  // 없어 재검사할 수 없으므로 복사할 때 함께 담는다)
   struct Snapshot {
     std::vector<std::uint8_t> data;
     ScopedDocument doc;
+    std::vector<std::optional<RenderHazard>> hazards;
   };
+  // 렌더 위험 캐시 (#121). nullopt = 아직 검사 안 함. 렌더는 const 라 mutable
+  void ensure_hazards() const;
+  [[nodiscard]] const RenderHazard* hazard_for(int page_index) const;
+  mutable std::optional<std::unordered_map<int, RenderHazard>> hazards_;
 
   // 선언 순서 중요: doc_ 가 data_ 를 참조하므로 doc_ 가 먼저 소멸해야 한다.
   std::vector<std::uint8_t> data_;

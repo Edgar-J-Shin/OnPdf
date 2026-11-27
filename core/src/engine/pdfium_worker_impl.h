@@ -21,7 +21,14 @@ struct PdfiumWorkerImpl {
   struct Entry {
     std::shared_ptr<std::atomic<bool>> cancelled;
     PdfiumWorker::Task task;
+    TaskKind kind = TaskKind::kOther;
+    int page = -1;
   };
+
+  // ---- 실행 중 작업 (#121): 워커가 쓰고 아무 스레드나 읽는다. kind < 0 = 없음 ----
+  std::atomic<int> running_kind{-1};
+  std::atomic<std::int64_t> running_since_ns{0};
+  std::atomic<int> running_page{-1};
 
   // ---- 여러 스레드가 접근: mutex 로 보호 ----
   mutable std::mutex mutex;
@@ -37,7 +44,8 @@ struct PdfiumWorkerImpl {
   std::latch ready{1};
   std::jthread thread;
 
-  TaskHandle post(PdfiumWorker::Task task, Priority priority);
+  TaskHandle post(PdfiumWorker::Task task, Priority priority, TaskKind kind, int page);
+  [[nodiscard]] std::optional<RunningTask> running_task() const noexcept;
   void cancel_all() noexcept;
   void stop() noexcept;
   [[nodiscard]] bool is_worker_thread() const noexcept;
@@ -53,7 +61,7 @@ struct PdfiumWorkerImpl {
  private:
   bool any_pending_locked() const noexcept;
   bool pop_next(Entry& out);
-  static void run_entry(Entry& entry, bool cancelled) noexcept;
+  void run_entry(Entry& entry, bool cancelled) noexcept;
   void run_loop(const PdfiumWorker::Options& options);
 };
 
