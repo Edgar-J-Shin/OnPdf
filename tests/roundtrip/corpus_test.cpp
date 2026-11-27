@@ -8,6 +8,7 @@
 #include "../manifest.h"
 #include "../test_support.h"
 #include "roundtrip_checks.h"
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -15,6 +16,7 @@
 #include <gtest/gtest.h>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace onpdf::engine {
@@ -79,13 +81,19 @@ std::filesystem::path corpus_file(const CorpusEntry& e) {
   return testdata("corpus") / path_from_utf8(e.source) / path_from_utf8(e.name);
 }
 
-std::string corpus_test_name(const ::testing::TestParamInfo<CorpusEntry>& info) {
+// gtest 파라미터 이름: 영숫자 외는 '_'. 두 파일이 같은 이름이 되면 gtest 가 실행 때 중단하므로
+// CorpusList.IsWellFormed 가 유일성을 검사한다
+std::string gtest_name_of(const CorpusEntry& e) {
   std::string name;
-  for (char c : info.param.source + "_" + info.param.name) {
+  for (char c : e.source + "_" + e.name) {
     const auto ch = static_cast<unsigned char>(c);
     name += std::isalnum(ch) ? static_cast<char>(ch) : '_';
   }
   return name;
+}
+
+std::string corpus_test_name(const ::testing::TestParamInfo<CorpusEntry>& info) {
+  return gtest_name_of(info.param);
 }
 
 bool corpus_required() {
@@ -129,7 +137,10 @@ TEST(CorpusList, IsWellFormed) {
   static const std::set<std::string> kSources = {"pdfium", "qpdf", "pdfjs", "pdfbox"};
   static const std::set<std::string> kExpects = {"ok", "password", "invalid"};
   std::set<std::pair<std::string, std::string>> names;
+  std::set<std::string> gtest_names;
   for (const auto& e : corpus().entries) {
+    EXPECT_TRUE(gtest_names.insert(gtest_name_of(e)).second)
+        << e.source << "/" << e.name << ": gtest name collides with another file";
     EXPECT_TRUE(kSources.contains(e.source)) << e.name << ": unknown source " << e.source;
     EXPECT_TRUE(kExpects.contains(e.expect)) << e.name << ": unknown expect " << e.expect;
     EXPECT_EQ(e.sha256.size(), 64u) << e.name;
