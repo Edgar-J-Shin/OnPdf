@@ -159,7 +159,37 @@ PdfiumDocument& PdfiumDocument::operator=(PdfiumDocument&& other) noexcept {
   state_byte_limit_ = other.state_byte_limit_;
   next_state_ = other.next_state_;
   dropped_marks_ = std::move(other.dropped_marks_);
+  hazards_ = std::move(other.hazards_);
   return *this;
+}
+
+// ---------------------------------------------------------------- 렌더 위험 (#121)
+
+void PdfiumDocument::ensure_hazards() const {
+  if (hazards_) return;
+  std::unordered_map<int, RenderHazard> map;
+  // qpdf 가 못 열면(손상·암호 설정 차이) 위험 없음으로 두고 PDFium 에 맡긴다 — 기존 동작
+  if (auto found = QpdfTools::scan_render_hazards(data_, password_)) {
+    for (auto& h : *found) map.emplace(h.page, std::move(h));
+  }
+  hazards_ = std::move(map);
+}
+
+const RenderHazard* PdfiumDocument::hazard_for(int page_index) const {
+  ensure_hazards();
+  const auto it = hazards_->find(page_index);
+  return it == hazards_->end() ? nullptr : &it->second;
+}
+
+std::vector<RenderHazard> PdfiumDocument::render_hazards() const {
+  PdfiumLibrary::assert_current_thread();
+  ensure_hazards();
+  std::vector<RenderHazard> out;
+  out.reserve(hazards_->size());
+  for (const auto& [page, hazard] : *hazards_) out.push_back(hazard);
+  std::sort(out.begin(), out.end(),
+            [](const RenderHazard& a, const RenderHazard& b) { return a.page < b.page; });
+  return out;
 }
 
 PdfiumDocument::~PdfiumDocument() = default;
@@ -241,6 +271,7 @@ Result<void> PdfiumDocument::delete_pages(const std::vector<int>& pages) {
   if (auto ok = check_page_list(pages, count, "delete"); !ok) return ok;
   const int n = static_cast<int>(pages.size());
   if (count - n < 1) return make_error(ErrorCode::kInvalidArgument, "cannot delete all pages");
+  ensure_hazards();  // 쪽 번호가 바뀌기 전에 현재 바이트로 검사해 둔다 (#121)
   // 내림차순으로 지워야 앞쪽 번호가 밀리지 않는다. FPDFPage_Delete 는 반환값이 없어 쪽 수로
   // 확인한다
   for (auto it = pages.rbegin(); it != pages.rend(); ++it) FPDFPage_Delete(doc_.get(), *it);
@@ -269,6 +300,7 @@ Result<void> PdfiumDocument::move_pages(const std::vector<int>& pages, int dest)
     return make_error(ErrorCode::kInvalidArgument,
                       "move: destination out of range: " + std::to_string(dest));
   }
+  ensure_hazards();  // (#121)
   // 여기까지 검증했으므로 실패하면 PDFium 내부 문제다 (실패 시 문서가 불확정일 수 있다고 문서화되어
   // 있다)
   if (!FPDF_MovePages(doc_.get(), pages.data(), static_cast<unsigned long>(pages.size()), dest)) {
@@ -301,7 +333,17 @@ Result<SnapshotId> PdfiumDocument::copy_pages_to_snapshot(const std::vector<int>
   if (FPDF_GetPageCount(snapshot.get()) != static_cast<int>(pages.size())) {
     return make_error(ErrorCode::kInvalidState, "snapshot page count mismatch");
   }
-  return store_snapshot({}, std::move(snapshot));
+  // 사본 쪽의 렌더 위험을 함께 담는다 (#121): 바이트가 없어 삽입 때 재검사할 수 없다
+  ensure_hazards();
+  std::vector<std::optional<RenderHazard>> hazards;
+  hazards.reserve(pages.size());
+  for (int p : pages) {
+    const RenderHazard* h = hazard_for(p);
+    hazards.emplace_back(h ? std::optional<RenderHazard>(*h) : std::nullopt);
+  }
+  auto id = store_snapshot({}, std::move(snapshot));
+  if (id) snapshots_[*id].hazards = std::move(hazards);
+  return id;
 }
 
 Result<SnapshotId> PdfiumDocument::open_snapshot(const std::filesystem::path& file,
@@ -311,13 +353,24 @@ Result<SnapshotId> PdfiumDocument::open_snapshot(const std::filesystem::path& fi
   if (!data) return std::unexpected(data.error());
   auto doc = load_document(*data, password);
   if (!doc) return std::unexpected(doc.error());
-  return store_snapshot(std::move(*data), std::move(*doc));
+  // 소스 파일의 렌더 위험 (#121). 못 열면 위험 없음
+  std::vector<std::optional<RenderHazard>> hazards(
+      static_cast<std::size_t>(std::max(0, FPDF_GetPageCount(doc->get()))));
+  if (auto found = QpdfTools::scan_render_hazards(*data, password)) {
+    for (auto& h : *found) {
+      if (h.page >= 0 && h.page < static_cast<int>(hazards.size()))
+        hazards[static_cast<std::size_t>(h.page)] = std::move(h);
+    }
+  }
+  auto id = store_snapshot(std::move(*data), std::move(*doc));
+  if (id) snapshots_[*id].hazards = std::move(hazards);
+  return id;
 }
 
 Result<SnapshotId> PdfiumDocument::store_snapshot(std::vector<std::uint8_t> data,
                                                   ScopedDocument doc) {
   const SnapshotId id = next_snapshot_++;
-  snapshots_.emplace(id, Snapshot{std::move(data), std::move(doc)});
+  snapshots_.emplace(id, Snapshot{std::move(data), std::move(doc), {}});
   return id;
 }
 
@@ -350,6 +403,7 @@ Result<void> PdfiumDocument::insert_from_snapshot(SnapshotId id, const std::vect
     n = static_cast<int>(src_pages.size());
   }
   if (n == 0) return make_error(ErrorCode::kInvalidArgument, "insert: source has no pages");
+  ensure_hazards();  // (#121)
   const FPDF_BOOL ok =
       src_pages.empty() ? FPDF_ImportPagesByIndex(doc_.get(), source, nullptr, 0, at)
                         : FPDF_ImportPagesByIndex(doc_.get(), source, src_pages.data(),
@@ -362,6 +416,17 @@ Result<void> PdfiumDocument::insert_from_snapshot(SnapshotId id, const std::vect
   for (int old = 0; old < count; ++old)
     new_index[static_cast<std::size_t>(old)] = old < at ? old : old + n;
   remap_detached_pages(new_index);
+  // 끼운 쪽의 렌더 위험을 스냅샷에서 이식한다 (#121)
+  const auto& src_hazards = it->second.hazards;
+  for (int k = 0; k < n; ++k) {
+    const int src = src_pages.empty() ? k : src_pages[static_cast<std::size_t>(k)];
+    if (src < 0 || src >= static_cast<int>(src_hazards.size())) continue;
+    if (const auto& h = src_hazards[static_cast<std::size_t>(src)]) {
+      RenderHazard moved = *h;
+      moved.page = at + k;
+      (*hazards_)[at + k] = std::move(moved);
+    }
+  }
   return {};
 }
 
@@ -703,6 +768,7 @@ Result<int> PdfiumDocument::ensure_annotation_appearances() const {
   // onpdf-…)만 본다: 다른 프로그램 주석의 AP 를 새로 만들면 서명 문서의 증분 저장에 섞인다
   int rendered = 0;
   for (int i = 0; i < page_count(); ++i) {
+    if (hazard_for(i) != nullptr) continue;  // 렌더 위험 쪽은 AP 없이 저장한다 (#121)
     auto page = load_page(i);
     if (!page) return std::unexpected(page.error());
     bool needs = false;
@@ -1512,6 +1578,17 @@ void PdfiumDocument::remap_detached_pages(const std::vector<int>& new_index_of_o
     if (now >= 0) moved[now].insert(marks.begin(), marks.end());
   }
   dropped_marks_ = std::move(moved);
+  // 렌더 위험 판정도 쪽을 따라간다 (#121). 지워진 쪽의 것은 버린다
+  if (hazards_) {
+    std::unordered_map<int, RenderHazard> kept;
+    for (auto& [page, hazard] : *hazards_) {
+      const int now = remap(page);
+      if (now < 0) continue;
+      hazard.page = now;
+      kept.emplace(now, std::move(hazard));
+    }
+    hazards_ = std::move(kept);
+  }
 }
 
 void PdfiumDocument::drop_detached(DetachedId id) noexcept {
@@ -1652,6 +1729,10 @@ Result<Bitmap> PdfiumDocument::render_page(int page_index, const RenderOptions& 
   if (!(options.scale > 0.0f) || !std::isfinite(options.scale)) {
     return make_error(ErrorCode::kInvalidArgument, "scale must be positive");
   }
+  if (page_index >= 0 && page_index < page_count()) {
+    if (const RenderHazard* h = hazard_for(page_index))
+      return make_error(ErrorCode::kRenderRefused, h->detail);  // (#121)
+  }
   int rotate = 0;
   switch (options.rotation) {
     case 0:
@@ -1728,6 +1809,10 @@ Result<Bitmap> PdfiumDocument::render_region(int page_index, const RenderOptions
   const int height = static_cast<int>(std::ceil(region_px.h));
   if (width <= 0 || height <= 0) {
     return make_error(ErrorCode::kInvalidArgument, "region must be non-empty");
+  }
+  if (page_index >= 0 && page_index < page_count()) {
+    if (const RenderHazard* h = hazard_for(page_index))
+      return make_error(ErrorCode::kRenderRefused, h->detail);  // (#121)
   }
   auto page = load_page(page_index);
   if (!page) return std::unexpected(page.error());
@@ -2528,6 +2613,8 @@ Result<LineEditResult> PdfiumDocument::edit_line(int page_index, std::string_vie
                                                  const LineReplacement* replacement) {
   PdfiumLibrary::assert_current_thread();
   if (signature_count() > 0) return make_error(ErrorCode::kUnsupported, "signed document");
+  if (page_index >= 0 && page_index < page_count() && hazard_for(page_index) != nullptr)
+    return make_error(ErrorCode::kUnsupported, "page cannot be rendered");  // 검증 렌더 불가 (#121)
   for (const auto& [id, d] : detached_) {
     if (d.foreign) return make_error(ErrorCode::kInvalidState, "foreign detached object");
   }
@@ -2876,6 +2963,9 @@ Result<bool> PdfiumDocument::reapply_spacing(int page_index) {
     if (error.code == ErrorCode::kUnsupported) spacing_failed_pages_.insert(page_index);
     return error;
   };
+  if (hazard_for(page_index) != nullptr)  // 검증 렌더 불가 (#121) — 한 번 알리고 건너뛴다
+    return std::unexpected(
+        remember_if_permanent(Error{ErrorCode::kUnsupported, "page cannot be rendered"}));
 
   // 쪽 직속 OnPdf 텍스트 객체 가운데 마크 ls ≠ 0 → fit, PDFium 텍스트 객체 수, 대상 영역(쪽 포인트)
   struct Plan {
@@ -3041,6 +3131,8 @@ Result<void> PdfiumDocument::replace_bytes(std::vector<std::uint8_t> bytes) {
   spacing_failed_pages_.clear();
   field_pages_ready_ = false;
   for (auto& [id, d] : detached_) d.objects.clear();  // 혹시 남은 것은 옛 문서와 함께 버린다
+  // 렌더 위험 캐시(#121): OnPdf 는 패턴을 만들지 않으므로 쪽 수가 같으면 유지, 다르면 다시 검사
+  if (hazards_ && FPDF_GetPageCount(doc->get()) != page_count()) hazards_.reset();
   doc_.reset();
   data_ = std::move(bytes);
   doc_ = std::move(*doc);

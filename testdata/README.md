@@ -52,6 +52,8 @@
 | `text-lines-form.pdf` | ok |  | 4 | gen | Apache-2.0 | Form XObject 1단계 줄(수정 가능)·2단계 줄(불가), 쪽 직속 줄, 이미지; 2쪽은 BT 안에서 나뉜 /Contents 배열(밀림); 3·4쪽은 공유 Form(불가) |
 | `text-lines-type3.pdf` | ok |  | 1 | gen | Apache-2.0 | Type3 줄(대체 글꼴)·임베딩 CID 한글 줄(원본 글꼴 재사용)·보이지 않는 3 Tr 줄(불가) |
 | `text-lines-kern.pdf` | ok |  | 1 | gen | Apache-2.0 | 줄 폭 맞춤(#77): TJ 넓힘·Tc 자간·끝 공백·좁힘 커닝·보통·큰 자간(한계)·배열 문자열 하나 TJ 줄 |
+| `text-lines-split.pdf` | ok |  | 1 | gen | Apache-2.0 | /Contents 배열이 피연산자와 연산자 사이에서 나뉜 쪽(Word·LiveCycle 식, #81): 이어 붙여 세고 스트림별로 지운다 |
+| `pattern-bomb.pdf` | ok |  | 4 | gen | Apache-2.0 | 렌더 위험(#121): 1쪽 정상(36pt 스텝 패턴), 2쪽 /XStep 0.001 타일링 패턴 폭탄, 3쪽 Form XObject 안 폭탄, 4쪽 Square 주석 AP 안 폭탄 — 2~4쪽 렌더는 kRenderRefused |
 <!-- manifest:end -->
 
 ## 출처·라이선스
@@ -63,11 +65,41 @@
 - `fonts/NotoSansKR-subset.ttc` = 위 TTF 서브셋 2벌(면 1 family `NotoSansKR-subset-Face1`) — TTC 면 선택 테스트(#73)
 - `fonts/SourceSans3-subset.otf` = Adobe Source Sans 3(OTF, 비CID CFF)의 라틴 서브셋 — charset 을 손대지 않는 변환 경로 테스트(#73 리뷰 W4), SIL OFL 1.1
 
+## 왕복 코퍼스 (`corpus.tsv`, #119)
+계획서 성공 기준 "테스트 PDF 200개 이상에서 열기·저장 왕복 후 깨지는 파일 0건" 을 위한 공개 PDF 모음. **파일은 커밋하지 않고**
+목록만 커밋한다 — `python3 testdata/gen/fetch_corpus.py` 가 `corpus/<source>/<name>` 으로 받는다(gitignore, 약 10 MB).
+`onpdf_corpus_tests` 가 파일마다 열기 → 안전 저장 → 다시 열기 비교(쪽 수·크기·첫 쪽 텍스트·렌더) → qpdf 검사를 돌고,
+파일이 없으면 SKIP(CI 는 `ONPDF_CORPUS_REQUIRED=1` 로 실패 처리).
+
+| 출처 | 라이선스 근거 | 선정 |
+|---|---|---|
+| `pdfium` — PDFium `testing/resources` | BSD-3-Clause(Google 작성 테스트 파일, `licenses/PDFium-LICENSE.txt`). 커밋 = `third_party/pdfium-version.txt` 와 같은 브랜치 | 70 |
+| `qpdf` — qpdf `qpdf/qtest/qpdf` | Apache-2.0(저자 작성 테스트 파일, `licenses/qpdf-LICENSE.txt`) | 80 |
+| `pdfjs` — pdf.js `test/pdfs` | Apache-2.0(`licenses/pdf.js-LICENSE.txt`). 저장소의 `test/pdfs/.gitignore` 가 `*.pdf` 를 막고 **재배포 가능한 파일만** `!` 로 허용하므로 저장소 안 파일만 쓴다(`.link` 파일 제외) | 80 |
+| `pdfbox` — Apache PDFBox `pdfbox/src/test/resources` | Apache-2.0(ASF 기여 규정, `licenses/PDFBox-LICENSE.txt`·`PDFBox-NOTICE.txt`) | 30 |
+
+저장소·커밋 SHA·라이선스는 `gen/fetch_corpus.py` 의 `SOURCES` 한 곳에 있고 파일마다 sha256 을 둔다(상류가 바뀌어도 같은 바이트).
+pdfcpu 테스트 자료는 제3자 저작물(ITU-T T.81·Adobe 정오표 등)이 섞여 있어 쓰지 않는다.
+
+**선정 규칙**(2026-11-27, 후보 2,206개 → 260개): 파일당 ≤ 3 MB, 출처별 상한 70/80/80/30, sha256 중복 제거, 암호를 아는 암호 파일 전부(30),
+열리지 않는 파일(`invalid`) 8, 특성 태그(`note` 열 — 암호 3종·손상·폼·XFA·주석·한글/CJK·세로쓰기·JBIG2/JPX/CCITT·Type3/CFF/CID·xref/객체 스트림·
+선형화·증분·PDF 2.0·투명도·셰이딩·패턴·서명·JavaScript·100쪽 이상)마다 3개 이상, 나머지는 해시 순으로 보충. 100쪽 이상은 공개 코퍼스에
+하나뿐이라(pdf.js `freeculture.pdf` 352쪽) 다쪽 검증은 저장소의 `large-1000.pdf` 가 맡는다.
+- **넣지 않는 것**: 문서는 열리지만 어떤 쪽을 못 여는 파일(저장 검증이 거절하므로 왕복 대상이 아님, `--probe` 가 `broken-page` 로 표시),
+  암호를 모르는 암호 파일, PDFium 이 처리하지 못하는 입력 — pdf.js `tiling-pattern-tiny-steps*.pdf`(XStep 0.001 렌더 폭탄: #121 뒤 앱은 그 쪽을
+  거부해 안전하지만 첫 쪽이 폭탄이라 왕복 테스트의 첫 쪽 렌더 비교가 안 된다 — 같은 구조의 `pattern-bomb.pdf` 가 거부를 검증한다)와
+  `jpx_numcomps.pdf`(PDFium JPX 디코더 CHECK 실패로 프로세스 종료 — 상류 버그. chromium/8152·8179 모두 재현(#125), 판을 올릴 때마다 다시 확인)
+- **qpdf-broken 태그**(7개): 원본부터 qpdf 가 오류로 거절하는 파일(PDFium 만 복구해 여는 손상 파일, qpdf 12 가 모르는 Brotli 필터, qpdf 가 못 여는
+  암호 설정). 저장본의 qpdf 오류는 우리 탓이 아니므로 참고만 하고, PDFium 다시 열기·비교까지는 통과해야 한다
+- **갱신**: PDFium 판을 올리면 `fetch_corpus.py --probe build/dev/bin/onpdf_cli` 로 `expect` 를 다시 맞춘다. 출처 커밋을 올리면 `SOURCES` 의 SHA 를 바꾸고
+  `--check` 가 알려 주는 파일의 sha256 을 다시 잰다. 목록 형식·중복·암호 누락은 스크립트가 실행 전에 거절(exit 2)하고 `CorpusList.IsWellFormed` 도 검사한다
+
 ## 갱신 절차
 ```bash
 python3 testdata/gen/make_all.py            # 생성 + README 표 갱신 (qpdf 있으면 AES 파일도)
 python3 testdata/gen/make_all.py --check    # CI: 커밋본과 바이트 비교
 python3 testdata/gen/fetch_pdfium_samples.py   # PDFium 샘플 다시 받기 (버전 올릴 때)
+python3 testdata/gen/fetch_corpus.py        # 왕복 코퍼스 받기 (--check 빠짐 보고, --list 요약, --probe <onpdf_cli> 기대값 실측)
 pip install fonttools brotli && python3 testdata/gen/fetch_font.py   # 한글 서브셋 폰트 갱신 (글자 추가 시)
 ONPDF_UPDATE_REFERENCES=1 ./build/dev/bin/onpdf_render_tests         # 렌더링 기준 PNG 갱신
 ```

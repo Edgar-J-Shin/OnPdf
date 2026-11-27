@@ -8,6 +8,7 @@
 
 #include "../test_support.h"
 #include "annotation_dialog.h"
+#include "dialog_helpers.h"
 #include "document_view.h"
 #include "main_window.h"
 #include "ui_dispatcher.h"
@@ -29,6 +30,7 @@ namespace {
 
 using onpdf::test::ScopedTempDir;
 using onpdf::test::testdata;
+using onpdf::test::when_dialog;
 
 template <class Pred>
 // 느린 CI 러너(Windows)에서 줄 수정·대화상자 테스트가 10초를 넘긴 적이 있다 (#105) → print_test
@@ -37,24 +39,14 @@ bool spin_until(Pred pred, int timeout_ms = 30000) {
   QElapsedTimer timer;
   timer.start();
   while (!pred()) {
-    if (timer.elapsed() > timeout_ms) return false;
+    if (timer.elapsed() > timeout_ms) {
+      ADD_FAILURE() << "timed out; open windows: "
+                    << onpdf::test::describe_open_windows().toStdString();  // #112 진단
+      return false;
+    }
     QApplication::processEvents(QEventLoop::AllEvents, 20);
   }
   return true;
-}
-
-// 모달 대화상자가 뜨면 처리한다 (objectName 으로 식별)
-template <class Fn>
-void when_dialog(const char* object_name, Fn fn) {
-  auto* poll = new QTimer();
-  poll->setInterval(10);
-  QObject::connect(poll, &QTimer::timeout, poll, [poll, object_name, fn] {
-    QWidget* w = QApplication::activeModalWidget();
-    if (w == nullptr || w->objectName() != QLatin1String(object_name)) return;
-    fn(w);
-    poll->deleteLater();
-  });
-  poll->start();
 }
 
 class TextToolTest : public ::testing::Test {
@@ -226,7 +218,7 @@ TEST_F(TextToolTest, MissingGlyphsAreRefusedWithWarning) {
   });
   click(view()->page_point_to_viewport(0, {100, 400}));
   ASSERT_TRUE(
-      spin_until([&] { return warned && idle() && QApplication::activeModalWidget() == nullptr; }));
+      spin_until([&] { return warned && idle() && onpdf::test::open_dialog_count() == 0; }));
   EXPECT_FALSE(window_.isWindowModified());
 }
 

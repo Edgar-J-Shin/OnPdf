@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(OnPdf
-  VERSION 0.5.3
+  VERSION 0.5.4
   DESCRIPTION "PDFium 기반 PDF 뷰어·편집기"
   LANGUAGES CXX)
 

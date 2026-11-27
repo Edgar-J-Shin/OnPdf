@@ -2,7 +2,7 @@
 
 PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편집기입니다.
 
-> 현재 단계: **v0.5.3** — [Releases](https://github.com/Edgar-J-Shin/OnPdf/releases) 에서 Windows 설치 파일·무설치 zip 과 macOS DMG(Apple Silicon·Intel, macOS 13 이상)를 받을 수 있습니다. v1.0 전에 코드 서명·공증이 남았습니다. 변경 내역은 [CHANGELOG.md](CHANGELOG.md) 를 참고하세요.
+> 현재 단계: **v0.5.4** — [Releases](https://github.com/Edgar-J-Shin/OnPdf/releases) 에서 Windows 설치 파일·무설치 zip 과 macOS DMG(Apple Silicon·Intel, macOS 13 이상)를 받을 수 있습니다. 계획한 기능은 모두 들어갔고(0.5.4: 악성 PDF 대응·왕복 코퍼스 260개), **v1.0** 은 코드 서명·공증과 실기기·타 뷰어 검증이 끝나면 냅니다(설정 화면·충돌 보고는 1.1). 변경 내역은 [CHANGELOG.md](CHANGELOG.md) 를 참고하세요.
 
 ## 목표
 
@@ -20,7 +20,7 @@ PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편
 | M2 | 주석, 페이지 조작(회전·삭제·재배열·병합·분할), 저장, 실행 취소 | v0.2 (완료) |
 | M3 | 텍스트·이미지 추가, 객체 편집, 폼 채우기, 폰트 임베딩 | v0.3 (완료) |
 | M4 | 기존 텍스트 줄 단위 수정, 서식 변경, 시스템 글꼴 대체, 폭 맞춤 | v0.5 (완료) |
-| M5 | 배포물 자동 생성, 다국어, 인쇄 미리보기, 자간 유지, Windows 설치기, macOS x64·13 (v0.5.3 완료) · 코드 서명·공증 | v1.0 |
+| M5 | 배포물 자동 생성, 다국어, 인쇄 미리보기, 자간 유지, Windows 설치기, macOS x64·13 (v0.5.3 완료) · 코드 서명·공증, 실기기 검증 → v1.0 · 설정 화면, 충돌 보고 → 1.1 | v1.0 |
 
 자세한 계획은 [pdf-editor-plan.md](pdf-editor-plan.md) 를 참고하세요.
 
@@ -37,7 +37,7 @@ PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편
 
 - **Windows x64**: `OnPdf-<버전>-windows-x64-setup.exe` 를 실행합니다(권장 — 관리자 권한 없이 사용자 폴더에 설치, 시작 메뉴·"연결 프로그램" 등록, 앱 및 기능에서 제거). 설치 없이 쓰려면 `OnPdf-<버전>-windows-x64.zip` 을 풀고 `onpdf_app.exe` 를 실행합니다. 코드 서명 인증서가 아직 없어 SmartScreen 경고가 뜨면 "추가 정보 → 실행" 을 누르세요. "PDF 파일을 OnPdf 로 열기" 를 켜도 Windows 가 기본 앱 확인을 요청할 수 있습니다(설정 → 앱 → 기본 앱).
 - **macOS 13 이상**: Apple Silicon 은 `OnPdf-<버전>-macos-arm64.dmg`, Intel Mac 은 `OnPdf-<버전>-macos-x64.dmg` 를 열어 `OnPdf.app` 을 응용 프로그램 폴더로 끌어 놓습니다. 공증 전 빌드는 처음 한 번 Control-클릭 → "열기" 가 필요합니다.
-- 내려받은 파일은 같은 릴리스의 `SHA256SUMS.txt` 로 확인할 수 있습니다.
+- 내려받은 파일은 같은 릴리스의 `SHA256SUMS.txt` 로 확인할 수 있습니다. 코드 서명·공증은 인증서가 준비되면 켭니다([docs/signing.md](docs/signing.md)).
 
 ## 빌드
 
@@ -45,6 +45,7 @@ PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편
 # 사전 준비: cmake ≥ 3.25, ninja, vcpkg (full clone) + export VCPKG_ROOT=<vcpkg 경로>
 python3 third_party/fetch_pdfium.py          # PDFium 바이너리 다운로드 (third_party/pdfium/<platform>/)
 python3 third_party/fetch_fonts.py           # 번들 글꼴 Noto Sans KR 다운로드 (third_party/fonts/, 텍스트 추가 도구)
+python3 testdata/gen/fetch_corpus.py         # 왕복 테스트 코퍼스 260개 다운로드 (testdata/corpus/, 선택 — 없으면 해당 테스트는 건너뜀)
 cmake --preset dev
 cmake --build --preset dev
 ctest --preset dev
@@ -65,7 +66,7 @@ cli/          렌더·병합·검증용 명령줄 도구
 tests/        단위 테스트, 렌더링 회귀 테스트
 testdata/     테스트 PDF (라이선스가 명확한 파일만)
 third_party/  PDFium 바이너리 다운로드 스크립트
-docs/         설계 문서, 기여 가이드
+docs/         설계 문서, 기여 가이드, 서명·공증 설정(signing.md)
 ```
 
 ## 기여

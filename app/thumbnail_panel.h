@@ -56,6 +56,8 @@ class ThumbnailPanel : public QWidget {
 
   // 델리게이트용: 쪽 썸네일 (없으면 null QImage)
   [[nodiscard]] QImage thumbnail(int page) const;
+  // 렌더가 거부된 쪽(kRenderRefused, #121): 썸네일 대신 "표시 불가" 안내
+  [[nodiscard]] bool is_refused(int page) const { return refused_.contains(page); }
   [[nodiscard]] int thumb_width() const noexcept { return thumb_width_; }
   [[nodiscard]] QSize thumb_size(int page) const;  // 논리 픽셀
 
@@ -112,6 +114,7 @@ class ThumbnailPanel : public QWidget {
   QCache<int, Entry> cache_;
   std::unordered_map<int, Pending> pending_;
   std::unordered_set<int> failed_;
+  std::unordered_set<int> refused_;  // 렌더 거부 쪽 (#121), failed_ 와 같이 비운다
   int generation_ = 0;
   std::uint64_t next_serial_ = 0;
   int requested_total_ = 0;

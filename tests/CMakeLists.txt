@@ -56,6 +56,7 @@ onpdf_add_test(onpdf_unit_tests
   unit/form_commands_test.cpp
   unit/page_ranges_test.cpp
   unit/qpdf_tools_test.cpp
+  unit/render_hazard_test.cpp
   unit/save_test.cpp
   unit/fs_sync_test.cpp
 )
@@ -77,6 +78,13 @@ onpdf_add_test(onpdf_roundtrip_tests
 )
 target_compile_definitions(onpdf_roundtrip_tests PRIVATE ONPDF_TEST_GLOBAL_PDFIUM=1)
 target_link_libraries(onpdf_roundtrip_tests PRIVATE onpdf::edit)
+
+# 코퍼스 왕복 (#119): testdata/corpus.tsv 의 공개 PDF — 파일은 fetch_corpus.py 로 받고 없으면 SKIP
+onpdf_add_test(onpdf_corpus_tests
+  roundtrip/corpus_test.cpp
+)
+target_compile_definitions(onpdf_corpus_tests PRIVATE ONPDF_TEST_GLOBAL_PDFIUM=1)
+set_tests_properties(onpdf_corpus_tests PROPERTIES TIMEOUT 900 LABELS corpus)
 
 onpdf_add_test(onpdf_worker_tests
   unit/pdfium_worker_test.cpp
@@ -102,6 +110,7 @@ if(ONPDF_BUILD_APP)
     app/text_line_tool_test.cpp
     app/image_tool_test.cpp
     app/form_tool_test.cpp
+    app/stall_test.cpp
   )
   target_link_libraries(onpdf_app_tests PRIVATE onpdf_app_lib)
   set_tests_properties(onpdf_app_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

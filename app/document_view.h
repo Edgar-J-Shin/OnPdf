@@ -30,6 +30,7 @@
 #include <QRegion>
 #include <QString>
 #include <QTimer>
+#include <map>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -203,6 +204,8 @@ class DocumentView : public QAbstractScrollArea {
 
   [[nodiscard]] view::TileCache::Stats cache_stats() const { return cache_.stats(); }
   [[nodiscard]] std::vector<view::TileKey> cache_keys() const { return cache_.keys(); }
+  // 렌더가 거부된 쪽(kRenderRefused, #121)과 사유 — 쪽 자리에 안내를 그리고 다시 요청하지 않는다
+  [[nodiscard]] const std::map<int, QString>& refused_pages() const { return refused_; }
   [[nodiscard]] view::TileScheduler::Stats scheduler_stats() const;
   [[nodiscard]] int pending_visible_tiles() const;
 
@@ -215,6 +218,8 @@ class DocumentView : public QAbstractScrollArea {
   // 보이는 타일이 전부 도착한 최초 시점 (문서마다 한 번). 스크린샷·테스트용
   void first_view_rendered();
   void tiles_changed();  // 타일이 캐시에 들어왔다 (통계 갱신용, 자주 온다)
+  void page_refused(int page, const QString& reason);  // 쪽 렌더 거부 (#121, 쪽마다 처음 한 번)
+  void tool_blocked(int page);  // 거부된 쪽에 주석·텍스트·이미지를 넣으려 했다 (#121) — 안내용
   void selection_changed(bool has_selection);
   void text_index_ready(int page);
   void link_activated(const onpdf::view::Link& link);  // 안전 검사 전. 수신자가 is_safe_uri 로 판단
@@ -346,6 +351,8 @@ class DocumentView : public QAbstractScrollArea {
   bool first_view_pending_ = false;
   QString placeholder_;
   QTimer resize_timer_;
+  std::map<int, QString> refused_;  // 렌더 거부 쪽 → 사유 (#121)
+  void on_tile_refused(int page, const QString& reason);
 
   // 텍스트 인덱스·선택 (메인 스레드 전용)
   engine::DocumentHandle handle_;

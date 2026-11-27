@@ -1,0 +1,267 @@
+# 왕복 테스트 코퍼스 (#119). 파일은 testdata/gen/fetch_corpus.py 가 testdata/corpus/<source>/<name> 으로 받는다 (gitignore).
+# 열: name(파일 이름) source(pdfium|qpdf|pdfjs|pdfbox — 저장소·커밋·라이선스는 fetch_corpus.py SOURCES) path(출처 안 경로)
+#     sha256 size expect(ok|password|invalid — PDFium 실측) password(expect=password 의 사용자 암호) note(특성 태그)
+# 태그: enc-rc4 enc-aesv2 enc-aesv3 xfa form annots jbig2 jpx ccitt dct smask type3 cff truetype type1 cid vertical cjk korean
+#       xref-stream objstm linearized incremental pdf20 transparency shading pattern signed javascript outline multi-contents
+#       inline-image rotate pages-100+ pages-1000+ qpdf-broken(원본부터 qpdf 가 오류로 거절 — 저장본의 qpdf 검사는 참고만)
+name	source	path	sha256	size	expect	password	note
+actual_text_rtl.pdf	pdfium	testing/resources/actual_text_rtl.pdf	91d250a295167ec7ed84fbe290262971b5ca7fe1af64692a2a7faed09725c713	7880	ok		truetype
+annotation_highlight_long_content.pdf	pdfium	testing/resources/annotation_highlight_long_content.pdf	715d8a4fcb7de3fec3cbb34999ec431b0ea02ab1c1e2d2dca562e8aab21637c2	38455	ok		annots cid truetype
+annotation_highlight_rollover_ap.pdf	pdfium	testing/resources/annotation_highlight_rollover_ap.pdf	29b02e824ca4a2313ba3d7e516e3503dfddf08f1d6d492dd8890e8584ed53d07	1180	ok		annots
+bad_annots_entry.pdf	pdfium	testing/resources/bad_annots_entry.pdf	d7459617570e58458275d88622ec3b5afbb0623de2b8c54bfc5b026791ceb2bd	826	ok		annots form
+bookmarks_circular.pdf	pdfium	testing/resources/bookmarks_circular.pdf	823d93ca64c41e79da176f03a5f583bc0ad667014c96f3b8e3bb36460b33dfb7	1647	ok		multi-contents outline
+bookmarks_style.pdf	pdfium	testing/resources/bookmarks_style.pdf	91a1bc76c0a68625a3a5033b9cd7de646e0db1b55db1fa83c5f0150de8b73ad1	1887	ok		incremental multi-contents outline
+bug_1124998.pdf	pdfium	testing/resources/bug_1124998.pdf	74e83bda1575454b51213d7bb4c16a73d91b8fbe21807bbc36a14fccdb8e7c3b	3018	password	test	enc-rc4
+bug_1229106.pdf	pdfium	testing/resources/bug_1229106.pdf	c5f7b7246ff404f19a4b5d864df2b45e3c108eeb004e1b19d38dd0f0613fbb57	967	ok		rotate
+bug_1302355.pdf	pdfium	testing/resources/bug_1302355.pdf	b2bacd2ac3998b1dcad9d46fb556523177d1421d866081e983f122d4843252b7	883	ok		smask transparency
+bug_1327884.pdf	pdfium	testing/resources/bug_1327884.pdf	c0d5899ea68e44e398b4318da8ab23b7fabede3266beef8b3485760a45641859	255	ok		form qpdf-broken xfa
+bug_1396264.pdf	pdfium	testing/resources/bug_1396264.pdf	a92ba79a4ea6d22a3251d99a0a38d31ca2ffefabb2736ee7778cb958009226bf	2291	ok		jpx
+bug_1506.pdf	pdfium	testing/resources/bug_1506.pdf	c824ec1fac520a20dafa15eafe33912053603bf1bc18111b490b0ae3300e7c4b	814	ok		
+bug_1549.pdf	pdfium	testing/resources/bug_1549.pdf	dad2130b631ee41936088b7010a67252249a98fe1e404ba14f5e323e84aed69c	886	ok		
+bug_1919.pdf	pdfium	testing/resources/bug_1919.pdf	87138cf976641a4dacfa332d676b35591e42a912e205a8081d49a18b4c033f9d	9554	ok		cid truetype
+bug_2132.pdf	pdfium	testing/resources/bug_2132.pdf	c8d8b249bc517a215cd95d0164ae725e5e2faa368cd3f729bb06e3262fdb9316	844	ok		
+bug_325_a.pdf	pdfium	testing/resources/bug_325_a.pdf	d1adcf2f51e1507bc097b0c4c567fb7d1d19ff3e5d8119ef20b81cb66e75a52a	82	invalid		
+bug_325_b.pdf	pdfium	testing/resources/bug_325_b.pdf	d43c23df03873d0d7b74ae5b28ee76d7f10cf6c19e1cf0b72ab76a056dc18894	89	invalid		
+bug_399689604.pdf	pdfium	testing/resources/bug_399689604.pdf	a7d8c7eeb189a67b1b79f644df0ca079cf0fbbbbfc80d60bfda524275a4cef00	693	ok		
+bug_40162073.pdf	pdfium	testing/resources/bug_40162073.pdf	ccd85c89bc46702376e67ee2f20105889b1ddfa5ad022736297d4d77edfebe41	967	ok		
+bug_402562387.pdf	pdfium	testing/resources/bug_402562387.pdf	2d951893fd683755ac86ec8a532d5cb28a8ecc2677a1b0731141d7d9fb8d743d	19002	ok		cid truetype vertical
+bug_410996566.pdf	pdfium	testing/resources/bug_410996566.pdf	6d2758367a86df5e12453aeea10d1f82fd99493d05e7cdfe977cb8deb5a5ab4a	843	ok		
+bug_425244539.pdf	pdfium	testing/resources/bug_425244539.pdf	3551e44d1a92eba05d7560df74fb7efd10daa9d974aea34a7bf98cf81739aca1	703	ok		
+bug_444176962.pdf	pdfium	testing/resources/bug_444176962.pdf	5edfd9e85789ded671766a5cce28df98dd7af13ba86b3ee4db35545c228ab0c7	13996	ok		cid truetype
+bug_461845674.pdf	pdfium	testing/resources/bug_461845674.pdf	f5fd07e0dc6ded517b4abb990b8609787dbc80b54cc5509fcb94a6dcfd5c1405	479	ok		
+bug_481363.pdf	pdfium	testing/resources/bug_481363.pdf	fb75bba63b51c379aa6bd21c964f1ea657c686ea3f938d8f1b7fa80646dbc5ec	821	ok		multi-contents qpdf-broken
+bug_547706.pdf	pdfium	testing/resources/bug_547706.pdf	abc6c86a1d5e659837a8ff853f57a6c6fe2e17d2ed9d1c042febcdc1df547f61	678	ok		pattern shading
+bug_551460.pdf	pdfium	testing/resources/bug_551460.pdf	b2ce99e372e6733a4fecc4f3c80184cfb92b5b62df1ca19f2e7977ca65978f8b	941	ok		shading
+bug_552046.pdf	pdfium	testing/resources/bug_552046.pdf	d3f14d487eed7cc18528c372f4198a4d20959d646837fbace2c01271320b241d	746	ok		dct jbig2
+bug_644.pdf	pdfium	testing/resources/bug_644.pdf	66d59c2a26a86e2c1f11296aad6224d9a2afd2ccab3a9409fa035b58cc1613d9	1119	password	a	enc-aesv3
+bug_709793.pdf	pdfium	testing/resources/bug_709793.pdf	5071c795264162e26f5efc73a6a7f1816625dc7e8ffbb967976c2c56deb0876e	429	ok		form qpdf-broken xfa
+bug_896366.pdf	pdfium	testing/resources/bug_896366.pdf	c7241e79df14daa4051bb19e3a571832be47bd8e2aee841b4a8339842657a987	874	ok		annots form multi-contents
+bug_901654_2.pdf	pdfium	testing/resources/bug_901654_2.pdf	0735a874d9a267901a0eb5eb1671385419cdf4bad5c4b0adb1b82a1dc6bdbf14	1150	ok		annots javascript pattern
+bug_905142.pdf	pdfium	testing/resources/bug_905142.pdf	c55f401a382a77d4dd0fb4b17e2804741125fa60db03aaa186037f299adc9ac2	475	ok		multi-contents
+bug_xrefv4_loop.pdf	pdfium	testing/resources/bug_xrefv4_loop.pdf	fd7c7174ed00dd18dec996dfffeacbb3524632c02f406c05d8fc560cb87c2c28	445	ok		incremental
+circular_viewer_ref.pdf	pdfium	testing/resources/circular_viewer_ref.pdf	1ad0435f05931f6046129ac8c6fac8c22b8163675f20bd2d3407236b4ff1baec	513	ok		javascript qpdf-broken
+docmdp.pdf	pdfium	testing/resources/docmdp.pdf	43c95566197a9c7855d8461cfbf27878a756e3442d2043249ad08c72163d4ef0	1262	ok		annots form signed
+embedded_images.pdf	pdfium	testing/resources/embedded_images.pdf	13e3286f1fa7af8e762eaf013ef3f7ab4822776062fcec9a12c3f34aeb8982c2	34279	ok		dct incremental objstm transparency xref-stream
+empty_xref.pdf	pdfium	testing/resources/empty_xref.pdf	e2b954b03b4c971bfee4e5d79712b2f32d13b54536799d0d0256d5fd13b79b9a	852	ok		incremental
+encrypted.pdf	pdfium	testing/resources/encrypted.pdf	cbbead7185d9cd46daecaf60165a9aa7b9f2daceb3623218c328cb015ae862d5	10564	password	1234	enc-aesv2 incremental linearized objstm outline xref-stream
+encrypted_hello_world_r2.pdf	pdfium	testing/resources/encrypted_hello_world_r2.pdf	267945749086981b8727c4931cfc8a24973c3aa5819ea8a392fa8bd0d637ee84	1021	password	hôtel	enc-r2 enc-rc4
+encrypted_hello_world_r3.pdf	pdfium	testing/resources/encrypted_hello_world_r3.pdf	cdbfd4f6728786dc70c7514bd5c669a38b03bba38be3e91ec46ccb02168b9ad3	1033	password	hôtel	enc-rc4
+encrypted_hello_world_r5.pdf	pdfium	testing/resources/encrypted_hello_world_r5.pdf	9f2bdfbbd675fcaa40e89240f4f66be81621afa33114d24e8f568fb727ad37d9	1496	password	hôtel	enc-aesv3
+encrypted_hello_world_r6.pdf	pdfium	testing/resources/encrypted_hello_world_r6.pdf	a5bcee67d2731547d8e6956cbb0d41eddeef4ca80c378c9dba8bc97961ece064	1496	password	hôtel	enc-aesv3
+form_object.pdf	pdfium	testing/resources/form_object.pdf	79f2428856af7770beba42d1fd7d8a8991b6bc2350a09511c855435287d30c90	930	ok		
+hello_world_2_pages.pdf	pdfium	testing/resources/hello_world_2_pages.pdf	67431cbec27df7cc86a57da5ff11b5151628fa93f661da79b9d272ec85bcdb03	962	ok		
+hello_world_2_pages_custom_object.pdf	pdfium	testing/resources/hello_world_2_pages_custom_object.pdf	56fb5e5de75ff23e2c54fcc6f39afd252bd81eb56d01ff06cc2b041096f08ada	983	ok		
+hello_world_pieceinfo.pdf	pdfium	testing/resources/hello_world_pieceinfo.pdf	6176b56b9ef027b584a113dec7aece2c14b9454c8ebc25d41cee0909eaa1bca0	1414	ok		
+hello_world_split_streams.pdf	pdfium	testing/resources/hello_world_split_streams.pdf	a57940391f8716970e9f4cfb7dfed5eaa4e942307e1a5bcf467516197e648da4	922	ok		multi-contents
+image_clipped.pdf	pdfium	testing/resources/image_clipped.pdf	50ff5c58392666b15cb456c3f148e7a866a6d9571c6b0547bc1b9e29b6c51c07	849	ok		
+ink_annot.pdf	pdfium	testing/resources/ink_annot.pdf	4295fb9a1f72274deadef94d85b84a5d96350a977b88d302bbd4ea9569d4d0e6	780	ok		annots
+bug_1238_2.pdf	pdfium	testing/resources/javascript/xfa_specific/bug_1238_2.pdf	a0cddc52f8ef2a89da59b60835df0397619f66f31be74f00f41097d5fedfecea	280	ok		form qpdf-broken xfa
+jpeg_reduced_size_with_smask.pdf	pdfium	testing/resources/jpeg_reduced_size_with_smask.pdf	c2b8a22dcf86d6673612a4b299696e141f7f166ec63e4f100803e56d831a25d2	40091	ok		dct smask transparency
+jpx_lzw.pdf	pdfium	testing/resources/jpx_lzw.pdf	ba14897a4139944e56674fefe176a56f29326e69ff2baf3e07ba096b520def78	1152	ok		jpx
+page_tree_empty_node.pdf	pdfium	testing/resources/page_tree_empty_node.pdf	d7f5e57cbf9d5b9a53a5d69b88f8f22f557a5ae8aa5b0c59f6e7cad7b4637009	620	ok		
+pattern_fill.pdf	pdfium	testing/resources/pattern_fill.pdf	3bbf73927184121d25923b9b3ea34d38c74b7d5f392afaa53401eb2920fd4574	754	ok		pattern
+pattern_stroke_uncolored.pdf	pdfium	testing/resources/pattern_stroke_uncolored.pdf	50ed3acaba1ddf55d81e5a23e64f6d3650e72e567aecd5a8f1bfef4dde9c7aa0	828	ok		pattern
+pdf20_minimal.pdf	pdfium	testing/resources/pdf20_minimal.pdf	5019b5a1d3a940078e135a8a70a0ecc16531d6a5ae67e1eb8404fb2e5dce319b	355	ok		pdf20
+bug_1087.pdf	pdfium	testing/resources/pixel/bug_1087.pdf	a24951ea5e43acf322c63d4127d065a92dccdf6c172391d8138dc5d796d009de	1574	ok		ccitt jbig2 outline
+bug_304.pdf	pdfium	testing/resources/pixel/bug_304.pdf	da4593af8d44bbee8644d40fe3b1fbffe3713005cb8eafe9c319669d0633fa4e	2270	ok		jpx
+bug_349972030.pdf	pdfium	testing/resources/pixel/bug_349972030.pdf	0f7372718f60bbee4b76d38337745c4a9edbe27bdd82f25162e7b7d26557b67c	1063	ok		incremental xref-stream
+bug_867501.pdf	pdfium	testing/resources/pixel/bug_867501.pdf	ff486f50427fe0f92a26b132933959d2a5019852c23df375a431b32160e239fd	771	ok		jbig2 outline
+polygon_annot.pdf	pdfium	testing/resources/polygon_annot.pdf	0976a9d0aa02766ca06ebd98aa8dd3f13498feb8f88a52f9d7cf7a27f1b176bc	794	ok		annots
+rectangles_double_flipped.pdf	pdfium	testing/resources/rectangles_double_flipped.pdf	7363b528b1b1f039463d851cdc762f5067db1fa864a4ee782f595baf78b60dd8	661	ok		
+repeat_viewer_ref.pdf	pdfium	testing/resources/repeat_viewer_ref.pdf	42b6e30b3505e67adab510f10f083180b31d15e8fb853d1db726ff29f0aa19e9	539	ok		javascript qpdf-broken
+rotated_image.pdf	pdfium	testing/resources/rotated_image.pdf	f6075428fdfb0335e267299c755ff4c00cc5133cb062a90432fa4215dca11b0b	831	ok		
+signature_no_sub_filter.pdf	pdfium	testing/resources/signature_no_sub_filter.pdf	56c320f6c080a464225c9093e93503717763d3f98287253b69f0004b3c7b6c72	1701	ok		annots form signed
+signature_reason.pdf	pdfium	testing/resources/signature_reason.pdf	b22caeb7446eecffa019cd6514968be2091a1fe63baa685b381770757483d71c	1764	ok		annots form signed
+simple_xfa.pdf	pdfium	testing/resources/simple_xfa.pdf	82e0af732b472b023b3c50940cac0d76b6a84c25dab2b4a8de79fd0a6b7cdb89	5801	ok		form xfa
+tagged_expansion.pdf	pdfium	testing/resources/tagged_expansion.pdf	16e3c0a42cc91a02f30b93752ce2d70ec586a48c4ab22bab15883d3d96fb75d8	1248	ok		
+text_form_color.pdf	pdfium	testing/resources/text_form_color.pdf	d6d2306279ab09959dc13352142352b2300856247c151831f1c6d275c662d65a	765	ok		annots form
+20-pages.pdf	qpdf	qpdf/qtest/qpdf/20-pages.pdf	4ea66d0e98525a5df9a766313e058bc3bfa2d28fe30a740d4cd8fe76d3dca391	7343	password	user	enc-rc4
+appearances-a-more2.pdf	qpdf	qpdf/qtest/qpdf/appearances-a-more2.pdf	c185e401fee8a4963c098fbb0daaf836befa2dcaa9df453403d7292d3517cf76	62658	ok		annots multi-contents transparency truetype
+bad1.pdf	qpdf	qpdf/qtest/qpdf/bad1.pdf	fe19778cf1ce280658154f2b9c01ffbccd825a23460141dcf3794e7a2c0eb629	5	invalid		
+bad14.pdf	qpdf	qpdf/qtest/qpdf/bad14.pdf	7a1766a1d39d4d7908a4b72347f07b161c5c785061a53f4f844e9d0b7d6be2a9	778	ok		
+bad18.pdf	qpdf	qpdf/qtest/qpdf/bad18.pdf	7ecd13b266de37e9a4d38da4452ba5e35965e967b41456f260a2438934956f58	778	ok		
+bad2.pdf	qpdf	qpdf/qtest/qpdf/bad2.pdf	d6da0e060cc07e888e20f0640953e0f96435cf9345f21bb96e21715dd96880bc	747	ok		
+bad40.pdf	qpdf	qpdf/qtest/qpdf/bad40.pdf	6fd5c3e66fc2fabc8e9c108d7d89dc5da9540b51ff517cd9c8c7f1007a3f09ae	788	ok		objstm xref-stream
+button-set-broken-out.pdf	qpdf	qpdf/qtest/qpdf/button-set-broken-out.pdf	ca11263c97aca17d4dfb63964a45c91c9f746e4298358ab43e2d0349f7e56eeb	71730	ok		annots form transparency truetype
+c-decrypt-R5-with-user.pdf	qpdf	qpdf/qtest/qpdf/c-decrypt-R5-with-user.pdf	b338cd6995a9994b1ca07f7bcc4a5e3c4538a6d174daabbd3db30c01eb2c11e6	9731	ok		objstm outline xref-stream
+c-r5-in.pdf	qpdf	qpdf/qtest/qpdf/c-r5-in.pdf	19b6a33008141e1e898e1fac6e86524de0e8cd0c4643fdb01a1eb781e5cd8187	11206	password	user3	enc-aesv3 objstm outline xref-stream
+coalesce-out.pdf	qpdf	qpdf/qtest/qpdf/coalesce-out.pdf	ac512a571d630b760b72b25dc3e6a64c888414aa3d5648b62c667734c7bdb753	2951	ok		inline-image
+coalesce.pdf	qpdf	qpdf/qtest/qpdf/coalesce.pdf	5fc12a29d9a755527333946900027008c954b8877da7c19cc32c0ce625f95386	3769	ok		inline-image multi-contents
+collate-even.pdf	qpdf	qpdf/qtest/qpdf/collate-even.pdf	125a206c03dbe16442715a6d2f4dcf5c81e20dfce37a188a3891e316130abbc5	7763	ok		incremental outline
+comment-annotation.pdf	qpdf	qpdf/qtest/qpdf/comment-annotation.pdf	4f89157ac66611d20d91e50fe67e0befcef825fdca4bdaac1ec94bb4c3e0c99c	2842	ok		annots transparency
+content-stream-errors.pdf	qpdf	qpdf/qtest/qpdf/content-stream-errors.pdf	19bd84be7fb78a9b30836c3eb3714aa695b84f050cb2a7e6b766d2a46dfd57f5	2889	ok		inline-image
+damaged-inline-image-out.pdf	qpdf	qpdf/qtest/qpdf/damaged-inline-image-out.pdf	f3c4f8f03e530e200eb9ae00f0793b8fe670d1494e8a5e675234416deec127f7	5558	ok		dct inline-image
+damaged-inline-image.pdf	qpdf	qpdf/qtest/qpdf/damaged-inline-image.pdf	18dae3c4253d30e262da786e7d238305dc2046f1c94d2b566d5589336106084c	5558	ok		inline-image
+default-da-q-out.pdf	qpdf	qpdf/qtest/qpdf/default-da-q-out.pdf	cd77380828f0c0a8e44ad94629f3376f3b97c6cf61964b61cb8083cd7f8cd7df	19840	ok		annots form
+dupkeys.pdf	qpdf	qpdf/qtest/qpdf/dupkeys.pdf	a57e0925ac8f086b80f34ec798604069a5bd57b3b7aca8bd7ce4fab3f6f4d127	1426	ok		
+duplicate-pages.pdf	qpdf	qpdf/qtest/qpdf/duplicate-pages.pdf	c7152ce677a542c38aeaad08fa8ce4b0a098ed15de17eace49bf1ff612b7dee5	3778	ok		
+enc-R2_V1_U_view_O_master.pdf	qpdf	qpdf/qtest/qpdf/enc-R2,V1,U=view,O=master.pdf	cbd0396c5af37a326cc829b3a031223accf5ea093119eaaa78bf4a386108ed14	17134	password	view	enc-r2 enc-rc4 incremental linearized outline
+enc-R2_V1_U_view_O_view.pdf	qpdf	qpdf/qtest/qpdf/enc-R2,V1,U=view,O=view.pdf	20de346659f289187e413fabdc3056fd7fb1e2d0862b8dbb19ba4dc10c411f8e	17137	password	view	enc-r2 enc-rc4 incremental linearized outline
+enc-R3_V2_U_view_O_master.pdf	qpdf	qpdf/qtest/qpdf/enc-R3,V2,U=view,O=master.pdf	5c0683d687e2e020fe172b1dcb7c29fe94f67bc40f038fee2391de610053fc16	17139	password	view	enc-rc4 incremental linearized outline
+enc-R3_V2_U_view_O_view.pdf	qpdf	qpdf/qtest/qpdf/enc-R3,V2,U=view,O=view.pdf	b2c0328654260a8b892c1f7c7c69c2af3e41850af880aa189cdc60625e5e5091	17142	password	view	enc-rc4 incremental linearized outline
+enc-XI-R6_V5_U_view_O_master.pdf	qpdf	qpdf/qtest/qpdf/enc-XI-R6,V5,U=view,O=master.pdf	96b9262bfacf1358c7a68ab46c11563677e858888950237fdac8f3a227210edf	15670	password	view	enc-aesv3 incremental linearized objstm outline xref-stream
+enc-XI-R6_V5_U_view_attachments_cleartext-metadata.pdf	qpdf	qpdf/qtest/qpdf/enc-XI-R6,V5,U=view,attachments,cleartext-metadata.pdf	d0d7d6d37a4c1e551dabb45532b3b077d973cf8f84ac04d865fd9a5e5fca1d68	22400	password	view	enc-aesv3 incremental linearized objstm outline xref-stream
+enc-XI-R6_V5_U_wwwww_O_wwwww.pdf	qpdf	qpdf/qtest/qpdf/enc-XI-R6,V5,U=wwwww,O=wwwww.pdf	94ce7ecade61858c0c0cf8b20b92fdf639550a50aa5a1b6bde767d713544e376	13642	password	wwwww	enc-aesv3 objstm outline vertical xref-stream
+encrypted-40-bit-R3.pdf	qpdf	qpdf/qtest/qpdf/encrypted-40-bit-R3.pdf	221b17165d2c807500165c7890f6f8f355b6cf62ecdb430d9bae71cec17b8369	1041	password	623	enc-rc4
+extract-duplicate-page.pdf	qpdf	qpdf/qtest/qpdf/extract-duplicate-page.pdf	7407b6e706dd85f03e96d535f2c60404df34fcce598e2294d4fe073ab75f35a5	1370	ok		
+form-xobjects-no-resources-out.pdf	qpdf	qpdf/qtest/qpdf/form-xobjects-no-resources-out.pdf	8dd2d936243cc309cbe8cde8c3a9c51e725a7fef0c40c851d38e4579b47fdea1	2664	ok		
+form-xobjects-some-resources1-out.pdf	qpdf	qpdf/qtest/qpdf/form-xobjects-some-resources1-out.pdf	f02fa7f2f698864f82075da78010405ef01f7585cacc56962921c0b82dd1a4e3	2775	ok		
+fx-overlay-67.pdf	qpdf	qpdf/qtest/qpdf/fx-overlay-67.pdf	ea94edc63c81f99427ae7485ba9fce71595d6f2eccc0c0561d8c4d1a6d9229f2	4150	ok		multi-contents
+fxo-blue.pdf	qpdf	qpdf/qtest/qpdf/fxo-blue.pdf	cb64c7ae1daa92584ccfacc195b7b1f07012673eb95cafa93dbf98febb2751e5	8823	ok		rotate
+gen1-no-dangling.pdf	qpdf	qpdf/qtest/qpdf/gen1-no-dangling.pdf	eb40e12cc16977a4f6cf740750ef85252fded0295f18f088eb853ad5362f0197	1758	ok		incremental
+good17-not-recompressed.pdf	qpdf	qpdf/qtest/qpdf/good17-not-recompressed.pdf	614d0e7d2720b60148411ac5f5b8ea1f42f19e73541003f168e4fcf9468307ce	10621	ok		incremental objstm outline xref-stream
+good20.pdf	qpdf	qpdf/qtest/qpdf/good20.pdf	2eb4ad5a0f817088fbcca7471c31aa4ea596082c7edd6d65a41d15546e8cb39c	10276	ok		
+good22.pdf	qpdf	qpdf/qtest/qpdf/good22.pdf	af0739ba719d9d5abb1cb01fc28b7585e65ffe08508ff3c389d5da3e8f11e74c	1013	ok		
+issue-141a.pdf	qpdf	qpdf/qtest/qpdf/issue-141a.pdf	f8f3e84b5d972d1c2e60f990d3b1750f44e7d89349ab4425bcf405556c0cd7ac	82	invalid		xref-stream
+issue-141b.pdf	qpdf	qpdf/qtest/qpdf/issue-141b.pdf	d6a1f1c25ef065bb3a097202631ad25639d1451f03e912446e70a560ce07f41c	92	invalid		xref-stream
+issue-147.pdf	qpdf	qpdf/qtest/qpdf/issue-147.pdf	f0193ccdceca0c7239b7e537878992233e26f1fd843b4a749bfd9334f96cb98f	91	invalid		enc-rc4
+issue-148.pdf	qpdf	qpdf/qtest/qpdf/issue-148.pdf	6d080d53f34b9f9b1f9d1c3bd11fc66a5fa89697749163b32591ea967bce1d49	87	invalid		xref-stream
+issue-335b.pdf	qpdf	qpdf/qtest/qpdf/issue-335b.pdf	d83d74e13a5c58cd20bdf17532d37b5169ae85242a715ea68b61402e4b58603f	23	invalid		
+job-json-choice-match.pdf	qpdf	qpdf/qtest/qpdf/job-json-choice-match.pdf	f95a5c811ebaae5c8456f9433fdaacd213a97a06b591fcd640eb94c477a929a7	743	ok		objstm xref-stream
+job-json-encrypt-128.pdf	qpdf	qpdf/qtest/qpdf/job-json-encrypt-128.pdf	131f947e425e445ff8aa30d39141933566cd3f2adb465b2c00d839ebb5a946e6	7439	password	u	enc-aesv2 rotate
+job-json-encrypt-40.pdf	qpdf	qpdf/qtest/qpdf/job-json-encrypt-40.pdf	afac9a7728e9d248b5e326b7041d0f7bb2fcfa1c94c8314e834fcc39ae5d20c6	1040	password	u	enc-r2 enc-rc4
+jpeg-qstream.pdf	qpdf	qpdf/qtest/qpdf/jpeg-qstream.pdf	fa6ca002dea3e7104f86952b087cca743dfc0c20a7f5fd8f17a02394c3696888	1156	ok		dct
+kept-no-fields.pdf	qpdf	qpdf/qtest/qpdf/kept-no-fields.pdf	21f32ad0588d656a41a228af8e78f0162a66c5a82b74f537a2fd576f2c468a62	1269	ok		
+kept-some-fields.pdf	qpdf	qpdf/qtest/qpdf/kept-some-fields.pdf	f014f2495e53cc63016f80ce411ca0d3e09d6a357e532632a6626ce327ee493d	7787	ok		annots form
+labels-split-01-06.pdf	qpdf	qpdf/qtest/qpdf/labels-split-01-06.pdf	bf4daeb3720ed7b046afe03d68129c74deaec3e3caf5e0ffb37a4b831a1fd42a	3714	ok		
+lin-special.pdf	qpdf	qpdf/qtest/qpdf/lin-special.pdf	ab608a23b94ffa330ce9b5f7a080abd0e347f83e6ae3491455e4414ff02bb57c	4490	ok		rotate
+lin2.pdf	qpdf	qpdf/qtest/qpdf/lin2.pdf	6280532d918027d9aacbaa4691110ef105933dce36dc636521c815f29ff13c27	13103	ok		incremental linearized outline
+lin4.pdf	qpdf	qpdf/qtest/qpdf/lin4.pdf	573af46ffd2e0257b8d8b52f4b5d41a44fc0ebe53ab0e6edc5c07b8b24827673	13055	ok		incremental linearized outline
+linearization-nshared-total.pdf	qpdf	qpdf/qtest/qpdf/linearization-nshared-total.pdf	aefd1258eea5980c3e97cdc5cbe0cb54ae85b2e8eea9682554ab49926867e143	13103	ok		incremental linearized outline
+linearized-and-warnings.pdf	qpdf	qpdf/qtest/qpdf/linearized-and-warnings.pdf	b508fc8ccd59c943c43a326a03d27b77f81e9922ea4239924ec1b35b0f06e293	1310	ok		incremental linearized
+minimal-rotated.pdf	qpdf	qpdf/qtest/qpdf/minimal-rotated.pdf	3db6303879174aa7aad038d10c0060388c9c24b1529edf97ab8e43dfb88f46db	811	ok		rotate
+need-appearances-more-out.pdf	qpdf	qpdf/qtest/qpdf/need-appearances-more-out.pdf	f0c9ea1ee07670a858dcd06ede6dab89d2c50825fdf5824b1cc322e05aa59acc	68648	ok		annots form multi-contents transparency truetype
+need-appearances-more3.pdf	qpdf	qpdf/qtest/qpdf/need-appearances-more3.pdf	a23127533f0e28d0b334ecd284179881f14456ab1cd024398c9be58d6ba3debd	68633	ok		annots form transparency truetype
+nested-form-xobjects-inline-images-ii-some.pdf	qpdf	qpdf/qtest/qpdf/nested-form-xobjects-inline-images-ii-some.pdf	a80b374092cac5f131384678b63af6e82a81dbaff800b2c61fbc17ecb5825d95	4232	ok		inline-image
+no-contents-qdf.pdf	qpdf	qpdf/qtest/qpdf/no-contents-qdf.pdf	62566f730e558e607c7c7198380da9b21cf728d497acc166a9a459614f9f8d7f	585	ok		
+obj0.pdf	qpdf	qpdf/qtest/qpdf/obj0.pdf	9408227f3c62f25bb6811fcb4a2ea1d46d11c664143ca74b21c25bd2061b1a42	859	ok		
+outlines-split-21-30.pdf	qpdf	qpdf/qtest/qpdf/outlines-split-21-30.pdf	08536fcaf14f29c2b3ea92708909c50d7ec72653ee3a8c9ae6ad5ac0198ef4ba	8792	ok		incremental outline
+outlines-with-loop.pdf	qpdf	qpdf/qtest/qpdf/outlines-with-loop.pdf	c9e8c7c53465471808f073b3837cda8a009cc2826c70b410ccc942f4c338cf60	16217	ok		incremental outline
+outlines-with-old-root-dests-dict.pdf	qpdf	qpdf/qtest/qpdf/outlines-with-old-root-dests-dict.pdf	25dd11f10722a5222f99ff795cbd293aa451c66275b239c4fa24b2afaac59322	16175	ok		incremental outline
+overlay-copy-annotations-p2.pdf	qpdf	qpdf/qtest/qpdf/overlay-copy-annotations-p2.pdf	7fdc8529a8751c108a7458bea24627252eed56123c41ec2333815e9793a97fc6	11687	ok		annots form
+p1-a-p2-b.pdf	qpdf	qpdf/qtest/qpdf/p1-a-p2-b.pdf	007ebbb9e1432b017afc38ac2c72a2bcc33eedee102b24de160d53a41b48079c	1358	ok		
+p1-b.pdf	qpdf	qpdf/qtest/qpdf/p1-b.pdf	13d6be7d482d1369020ed92b6c617cdf5bfab0a3376af0401d2ffe7e67786fcf	946	ok		
+pages-copy-encryption.pdf	qpdf	qpdf/qtest/qpdf/pages-copy-encryption.pdf	4f8ea3362e58f0239f312dbbd272a52e7297832a324b6ced7417272b7423cc10	1319	password	user	enc-rc4
+png-filters-decoded.pdf	qpdf	qpdf/qtest/qpdf/png-filters-decoded.pdf	2c562d27d4e3b4b239c4b64c1a2a3dedb6d32fad669e1b7091a3aa8aeb5c7c1b	33789	ok		multi-contents
+shallow_array.pdf	qpdf	qpdf/qtest/qpdf/shallow_array.pdf	0f5a13df2ca4f794bf3c2d78d57ebe0f154a4675c7fc8dd30b28747108bf7bb0	788	ok		
+shared-font-xobject-split-2.pdf	qpdf	qpdf/qtest/qpdf/shared-font-xobject-split-2.pdf	45b8f15c6678a656ceec8b56a8db76ceb546e240cfc17357610fcacfebcfec62	3777	ok		
+shared-font-xobject.pdf	qpdf	qpdf/qtest/qpdf/shared-font-xobject.pdf	ad4059b0b095997566a4455b6ada6978a3418c8930bb72bde7d4ffdc0a5d9f91	13381	ok		
+shared-images.pdf	qpdf	qpdf/qtest/qpdf/shared-images.pdf	0626ae028f41391b85b6d2e938e5409d28c99c88a597c1daf50fed40377a9edb	32021	ok		
+short-O-U.pdf	qpdf	qpdf/qtest/qpdf/short-O-U.pdf	93c7d3b73e6e31fba34a4f419f1feac50ad5ff135440cf60947c70e42531cb6d	1133	password	19723102477	enc-aesv2
+split-exp-09.Pdf	qpdf	qpdf/qtest/qpdf/split-exp-09.Pdf	b599ac17205191edd9af77c9a2f1f80f07228c36c6e4cf3459d31b21e29bad02	755	ok		
+test84.pdf	qpdf	qpdf/qtest/qpdf/test84.pdf	28e83df40a2a95207e9f209986c30142f3fab88998a96646818c94a03490f46a	1113	ok		
+three-files-2_3_4-collate-out.pdf	qpdf	qpdf/qtest/qpdf/three-files-2,3,4-collate-out.pdf	2f242d797ab73f19de7564cf3e245298cb98d3b7ffa72842db350e5546bebc82	11232	ok		incremental outline
+tokenize-content-streams.pdf	qpdf	qpdf/qtest/qpdf/tokenize-content-streams.pdf	5d7c5309b69c5fb90b8f3f4bf4cd77fed7ffdecdc93da81ec61889352cb98537	1575	ok		inline-image multi-contents
+unreferenced-indirect-scalar.pdf	qpdf	qpdf/qtest/qpdf/unreferenced-indirect-scalar.pdf	4ab8a46420e15ff750f0ca903d3be34ba044491c2676693d2684408bdc35204b	1216	ok		objstm xref-stream
+uo-6.pdf	qpdf	qpdf/qtest/qpdf/uo-6.pdf	68542e7a74f08c6b5b37e9e56610c43bc2fff0b6188475398383d0506f5e5406	3523	ok		
+warn-replace.pdf	qpdf	qpdf/qtest/qpdf/warn-replace.pdf	a889268348a8fb2c07ede57ec27e74253f2bc9dd0e0bf0a7ec659710a19d85c1	16504	ok		objstm xref-stream
+90ms_rksj_h_sample.pdf	pdfjs	test/pdfs/90ms_rksj_h_sample.pdf	d50ad3b93685e9d6061f5cc9957c49ca232a0dd0771aad71e4a615f87f2674be	1039	ok		cid cjk
+GHOSTSCRIPT-698804-1-fuzzed.pdf	pdfjs	test/pdfs/GHOSTSCRIPT-698804-1-fuzzed.pdf	62e518ca7894e8b8b8ed9927da3007cdc5e9ccc5b111bbb22d6101d4a8d7490e	627	ok		outline
+acroform_calculation_order.pdf	pdfjs	test/pdfs/acroform_calculation_order.pdf	9081aad78cb6bb1871eb5c51addbe75ce73e4617a3e1fa15aa3da21232b6b755	1041	ok		annots form
+bitmap-customat.pdf	pdfjs	test/pdfs/bitmap-customat.pdf	9be6eb11af2e4078eb209cbf680bb415960f2275f7e120660d22e7edc09e2ede	1051	ok		jbig2
+bitmap-halftone-skip-grid.pdf	pdfjs	test/pdfs/bitmap-halftone-skip-grid.pdf	cfd77f057c98bb1af01fc108c5a9e0b09b438e0e4f1a31aa8b07ce7b275cc348	1624	ok		jbig2
+bitmap-randomaccess.pdf	pdfjs	test/pdfs/bitmap-randomaccess.pdf	82079253a8c5af9683e5dc341e7416d8eb5901c48d6af850a79413e6f11711ec	1026	ok		jbig2 vertical
+bitmap-stripe-single-no-end-of-stripe.pdf	pdfjs	test/pdfs/bitmap-stripe-single-no-end-of-stripe.pdf	8bf3bbb2a48b0bc689b920fece52080582b15415eef3615e811ffb2cc8932966	1026	ok		jbig2 vertical
+bitmap-symbol-symhuffcustom-texthuffcustom.pdf	pdfjs	test/pdfs/bitmap-symbol-symhuffcustom-texthuffcustom.pdf	c0799af446d978d843ee0788a6dddb8c572a5e2b57414de4e7b2a742ec2d34a2	1415	ok		jbig2
+bitmap-trailing-7fff-stripped-harder.pdf	pdfjs	test/pdfs/bitmap-trailing-7fff-stripped-harder.pdf	47fa9873c6250a75552b60771fed2494f14eb4a20bdacf558ee00f9136835be9	15181	ok		jbig2
+bug1108301.pdf	pdfjs	test/pdfs/bug1108301.pdf	37881e37a8586bd167838ca72ec497335eaaafbf1df512469b3bce8d9c3c9d11	48421	ok		truetype vertical
+bug1539074.1.pdf	pdfjs	test/pdfs/bug1539074.1.pdf	3f782014f96d107a4b5bb34a6ef318296cc1189b40489a13cb370a47f4ea9157	6015	ok		objstm type1 xref-stream
+bug1671312_ArialNarrow.pdf	pdfjs	test/pdfs/bug1671312_ArialNarrow.pdf	665ee9f8a2f7c235509217afdd302d152af520097dbfc29259c22deb11fafa62	1913	ok		
+bug1724918.pdf	pdfjs	test/pdfs/bug1724918.pdf	e595a9f56a6cea07d94f009f3f9735167694e81a86135665703848817a789372	13107	ok		annots form incremental linearized objstm outline xref-stream
+bug1743245.pdf	pdfjs	test/pdfs/bug1743245.pdf	345515157d5328ca96a2a943700c82c54676d7e9e41be82f986fbfb64d250622	271984	ok		annots smask transparency
+bug1937438_from_word.pdf	pdfjs	test/pdfs/bug1937438_from_word.pdf	e03f741a8d0f6b6bbc811b39616f28d09ffb5098ab0f9ea89a0dfbd3f22e51b9	46285	ok		cid incremental objstm transparency truetype xref-stream
+bug1978317.pdf	pdfjs	test/pdfs/bug1978317.pdf	2da2307afefe14c163f0f57a794c5199e9302eec3fdc154896a05976e08c2727	1535205	ok		objstm truetype vertical xref-stream
+bug2082236.pdf	pdfjs	test/pdfs/bug2082236.pdf	3509af52c656c04ff98bac223646252b78cfb96fa0c2626ac3f74f907224f4aa	775	ok		annots rotate
+bug2086012.pdf	pdfjs	test/pdfs/bug2086012.pdf	25ae84ae06f52743cff953be80151948e231431893f30693fdb83d9d7a86baf9	733	ok		shading
+ccitt_EndOfBlock_false.pdf	pdfjs	test/pdfs/ccitt_EndOfBlock_false.pdf	f2289b94e7e3f05f9e37754c399d3f525edf9444fb32c3279959cf64b575fe62	3256	ok		ccitt
+freeculture.pdf	pdfjs	test/pdfs/freeculture.pdf	753441c619c529c8d0fc3e7e470f07c9547838fc7229bea8c1dcf854acee03b4	2598727	ok		annots ccitt cff cid dct form incremental linearized outline pages-100+ smask transparency truetype vertical
+helloworld-bad.pdf	pdfjs	test/pdfs/helloworld-bad.pdf	c3e22ea5d7e6f5b7218d76abce4284728889df516a93c1b74a82c4fd69aa1639	745	ok		
+highlight_popup.pdf	pdfjs	test/pdfs/highlight_popup.pdf	c7bcbbc375995dbb04277596cb87233a614a97de8dcbb63d4ae7660df4cc3d8b	12160	ok		annots cid incremental linearized objstm outline transparency xref-stream
+inks.pdf	pdfjs	test/pdfs/inks.pdf	9877d54f90bbbbffc2e439edd1dad8da558e08a40396d5fd90590ff9c4635cd3	108628	ok		form objstm outline truetype xref-stream
+issue11124.pdf	pdfjs	test/pdfs/issue11124.pdf	6d81255db53b94e361cd33245114de781172b8b75a9a62562f8b7aabd091be62	756	ok		inline-image
+issue11555.pdf	pdfjs	test/pdfs/issue11555.pdf	41f4ecbf71f0ad13f558ce11e34e41d64a0a5347e225c8e6bdae20263f83a173	1132	ok		cid cjk vertical
+issue11651.pdf	pdfjs	test/pdfs/issue11651.pdf	dbbe8b9a376318e0e525c939af007e21ee78c22000cbe4855f61d7f9e50d1b27	23047	ok		cid truetype
+issue12810.pdf	pdfjs	test/pdfs/issue12810.pdf	412c956edda0affc24e18bfcb86ab844876f0601748a88bb22d207be85afe145	253783	ok		korean transparency
+issue13316_reduced.pdf	pdfjs	test/pdfs/issue13316_reduced.pdf	c79c4855fe3f1d90653e37db8beb856c9f90be8605ff7624b103c16f49ce5378	54795	ok		truetype
+issue13916.pdf	pdfjs	test/pdfs/issue13916.pdf	43026e49bc93b2d946557522a2d5256ad052f3c5906856316852482a011cc840	5421	ok		cid
+issue14755.pdf	pdfjs	test/pdfs/issue14755.pdf	2d59b1c5956f4e2bec21fee4c2c8e3dacb696f3d81fe97f38cfc437e50856403	751	ok		pdf20
+issue14999_reduced.pdf	pdfjs	test/pdfs/issue14999_reduced.pdf	b59b99d54afa8011ee6cebe28be9c9ea98f68bbb1c058898cc3b1c4872cab329	7915	ok		type3
+issue15012.pdf	pdfjs	test/pdfs/issue15012.pdf	1840707b9023db71cc9ae865f01733ea3c84eabd935a07dc8a6d63ae73e39ce8	108381	ok		annots transparency type1 vertical
+issue15150.pdf	pdfjs	test/pdfs/issue15150.pdf	122016379efad59780860b34a2d16511a1f426c2167d2fc80f4ce7febedff396	449	ok		
+issue15590.pdf	pdfjs	test/pdfs/issue15590.pdf	c711bb3357eccec499968ac7b4e286ebd3f49910b458b0596d81731c890eedb6	191	ok		javascript qpdf-broken
+issue15893_reduced.pdf	pdfjs	test/pdfs/issue15893_reduced.pdf	3c2815853e6fe5c34feb76bb14402cbc46bbd484ecd57b672fc03577d0458ee8	1610	password	test	enc-rc4
+issue16063.pdf	pdfjs	test/pdfs/issue16063.pdf	8b2332e9c1ba48f221e8688ba0478499f6a87a151bdcedffe789a6ae358db7e3	58483	ok		cff cid incremental linearized objstm outline vertical xref-stream
+issue16263.pdf	pdfjs	test/pdfs/issue16263.pdf	99548e25da254ed0114c31b84f92cf3dc71d458da66648a777b8fd21ff14f062	58122	ok		cid incremental objstm smask transparency truetype vertical xref-stream
+issue16752_reduced.pdf	pdfjs	test/pdfs/issue16752_reduced.pdf	7702c8f46428998e59ddeb28ab50f96ed4cca1c76ba3f2d6918a603c64265070	654	ok		
+issue17064_readonly.pdf	pdfjs	test/pdfs/issue17064_readonly.pdf	af4e9077c482196fbaf3a73845374b0839cf5957ebe42b4c6c1b45e516341894	2912	ok		objstm xref-stream
+issue17540.pdf	pdfjs	test/pdfs/issue17540.pdf	7c980aab81ae8f1001242a4cc914d92fae2c292d42118f92f5e97c9f6dcad3f9	39800	ok		objstm xref-stream
+issue18042.pdf	pdfjs	test/pdfs/issue18042.pdf	a410dc2964a6ffde68b9e5342a43b130e98cae010e2afc168223d8563270d5bf	1247	ok		dct
+issue18305.pdf	pdfjs	test/pdfs/issue18305.pdf	5862358013704d786347a1e5be0c2470df2dc319c0b3c49ad62038d2663379f1	7999	ok		annots form incremental javascript objstm outline xref-stream
+issue18529.pdf	pdfjs	test/pdfs/issue18529.pdf	6ec9516a0e15a65d8a9547da747efe66ad0d4dd7d185d8624cfa6ae1a2847962	4218	ok		annots shading smask transparency
+issue18548_reduced.pdf	pdfjs	test/pdfs/issue18548_reduced.pdf	9c2e99d83bb1d1143874e72c67a6efa832f4b6887ab0d6a85be8de8622ba9a25	3271	ok		type1
+issue18768_type3.pdf	pdfjs	test/pdfs/issue18768_type3.pdf	41595618b5c49ab585fd334471206f4db4da55140f428d9951e7fc5e3707fef9	951	ok		type3
+issue18894.pdf	pdfjs	test/pdfs/issue18894.pdf	f140b083cc6657c85a4fbf31968a437dc143aca0551a18386f129be1035a05fe	2581	ok		annots incremental linearized pattern smask transparency
+issue19120.pdf	pdfjs	test/pdfs/issue19120.pdf	30412934cc368fd2adfd13812cc71692fbc3d562b9414baf34fd139f3d7f269f	26879	ok		cid multi-contents truetype
+issue19176.pdf	pdfjs	test/pdfs/issue19176.pdf	5fafd5649ade0b3f5b12c647d877f7f3723fa14d4104648548aa25c9b1add122	466	ok		pdf20
+issue19954_reduced.pdf	pdfjs	test/pdfs/issue19954_reduced.pdf	e4dfa108fc7c1ed6af35d2dc12a5a4578e1d9415d64d7a98771c1f1b03e2a3ff	965	ok		type3
+issue20319_2.pdf	pdfjs	test/pdfs/issue20319_2.pdf	d9cb5d39b8c254a56c96ed468993f9b4afebfcdca88c99828de3a62af4cd54df	984	ok		type3
+issue21579.pdf	pdfjs	test/pdfs/issue21579.pdf	3b3d1db2aa4797e63d6dc7e48dc4f327c468144b93f80301771940230651da2e	1394	password	pässwört	enc-aesv3
+issue2833.pdf	pdfjs	test/pdfs/issue2833.pdf	a085386355d927d4a1211368e7e1cbd3972af8a0d7a75039e680a578c055cf3a	5615	ok		type1
+issue3205r.pdf	pdfjs	test/pdfs/issue3205r.pdf	c18cc334710201216b047ec58de81950be942b97a5ffb20b50f91a7c64a3da4f	126273	ok		cid truetype vertical
+issue3323.pdf	pdfjs	test/pdfs/issue3323.pdf	e27b6af9ecbce8cc68588b8ae7f4af4f5214bc80dcbb479bdb928010b4dec26b	40553	ok		cid korean truetype
+issue3371.pdf	pdfjs	test/pdfs/issue3371.pdf	0c3fb45d9b61ea762b4b3298c8c47e5375e83d151d356d87d740bcb85d953473	12323	password	ELXRTQWS	enc-aesv2 incremental jbig2 jpx linearized objstm xref-stream
+issue4436r.pdf	pdfjs	test/pdfs/issue4436r.pdf	45932053f115b1ebec02cbe266b9028d8fba305a317d931d45872b29a2653857	777	ok		inline-image
+issue5010.pdf	pdfjs	test/pdfs/issue5010.pdf	9810339aa21fcd2a7626bc9ff10d4139782e9cfca29a1615ba3ed0847b6e9008	4443	ok		cff cid korean
+issue5334.pdf	pdfjs	test/pdfs/issue5334.pdf	a9d939b63e03a43d01c47efda339e7d7af5f2e8064b6ec7e93ddac6378011115	65778	ok		cff cid
+issue5377.pdf	pdfjs	test/pdfs/issue5377.pdf	746989523e87ae1ca7fc1a578fb960ecb858d3bdfcb8ea7699dbe2b6d44d40ff	1751	ok		cff cid
+issue5896.pdf	pdfjs	test/pdfs/issue5896.pdf	dd657f1723cf357b21427acd4de0dd028dddca0983ea882e9c0b60a4c1ffc932	11541	ok		type3
+issue6010_1.pdf	pdfjs	test/pdfs/issue6010_1.pdf	d7fd95e016b7d43bc9eed1041b0cdd6ee00e3dd902e50d0307b0a428782c543c	1116	password	abc	enc-aesv3
+issue6010_2.pdf	pdfjs	test/pdfs/issue6010_2.pdf	53008dd89a45e313112ad6c6f17ade3e5c8f33f3106028a4e5b61f570b270ce9	1116	password	æøå	enc-aesv3
+issue6769_no_matrix.pdf	pdfjs	test/pdfs/issue6769_no_matrix.pdf	606f991bc2ccf9b47435ae2fa70e9240f1cc46bf211690aa5edb65880847343d	1190	ok		pattern shading transparency
+issue7074_reduced.pdf	pdfjs	test/pdfs/issue7074_reduced.pdf	fa06804263274bf34f79a974191b17c28fe624f31ce94e871e062442220905ad	33952	ok		incremental linearized objstm xref-stream
+issue7426.pdf	pdfjs	test/pdfs/issue7426.pdf	d352269684b0aa59bcbfd272b1f3b8dfc32610e54c617afb79c985bbc38bddc4	117531	ok		cid truetype
+issue7891_bc1.pdf	pdfjs	test/pdfs/issue7891_bc1.pdf	b3500cc6ebd096e4b052f60b9629566da028958e54700b9923859df8e81efca3	59755	ok		incremental korean linearized objstm outline vertical xref-stream
+issue8125.pdf	pdfjs	test/pdfs/issue8125.pdf	22406734101fd97265b0ed18541215071a2c02cf09deba0c85d928641c77aa3e	690	ok		rotate
+issue8276_reduced.pdf	pdfjs	test/pdfs/issue8276_reduced.pdf	0849bfe6f950d4ad44b5011a40ffbe96c80f52e44873b49cddf725d1632d5620	682	ok		
+issue8424.pdf	pdfjs	test/pdfs/issue8424.pdf	a84a85f3620d30d9e61092a25ced56393093200767e54fbdf161715584ee0b73	49015	ok		cid korean truetype
+issue8480.pdf	pdfjs	test/pdfs/issue8480.pdf	9867c384ec4356199c500e885f1cd3058c57b73ce14be3c39a77e5648c10bc29	45238	ok		cid truetype
+issue8798r.pdf	pdfjs	test/pdfs/issue8798r.pdf	c3ad0a0bf535da4c0c84209b75d93fddaa62dcad16a571c5f1adcacfb0ad3b73	823	ok		inline-image
+issue9105_reduced.pdf	pdfjs	test/pdfs/issue9105_reduced.pdf	6820ac7e4949964e6a828dfbb40c321b5e0389391066fe90a663a7437232bc70	723	ok		
+issue9534_reduced.pdf	pdfjs	test/pdfs/issue9534_reduced.pdf	cbe7bd0638099bdc5ccbb6ced084843ddf76fd635b36338d17b72101b372fb00	32585	ok		cff cid
+perf_codecs_jpeg_cmyk.pdf	pdfjs	test/pdfs/perf_codecs_jpeg_cmyk.pdf	d6bac90d35bd5bce1d6f43071ba1fcd56f19189c5c697e37cf40e9dce1f5a0be	829883	ok		dct vertical
+perf_shadings_mesh_triangles.pdf	pdfjs	test/pdfs/perf_shadings_mesh_triangles.pdf	46740050617c40f82d0d3a575ec1114700f43f3091f7d29bd44a747349f490fa	97112	ok		shading
+print_protection.pdf	pdfjs	test/pdfs/print_protection.pdf	e5497249e49832011090c5d7a757787192af4231fbd82980f87683e4e5e4e3fa	10832	password	1234	cid enc-aesv3 incremental linearized objstm outline xref-stream
+smask_alpha_bc.pdf	pdfjs	test/pdfs/smask_alpha_bc.pdf	fda2a361be849a4b4d95120c8a87208f3d68b06d92fa2293e4dcb96e052d1e34	945	ok		smask transparency
+tensor-allflags-withfunction.pdf	pdfjs	test/pdfs/tensor-allflags-withfunction.pdf	d0167f51046dc315aeb6be6c48ae874c776f532cbc1b8f4d64efd6ad1215f480	3381	ok		pattern shading
+three_pages_with_number.pdf	pdfjs	test/pdfs/three_pages_with_number.pdf	94db0a3fc8e8ead772baa165cd4378bb0d9c7191056ebcf77ab45b4f56fc70a4	25798	ok		objstm vertical xref-stream
+tiling-pattern-fold-order.pdf	pdfjs	test/pdfs/tiling-pattern-fold-order.pdf	f4f23cc9b86e5282fb81ef370e084e784ffb732fda3e607c84c427dbc4a35183	715	ok		pattern
+PDFBOX-3025.pdf	pdfbox	pdfbox/src/test/resources/input/PDFBOX-3025.pdf	602816bd821db5116ba9fd59d8c81a7d63058f6d21a302e190e19c0eddf76b15	42418	ok		annots truetype
+PDFBOX-3127-RAU4G6QMOVRYBISJU7R6MOVZCRFUO7P4-VFont.pdf	pdfbox	pdfbox/src/test/resources/input/PDFBOX-3127-RAU4G6QMOVRYBISJU7R6MOVZCRFUO7P4-VFont.pdf	e915930e95fef0727acc1ea2c674640d39ba2f820f4487e59f0ceb96a986762d	80944	ok		incremental linearized multi-contents objstm xref-stream
+PDFBOX-3498-Y5TLCWTIAE3FYDVJTV2TXRZGXLEDUNSW.pdf	pdfbox	pdfbox/src/test/resources/input/PDFBOX-3498-Y5TLCWTIAE3FYDVJTV2TXRZGXLEDUNSW.pdf	44c23b08f4da2db659ab4f98ea098f0fc2b9f9bb532624e99d4efebae7ab4685	44136	ok		incremental linearized objstm xref-stream
+PDFBOX-4322-Empty-ToUnicode-reduced.pdf	pdfbox	pdfbox/src/test/resources/input/PDFBOX-4322-Empty-ToUnicode-reduced.pdf	c3b4a465b7664677f13aa3079ef4e5223eac9a1cf82719a863d07034388d2798	21387	ok		cid truetype
+PDFBOX-4531-bidi-ligature-1.pdf	pdfbox	pdfbox/src/test/resources/input/PDFBOX-4531-bidi-ligature-1.pdf	05449b36c6b147652ef3c0b5404ae84b9d8c4352a43f96ec27cef8714f99b13f	5622	ok		truetype
+PDFBOX-5350-JX57O5E5YG6XM4FZABPULQGTW4OXPCWA-p1-reduced.pdf	pdfbox	pdfbox/src/test/resources/input/PDFBOX-5350-JX57O5E5YG6XM4FZABPULQGTW4OXPCWA-p1-reduced.pdf	ad13a85449c62b7665d552e3702be867de213efb0defd8742a1d5a3d748fbfc9	48143	ok		incremental linearized objstm vertical xref-stream
+PDFBOX-5747-unicode-surrogate-with-diacritic-reduced.pdf	pdfbox	pdfbox/src/test/resources/input/PDFBOX-5747-unicode-surrogate-with-diacritic-reduced.pdf	4e822ba5255923364baf5fdc14141a6cb6b860a5f4f86261043e7e08c7fce382	2019	ok		cid objstm xref-stream
+attachment.pdf	pdfbox	pdfbox/src/test/resources/input/compression/attachment.pdf	8f22a77cba7532516a486fea9e5e73cb834461d8a9bb1a4dc98185a825ddbe4a	79414	ok		annots incremental linearized objstm transparency xref-stream
+unencrypted.pdf	pdfbox	pdfbox/src/test/resources/input/compression/unencrypted.pdf	a0fb09bae86c0e93b80309f4f86b1a9262bd5210eca3c0bdad0ef52094624fa8	71020	ok		dct form incremental linearized multi-contents objstm outline smask transparency xref-stream
+PDFA3A.pdf	pdfbox	pdfbox/src/test/resources/input/merge/PDFA3A.pdf	f0d3b0e32007d4b385b8d31bd759ce0b3ec8a465d48dc7471b99faf5d8bd3b57	49917	ok		transparency truetype
+PDFBOX-4417-054080.pdf	pdfbox	pdfbox/src/test/resources/input/merge/PDFBOX-4417-054080.pdf	97664b7ee67fbd45e7cb660f5cd5dc9ff033f84ba6352c89499ad2bdb272bcb2	48925	ok		cff cid incremental linearized multi-contents objstm truetype xref-stream
+PDFBOX-5811-362972.pdf	pdfbox	pdfbox/src/test/resources/input/merge/PDFBOX-5811-362972.pdf	fd7bbd087f837ff27a95ca5677878ba994e977b7fea71cd9b60811c2fd1ed30a	44338	ok		annots cff form incremental smask transparency vertical
+PDFBox.GlobalResourceMergeTest.Doc01.pdf	pdfbox	pdfbox/src/test/resources/input/merge/PDFBox.GlobalResourceMergeTest.Doc01.pdf	d0d18eccaec3ae737cc212f33b145f5f76ba86210dd3c75783b5336079100b7e	9511	ok		xref-stream
+multitiff.pdf	pdfbox	pdfbox/src/test/resources/input/merge/multitiff.pdf	c1b465746f17204420348015845c8979c6bdbdaaf07616d122ab6ffec00eaf15	2928	ok		ccitt
+rotation.pdf	pdfbox	pdfbox/src/test/resources/input/rotation.pdf	5087c2afe763d145537d652bb3bc6c321ace3a267b2679ae2c178add3ba7f1d9	6605	ok		incremental linearized rotate
+sample_fonts_solidconvertor.pdf	pdfbox	pdfbox/src/test/resources/input/sample_fonts_solidconvertor.pdf	7400ec41f4274975fc4ae2d3eea076a2910491a74c97a7c2dfa653a84eac9c0a	57107	ok		cid truetype
+PasswordSample-128bit.pdf	pdfbox	pdfbox/src/test/resources/org/apache/pdfbox/encryption/PasswordSample-128bit.pdf	1919480aba35617d69a1f9e1dce30bbe6864b3906d5c136fd7a8837826f9f750	8377	password	user	annots enc-rc4 form outline
+PasswordSample-256bit.pdf	pdfbox	pdfbox/src/test/resources/org/apache/pdfbox/encryption/PasswordSample-256bit.pdf	a2f0661092483478686d92891905d9e715c9783b45ecf26376d7119fe5ab4747	7664	password	user	enc-aesv3 form objstm outline xref-stream
+PasswordSample-40bit.pdf	pdfbox	pdfbox/src/test/resources/org/apache/pdfbox/encryption/PasswordSample-40bit.pdf	7dac5439bed47d4630866f2acb75fd22386069649c2dcb88236c2ed5f020b05b	8374	password	user	annots enc-r2 enc-rc4 form outline
+AcrobatMerge-DifferentExportValues-WasMaster.pdf	pdfbox	pdfbox/src/test/resources/org/apache/pdfbox/multipdf/AcrobatMerge-DifferentExportValues-WasMaster.pdf	f509e1c4b34faceaf74c8211609e55931fbb8433001fb7a6dafe437367eabb75	36294	ok		annots form incremental linearized objstm outline vertical xref-stream
+AcrobatMerge-TextFieldsOnly-SameMerged.pdf	pdfbox	pdfbox/src/test/resources/org/apache/pdfbox/multipdf/AcrobatMerge-TextFieldsOnly-SameMerged.pdf	b97a95dfd011bfbcd40c191c3675cc7afbb898a4597e86f0fd0f4f06add27900	8569	ok		annots form incremental linearized objstm outline xref-stream
+Overlayed-with-rot90.pdf	pdfbox	pdfbox/src/test/resources/org/apache/pdfbox/multipdf/Overlayed-with-rot90.pdf	90d5d885c6fe8c8575191f3a00634efe7c5d75af1076af9ea2a0648e2a2759db	1657	ok		multi-contents
+rot90.pdf	pdfbox	pdfbox/src/test/resources/org/apache/pdfbox/multipdf/rot90.pdf	94f01ab02cbdd4f1d7b3d3d7b4d143a0a1ebafc06bd54bcdd7d2e2891a8bf9c6	892	ok		rotate
+PDFBOX-6261-085992.pdf	pdfbox	pdfbox/src/test/resources/org/apache/pdfbox/pdmodel/documentinterchange/logicalstructure/PDFBOX-6261-085992.pdf	d924bd1d3887c77102e4f7a22b70d737de8a80d34ccc809a78947c8449f72137	19363	ok		incremental linearized objstm xref-stream
+PDFBOX-6249-cns1-nonembedded-latin.pdf	pdfbox	pdfbox/src/test/resources/org/apache/pdfbox/pdmodel/font/PDFBOX-6249-cns1-nonembedded-latin.pdf	ce117f88cc04dee5ae48ecefac717aa31336682d047df6b3804dd224d8e204e1	1112	ok		cid cjk
+AnnotationTypes.pdf	pdfbox	pdfbox/src/test/resources/org/apache/pdfbox/pdmodel/interactive/annotation/AnnotationTypes.pdf	d40141c738526af78389649a1391b7dc46de4cbe1e9ba571afd063a39fe19a07	17547	ok		annots form incremental linearized objstm outline transparency xref-stream
+PDFBOX-5797-SO79271803.pdf	pdfbox	pdfbox/src/test/resources/org/apache/pdfbox/pdmodel/interactive/annotation/PDFBOX-5797-SO79271803.pdf	07a3061d6fb0dedc5adb98799e76d296cb1363adbd2712559557d6dfbee09a06	2067	ok		form objstm smask transparency xref-stream
+MultilineFields.pdf	pdfbox	pdfbox/src/test/resources/org/apache/pdfbox/pdmodel/interactive/form/MultilineFields.pdf	683af3f0d82eb9ac46e9f9fc72068b720615b944b5355c8cb5d32e879d466e08	978227	ok		annots form incremental linearized objstm outline truetype vertical xref-stream
+transitions_test.pdf	pdfbox	pdfbox/src/test/resources/org/apache/pdfbox/pdmodel/interactive/pagenavigation/transitions_test.pdf	b8fc9584da2b37e8069902794a92b10c707de3027cf31b66c48af1693f862e2d	1795	ok		
+test.unc.pdf	pdfbox	pdfbox/src/test/resources/org/apache/pdfbox/pdmodel/test.unc.pdf	7d452d667b62ee0c1d12e6e5ba71145a87c78f3ea0e755d3d3ad8a9d5c513ccf	110437	ok		annots cid form multi-contents outline truetype vertical xref-stream

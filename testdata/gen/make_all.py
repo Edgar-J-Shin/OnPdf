@@ -55,6 +55,7 @@ GENERATED = {
     "text-lines-split.pdf": docs.make_text_lines_split,
     "text-lines-form.pdf": docs.make_text_lines_form,
     "text-lines-type3.pdf": docs.make_text_lines_type3,
+    "pattern-bomb.pdf": docs.make_pattern_bomb,
 }
 
 

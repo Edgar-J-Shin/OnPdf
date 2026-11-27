@@ -113,6 +113,7 @@ class PrintPreviewView : public QAbstractScrollArea {
   QCache<int, Entry> cache_{kCacheBytes / 1024};
   std::unordered_map<int, Pending> pending_;
   std::unordered_set<int> failed_;
+  std::unordered_set<int> refused_;  // 렌더 거부 쪽 (#121): 용지에 "표시 불가" 안내
   std::uint64_t next_serial_ = 0;
   int requested_total_ = 0;
   QTimer debounce_;

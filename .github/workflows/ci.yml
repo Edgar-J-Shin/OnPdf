@@ -59,6 +59,15 @@ jobs:
       - name: Fetch PDFium
         run: python3 third_party/fetch_pdfium.py --platform ${{ matrix.pdfium }}
 
+      # 왕복 코퍼스 (#119): 목록(corpus.tsv)이 바뀔 때만 다시 받고 그 밖에는 캐시 — 스크립트는 sha256 만 확인한다
+      - name: Restore round-trip corpus
+        uses: actions/cache@v4
+        with:
+          path: testdata/corpus
+          key: corpus-${{ hashFiles('testdata/corpus.tsv', 'testdata/gen/fetch_corpus.py') }}
+      - name: Fetch round-trip corpus
+        run: python3 testdata/gen/fetch_corpus.py
+
       - name: Check testdata is up to date
         if: runner.os == 'Linux'
         run: python3 testdata/gen/make_all.py --check
@@ -75,6 +84,7 @@ jobs:
         run: ctest --preset ${{ matrix.preset }}
         env:
           QT_QPA_PLATFORM: offscreen
+          ONPDF_CORPUS_REQUIRED: 1  # 코퍼스 파일이 빠지면 SKIP 이 아니라 실패 (#119)
 
   app:
     name: app-linux (Qt)

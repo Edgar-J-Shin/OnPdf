@@ -11,7 +11,7 @@ Your goal is to write Safe, Testable, and Maintainable modern C++ (C++23, std::e
 Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜치 `develop`, 릴리스 `main`)
 1인 개발(주 10~15시간). 전체 계획서: [pdf-editor-plan.md](pdf-editor-plan.md) — 범위·로드맵·위험 대응은 이 문서가 기준이다.
 
-**현재 단계**: v0.5.3 릴리스(2026-11-27: Intel Mac DMG·최소 macOS 13·공식 Qt(#108), CI 자동 재시도(#105)). M5 코드 범위 완료 — 남은 것은 코드 서명·공증(인증서 생기면 비밀 값만)과 수동 QA: Intel Mac·macOS 13 기기에서 DMG 실행, Windows 실기기 설치기(설치·연결 프로그램·업그레이드·제거), 실제 프린터에서 미리보기와 출력 비교, 영어·한국어 시스템 화면, Adobe Reader·Chrome·Edge 에서 고친 줄·추가한 한글 텍스트·주석·CFF 변환 글꼴 표시. 그 뒤 v1.0
+**현재 단계**: v0.5.4 릴리스(2026-11-28: 악성 PDF 완화 #121, 왕복 코퍼스 #119, PDFium chromium/8179 #125). M5 코드 범위 완료. **v1.0 게이트(#117)**: ① 코드 서명·공증(`docs/signing.md`; Windows 는 Microsoft Artifact Signing 으로 워크플로우 전환 완료 #116 — Apple 인증서·Azure 계정과 비밀 값은 사용자 준비) ② 실기기·타 뷰어 수동 QA(Windows 10/11 설치기, Intel Mac·macOS 13 DMG, 실제 프린터, Adobe Reader·Chrome·Edge 표시, 영어·한국어 화면) ③ 왕복 테스트 PDF 200개 — **완료**(#119: 공개 코퍼스 260개 `testdata/corpus.tsv`, `onpdf_corpus_tests` 전부 통과, CI 매 PR). 설정 화면·충돌 보고는 1.1(2026-11-27 결정). #121 악성 PDF 완화는 앞당겨 완료(qpdf 사전 검사 + 워커 멈춤 감시 — 원칙 6). JPX 디코더 크래시(#119 코퍼스에서 발견)는 chromium/8179 에서도 재현(#125) — 상류 수정을 기다리며 판을 올릴 때마다 재확인. #112(Windows 텍스트 도구 테스트 멈춤)는 수정 뒤 4회 연속 통과로 닫음
 
 | 마일스톤 | 핵심 | 완료 기준 |
 |---|---|---|
@@ -20,7 +20,7 @@ Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜
 | M2 주석·페이지 | 주석, 페이지 조작, 저장, 실행 취소 | Adobe Reader 에서 동일 표시 → v0.2 |
 | M3 객체 편집 | 텍스트·이미지 추가, 폼, 폰트 임베딩 | 한글 텍스트 타 뷰어 정상 → v0.3 |
 | M4 텍스트 수정 | 줄 단위 수정(qpdf 콘텐츠 수술 — #55), 폰트 대체 | 50개 문서: 줄 밖 보존 + 폭 ±5% → v0.5 |
-| M5 마무리 | 성능, 설치 파일, 다국어, 문서화 | 성공 기준 전부 → v1.0 |
+| M5 마무리 | 배포물·설치기·DMG 2종·다국어·인쇄 미리보기 (v0.5.3 완료) · 왕복 코퍼스 260개(#119 완료) · 서명·공증 | 서명 + 실기기·타 뷰어 QA(#117) → v1.0. 설정·충돌 보고는 1.1 |
 
 # Tech Stack
 - Language: C++23 (std::expected 사용), CMake ≥ 3.25 + vcpkg(manifest 모드), Ninja
@@ -43,10 +43,11 @@ export VCPKG_ROOT=$HOME/vcpkg
 export QT_ROOT=$(brew --prefix qt)      # dev-app preset 이 CMAKE_PREFIX_PATH 로 넘긴다 (Homebrew qt 6.12)
 python3 third_party/fetch_pdfium.py     # PDFium 사전 빌드 받기 (버전: third_party/pdfium-version.txt)
 python3 third_party/fetch_fonts.py      # 번들 글꼴 Noto Sans KR 받기 (없으면 앱의 텍스트 추가 도구가 비활성; 테스트는 저장소 서브셋을 쓴다)
+python3 testdata/gen/fetch_corpus.py    # 왕복 코퍼스 260개 받기 (testdata/corpus/, 약 10MB — 없으면 onpdf_corpus_tests 가 SKIP; CI 는 필수)
 # vcpkg 의 harfbuzz 는 meson 빌드라 python ≥ 3.10 이 PATH 에 있어야 한다 (macOS 기본 3.9 → brew python 을 앞에)
 cmake --preset dev                      # configure (vcpkg manifest 설치 포함)
 cmake --build --preset dev              # build all → build/dev/bin/
-ctest --preset dev                      # unit + rendering regression + roundtrip(열기→저장→다시 열기, qpdf 있으면 --check)
+ctest --preset dev                      # unit + rendering regression + roundtrip(열기→저장→다시 열기 + qpdf 라이브러리 검사) + corpus(공개 PDF 260개)
 ./build/dev/bin/onpdf_cli info in.pdf                                # 쪽 크기 + 인쇄 권한·문서 인쇄 기본값
 ./build/dev/bin/onpdf_cli render in.pdf out.png --page 0 --scale 2 [--print]   # --print: 인쇄용 렌더(FPDF_PRINTING)
 ./build/dev/bin/onpdf_cli tiles in.pdf out-dir --page 0 --scale 2   # 타일 PNG + stitched.png + full.png
@@ -66,7 +67,7 @@ ctest --preset dev-app                                         # app 테스트(o
 cmake --build --preset dev-app --target update_translations    # tr() 를 바꾼 뒤 app/i18n/*.ts 갱신 → 한국어 번역 채우기 (#8)
 ```
 
-- 테스트 PDF: `python3 testdata/gen/make_all.py` 로 전부 생성(표준 라이브러리만, 결정적). `--check` 가 CI 에서 커밋본과 비교. 파일별 기대값은 `testdata/manifest.tsv`, 절차는 `testdata/README.md`. 왕복 테스트의 구조 검사는 qpdf **라이브러리**(`QpdfTools::check`)라 외부 명령이 없어도 돈다
+- 테스트 PDF: `python3 testdata/gen/make_all.py` 로 전부 생성(표준 라이브러리만, 결정적). `--check` 가 CI 에서 커밋본과 비교. 파일별 기대값은 `testdata/manifest.tsv`, 절차는 `testdata/README.md`. 왕복 테스트의 구조 검사는 qpdf **라이브러리**(`QpdfTools::check`)라 외부 명령이 없어도 돈다. **왕복 코퍼스(#119)**: 공개 PDF 260개(PDFium·qpdf·pdf.js·PDFBox 테스트 자료, 라이선스 근거·선정 규칙은 `testdata/README.md`)는 `testdata/corpus.tsv`(출처·sha256·expect·암호·태그)만 커밋하고 `testdata/gen/fetch_corpus.py` 가 받는다(gitignore). `onpdf_corpus_tests` 가 `tests/roundtrip/roundtrip_checks.h` 의 공용 검사(`expect_roundtrip`)를 돌리며, 원본부터 qpdf 가 거절하는 파일(`qpdf-broken`)은 저장본의 qpdf 오류를 참고만 한다. PDFium 판을 올리면 `--probe` 로 기대값 재측정
 - `core` 는 `stb` 로 PNG 를 읽고 쓴다. 새 의존성은 `vcpkg.json` 에 추가하고 `builtin-baseline` 을 유지한다
 - 빌드 산출물은 `build/<preset>/` 아래에만 생성한다 (소스 트리 내 빌드 금지). 실행 파일과 PDFium 공유 라이브러리는 `build/<preset>/bin/`
 - PDFium/qpdf 바이너리는 저장소에 커밋하지 않는다 — `third_party/` 스크립트로 받아온다
@@ -89,6 +90,7 @@ core/engine/  PdfiumLibrary(init RAII) · PdfiumDocument(열기·크기·렌더�
 core/engine/  EditableDocument(PDFium 없는 편집 인터페이스 — edit/ 가 씀: 회전·삭제·이동·스냅샷(SnapshotId)·삽입·주석)·ChangeSet(structural+all_sizes)
               save(write_files_safely: 생산자 무관 "임시 → 검증 → 교체" 골격, 여러 대상은 전부-또는-없음; save_document_safely 는 그 위) · page_ranges("1-3,5,8-" 파서·N쪽마다·파일 이름 패턴)
               annotation.h(AnnotationInfo·AnnotationSpec(쪽 포인트)·AnnotationSnapshot(사용자 좌표 원시값+AP) — PDFium 없음)
+              render_hazard.h(RenderHazard·kMaxPatternTilesPerPage — 렌더 폭탄 판정 타입, #121) · QpdfTools::scan_render_hazards 가 만든다
               save(save_document_safely: 임시→검증→rename)
 core/platform/ fs_sync(flush_file_to_disk·replace_file·flush_directory — 저장의 플랫폼 분기는 여기만)
 core/image/   png_io (stb 기반 PNG 읽기/쓰기, BGRA↔RGBA)
@@ -105,7 +107,7 @@ tests/        단위 테스트, 렌더링 회귀, 왕복 테스트
 testdata/     테스트 PDF + 기준 PNG
 third_party/  PDFium 바이너리 다운로드 스크립트
 packaging/    배포물: finish_macos_bundle.py(--thin), vcpkg-triplets/(macOS 13 타깃), windows/onpdf.iss(Inno Setup)·make_icon.py, README-*.txt
-docs/         설계 문서, 기여 가이드
+docs/         설계 문서, 기여 가이드, 서명·공증 설정(signing.md — 비밀 값·검증. Windows 는 Artifact Signing(OIDC, 배포용) / PFX(점검용) 두 제공자)
 ```
 
 ### Layer Dependency Rules
@@ -126,7 +128,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 3. **모든 문서 변경은 Command 로.** `execute()` / `undo()` 를 가진 명령 객체 외의 경로로 문서를 바꾸지 않는다.
 4. **핸들은 RAII.** `FPDF_DOCUMENT`, `FPDF_PAGE`, `FPDF_TEXTPAGE`, `FPDF_BITMAP` 등은 `std::unique_ptr` + 커스텀 삭제자로만 보유한다. raw 핸들을 반환하는 public API 금지.
 5. **원본 파일은 건드리지 않는다.** 저장은 임시 파일 → 다시 열어 검증(페이지 수·렌더링·qpdf check) → 교체. 서명된 문서는 증분 저장.
-6. **JavaScript 실행은 기본 비활성화.** 악성 PDF 대응. 외부 링크는 `view::is_safe_uri`(http/https/mailto) 를 통과한 것만 사용자 확인 후 연다. `file:`·`javascript:`·`data:` 와 Launch/RemoteGoTo 액션은 무시한다.
+6. **JavaScript 실행은 기본 비활성화.** 악성 PDF 대응. 외부 링크는 `view::is_safe_uri`(http/https/mailto) 를 통과한 것만 사용자 확인 후 연다. `file:`·`javascript:`·`data:` 와 Launch/RemoteGoTo 액션은 무시한다. **렌더 폭탄(#121)**: PDFium 이 끝내지 못하는 입력(타일링 패턴 `/XStep 0.001` — progressive render 의 pause 도 객체 사이에서만 확인돼 소용없다)은 `QpdfTools::scan_render_hazards` 가 쪽 자원·Form·주석 AP 를 걷어 쪽당 추정 타일 수 > 10⁶ 이면(정상 최대 4.85×10³, 폭탄 4.85×10¹¹) `RenderHazard`(`render_hazard.h`) 로 판정하고, `PdfiumDocument` 가 쪽별 캐시(첫 렌더·구조 편집 전에 1회 검사, 삭제·이동 재배치, 스냅샷 삽입 이식, 줄 수정의 `replace_bytes` 는 쪽 수가 같으면 유지)로 `render_page/render_region` 을 `kRenderRefused` 로 즉시 거절한다(저장 전 AP 생성·줄 수정·자간 정산도 그 쪽은 건너뜀). 열 때 `DocumentInfo::hazards` 로 비모달 안내(`render_hazards_notice`)를 한 번 띄우고, 뷰·썸네일·인쇄 미리보기는 그 쪽에 "표시할 수 없습니다" 안내만 그리며(`DocumentTileSource::set_on_refused` → `DocumentView::refused_pages`, `ThumbnailPanel::is_refused`) 그 쪽에서는 주석·텍스트·이미지 도구를 막는다(`DocumentView::tool_blocked` → 상태 표시줄). **워커 멈춤 감시**: `PdfiumWorker::running_task()`(`TaskKind` open·render·query·modify·save + 시작 시각 + 쪽, 원자)로 `MainWindow` 가 1초마다 렌더 작업 60초 초과를 보고 창 모달 `worker_stalled` 상자(파일 이름·쪽 번호·경과 초, [강제 종료] = `std::_Exit(3)` 훅 — `~PdfiumWorker` 가 join 하므로 정상 종료 불가, [계속 기다리기])를 띄우며 `closeEvent`·열기도 같은 상자로 간다. JPX 디코더 크래시(`jpx_numcomps.pdf`, 사전 빌드 PDFium 의 CHECK)는 막을 수 없다 — chromium/8179 에서도 재현(#125, 열기·텍스트 추출은 정상, 렌더만 SIGTRAP). PDFium 판을 올릴 때마다 다시 확인.
 
 ### 편집·저장 (구현: edit + core/engine/save + app/EditController)
 - `edit/` 는 PDFium 헤더를 끌어오는 `pdfium_document.h` 를 쓰지 않고 `engine::EditableDocument`(PDFium 없음)로만 문서를 바꾼다
@@ -171,7 +173,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 # Testing Strategy
 - **단위 테스트** (`tests/unit`): core/edit. 모든 Command 는 실행 → 취소 → 재실행 후 문서 상태 비교 테스트 필수.
 - **렌더링 회귀** (`tests/render`): 테스트 PDF → PNG → 기준 이미지와 픽셀 비교. 렌더링·편집 기능 변경 시 반드시 갱신. 테스트는 `PdfiumLibrary::Options::use_system_fonts=false` 로 내장 폰트만 써서 플랫폼 간 결과를 같게 한다 (시스템 폰트 의존 테스트는 별도 표시).
-- **왕복 테스트** (`tests/roundtrip`): 열기 → 저장 → 다시 열기 후 페이지 수·텍스트·렌더링 일치 + `qpdf --check`.
+- **왕복 테스트** (`tests/roundtrip`): 열기 → 저장 → 다시 열기 후 페이지 수·텍스트·렌더링 일치 + qpdf 라이브러리 검사. manifest 46개(`onpdf_roundtrip_tests`) + 공개 코퍼스 260개(`onpdf_corpus_tests`, #119).
 - 한글 문서, 스캔본, 폼, 암호화 파일을 테스트 집합에 항상 포함한다. `tests/unit/testdata_manifest_test.cpp` 가 `manifest.tsv` 의 전 파일을 열어 검증하므로 새 PDF 는 manifest 한 줄로 테스트에 들어간다.
 - CI: 푸시마다 빌드 + 단위 테스트, PR 마다 렌더링 회귀까지.
 
@@ -189,7 +191,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 - `main`: 릴리스 브랜치. `release/x.y.z`·`hotfix/x.y.z` 만 머지하고 태그 `vx.y.z` 를 단다. 직접 push 금지
 - **작업 시작 절차**: ① GitHub 이슈 생성(제목 접두 `M0:`~`M5:`, 마일스톤 지정, 필요 시 라벨) → ② `develop` 에서 브랜치 분기 → ③ 구현 → ④ PR(base `develop`, 본문에 `Closes #N`) → ⑤ CI 통과 후 머지 커밋(`gh pr merge --merge`)
 - 브랜치 이름: `feature/<이슈번호>-<slug>`, `fix/<이슈번호>-<slug>`, `chore/<이슈번호>-<slug>`, `spike/<이슈번호>-<slug>`, `release/x.y.z`, `hotfix/x.y.z` (slug 는 영문 소문자·하이픈)
-- 릴리스: `develop` → `release/x.y.z` 분기 → 버전·CHANGELOG 정리 → `main` 머지 → 태그 → `main` 을 `develop` 에 백머지. 태그 푸시 → `.github/workflows/release.yml`(#90) 이 Windows x64 무설치 zip(windeployqt + MSVC 런타임 DLL) + **Inno Setup 설치기**(#99: 같은 stage 폴더 입력, 사용자별 기본·전체 선택, `HKA` 레지스트리로 ProgId `OnPdf.Document`·`.pdf\OpenWithProgids`·`Applications\onpdf_app.exe` 항상 등록, 기본 앱은 꺼진 작업 `pdfdefault`, 제거는 우리 값일 때만 지움, Korean.isl 은 `#ifexist`; 리허설이 조용한 설치 → 설치된 exe `--self-test` 한글 경로 → 레지스트리 확인 → 조용한 제거 → 폴더·키 잔여 검사를 통과해야 아티팩트)·macOS DMG(macdeployqt → `packaging/finish_macos_bundle.py` 가 쓰지 않는 플러그인·프레임워크 제거·설치 이름 정리·번들 밖 의존 검사)를 만들고, 각 배포물로 `--self-test`(한글 경로 포함)를 돌려 **둘 다 통과해야** Release(본문 = `scripts/changelog_section.py` 가 꺼낸 CHANGELOG 절 + `SHA256SUMS.txt`)를 만든다. 태그와 `CMakeLists.txt` 버전이 다르면 실패. 서명은 비밀 값(`WINDOWS_CERT_*`, `MACOS_CERT_*`·`APPLE_*`)이 전부 있을 때만, 하나도 없으면 서명 없이(macOS ad-hoc), 일부만 있으면 실패. 수동 실행(`workflow_dispatch`, ref·publish)으로 브랜치 빌드만 점검할 수 있다. **macOS DMG 는 2종**(#108): `macos` 매트릭스 잡이 같은 arm64 러너에서 arm64 는 네이티브, x64 는 `CMAKE_OSX_ARCHITECTURES=x86_64` 교차 빌드 + Rosetta `--self-test`. Qt 는 **공식 6.9.x**(aqtinstall, universal·minos 12 — Homebrew Qt 는 arm64 전용·러너 OS 기준이라 쓰지 않는다), vcpkg 오버레이 트리플릿 `packaging/vcpkg-triplets/<arch>-osx-13`, `finish_macos_bundle.py --thin <arch>` 로 universal 을 한 슬라이스만. 최소 macOS 는 **13.0 을 선언**(`ONPDF_MACOS_MIN`·`CMAKE_OSX_DEPLOYMENT_TARGET`)하고 검증 단계가 번들 안 모든 Mach-O 의 minos ≤ 13.0·아키텍처·`LSMinimumSystemVersion` 을 확인한다(PDFium 두 아키텍처 모두 13.0)
+- 릴리스: `develop` → `release/x.y.z` 분기 → 버전·CHANGELOG 정리 → `main` 머지 → 태그 → `main` 을 `develop` 에 백머지. 태그 푸시 → `.github/workflows/release.yml`(#90) 이 Windows x64 무설치 zip(windeployqt + MSVC 런타임 DLL) + **Inno Setup 설치기**(#99: 같은 stage 폴더 입력, 사용자별 기본·전체 선택, `HKA` 레지스트리로 ProgId `OnPdf.Document`·`.pdf\OpenWithProgids`·`Applications\onpdf_app.exe` 항상 등록, 기본 앱은 꺼진 작업 `pdfdefault`, 제거는 우리 값일 때만 지움, Korean.isl 은 `#ifexist`; 리허설이 조용한 설치 → 설치된 exe `--self-test` 한글 경로 → 레지스트리 확인 → 조용한 제거 → 폴더·키 잔여 검사를 통과해야 아티팩트)·macOS DMG(macdeployqt → `packaging/finish_macos_bundle.py` 가 쓰지 않는 플러그인·프레임워크 제거·설치 이름 정리·번들 밖 의존 검사)를 만들고, 각 배포물로 `--self-test`(한글 경로 포함)를 돌려 **둘 다 통과해야** Release(본문 = `scripts/changelog_section.py` 가 꺼낸 CHANGELOG 절 + `SHA256SUMS.txt`)를 만든다. 태그와 `CMakeLists.txt` 버전이 다르면 실패. 서명은 비밀 값이 전부 있을 때만, 하나도 없으면 서명 없이(macOS ad-hoc), 일부만 있으면 실패 — Windows 는 **두 제공자**(#116): 배포용 Microsoft Artifact Signing(`AZURE_TENANT_ID`·`AZURE_CLIENT_ID`·`AZURE_SUBSCRIPTION_ID` + `SIGNING_ENDPOINT`·`SIGNING_ACCOUNT_NAME`·`SIGNING_CERT_PROFILE`, `azure/login` OIDC → `azure/artifact-signing-action@v2`, `windows-x64` 잡은 `id-token: write` + `environment: release` 로 federated credential subject 고정, `signtool verify /pa` 로 검증) / 점검용 PFX(`WINDOWS_CERT_*`, 자체 서명 — 2023-06 HSM 규칙으로 공개 신뢰 인증서는 .pfx 로 못 꺼낸다), 둘 다 설정하면 실패. macOS 는 `MACOS_CERT_*`·`APPLE_*`. 준비·검증 절차는 `docs/signing.md`. 수동 실행(`workflow_dispatch`, ref·publish)으로 브랜치 빌드만 점검할 수 있다. **macOS DMG 는 2종**(#108): `macos` 매트릭스 잡이 같은 arm64 러너에서 arm64 는 네이티브, x64 는 `CMAKE_OSX_ARCHITECTURES=x86_64` 교차 빌드 + Rosetta `--self-test`. Qt 는 **공식 6.9.x**(aqtinstall, universal·minos 12 — Homebrew Qt 는 arm64 전용·러너 OS 기준이라 쓰지 않는다), vcpkg 오버레이 트리플릿 `packaging/vcpkg-triplets/<arch>-osx-13`, `finish_macos_bundle.py --thin <arch>` 로 universal 을 한 슬라이스만. 최소 macOS 는 **13.0 을 선언**(`ONPDF_MACOS_MIN`·`CMAKE_OSX_DEPLOYMENT_TARGET`)하고 검증 단계가 번들 안 모든 Mach-O 의 minos ≤ 13.0·아키텍처·`LSMinimumSystemVersion` 을 확인한다(PDFium 두 아키텍처 모두 13.0)
 - 커밋 메시지: 제목 영어 명령형 72자 이내, 본문 한국어 가능
 - 변경 기록은 `CHANGELOG.md`, 제3자 고지는 `THIRD_PARTY_NOTICES.md` (PDFium, qpdf, Qt, FreeType, HarfBuzz)
 - 커밋 금지: `build/`, `vcpkg_installed/`, PDFium/qpdf 바이너리, 라이선스 불명확한 PDF, 코드 서명 인증서
