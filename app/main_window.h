@@ -289,9 +289,11 @@ class MainWindow : public QMainWindow {
   void update_outline_highlight();
   void on_zoom_changed(double zoom);
   void refresh_status();
-  void check_worker_stall();   // 1초마다: 렌더 작업이 오래 돌면 경고 (#121)
-  void show_stall_warning();   // 비모달 "응답 없음" 상자 (objectName worker_stalled)
+  void check_worker_stall();  // 1초마다: 렌더 작업이 오래 돌면 경고 (#121)
+  void show_stall_warning();  // 창 모달 "응답 없음" 상자 (objectName worker_stalled)
   void on_page_refused(int page, const QString& reason);
+  void on_tool_blocked(int page);
+  void show_hazard_notice();  // 열 때 위험 쪽 목록 안내 (objectName render_hazards_notice)
   void set_document_status(const QString& text);  // 문서 정보 (지속)
   void show_transient(const QString& text);       // 진행·오류 안내 (몇 초 뒤 사라짐)
   void fail_screenshot(const QString& reason);    // --screenshot 모드에서 실패 시 종료
@@ -419,7 +421,7 @@ class MainWindow : public QMainWindow {
   QTimer* status_timer_ = nullptr;
   // 워커 멈춤 감시 (#121)
   QTimer* stall_timer_ = nullptr;
-  std::chrono::milliseconds stall_threshold_{30000};
+  std::chrono::milliseconds stall_threshold_{60000};
   std::function<void(int code)> force_exit_;
   QPointer<QMessageBox> stall_box_;
   std::optional<std::chrono::steady_clock::time_point> warned_since_;  // 경고한 작업의 시작 시각

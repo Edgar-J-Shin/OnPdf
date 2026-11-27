@@ -23,8 +23,9 @@ struct RenderHazard {
 };
 
 // 쪽당 타일 수 문턱. 코퍼스 측정(2026-11): 정상 문서 최대 4.85e3(10pt 스텝), 폭탄 4.85e11.
-// 0.5pt 스텝 A4 도 2e6 이라 여유가 있다
-inline constexpr double kMaxPatternTilesPerPage = 1e7;
+// 1e6 은 정상 최대의 200배 — 0.5pt 스텝으로 A4 를 가득 채우는 패턴(2e6)도 거부된다(의도: 그런
+// 패턴도 수 초 이상 걸린다)
+inline constexpr double kMaxPatternTilesPerPage = 1e6;
 
 inline const char* to_string(RenderHazardKind kind) noexcept {
   switch (kind) {

@@ -40,6 +40,7 @@ void PdfiumWorkerImpl::run_entry(Entry& entry, bool cancelled) noexcept {
     const auto now = std::chrono::steady_clock::now().time_since_epoch();
     running_since_ns.store(std::chrono::duration_cast<std::chrono::nanoseconds>(now).count(),
                            std::memory_order_relaxed);
+    running_page.store(entry.page, std::memory_order_relaxed);
     running_kind.store(static_cast<int>(entry.kind), std::memory_order_release);
   }
   try {
@@ -58,7 +59,8 @@ std::optional<RunningTask> PdfiumWorkerImpl::running_task() const noexcept {
   const auto ns = std::chrono::nanoseconds(running_since_ns.load(std::memory_order_relaxed));
   return RunningTask{static_cast<TaskKind>(kind),
                      std::chrono::steady_clock::time_point(
-                         std::chrono::duration_cast<std::chrono::steady_clock::duration>(ns))};
+                         std::chrono::duration_cast<std::chrono::steady_clock::duration>(ns)),
+                     running_page.load(std::memory_order_relaxed)};
 }
 
 void PdfiumWorkerImpl::run_loop(const PdfiumWorker::Options& options) {
@@ -103,20 +105,22 @@ void PdfiumWorkerImpl::run(const PdfiumWorker::Options& options) noexcept {
   stop();  // 남은 작업이 있으면 이후 post 가 inline 취소되도록
 }
 
-TaskHandle PdfiumWorkerImpl::post(PdfiumWorker::Task task, Priority priority, TaskKind kind) {
+TaskHandle PdfiumWorkerImpl::post(PdfiumWorker::Task task, Priority priority, TaskKind kind,
+                                  int page) {
   assert(task && "빈 작업은 넣을 수 없다");
   auto flag = std::make_shared<std::atomic<bool>>(false);
   {
     std::lock_guard lock(mutex);
     if (!stopping) {
-      queues[static_cast<std::size_t>(priority)].push_back(Entry{flag, std::move(task), kind});
+      queues[static_cast<std::size_t>(priority)].push_back(
+          Entry{flag, std::move(task), kind, page});
       cv.notify_one();
       return TaskHandle(std::move(flag));
     }
   }
   // 이미 멈춘 워커: 호출 스레드에서 취소 통지만 한다.
   flag->store(true, std::memory_order_relaxed);
-  Entry entry{flag, std::move(task), kind};
+  Entry entry{flag, std::move(task), kind, page};
   run_entry(entry, true);
   return TaskHandle{};
 }
@@ -189,8 +193,8 @@ PdfiumWorker::~PdfiumWorker() {
   // 핸들이 weak_ptr 로 잡고 있을 수 있으므로 Impl 은 마지막 참조가 사라질 때 해제된다.
 }
 
-TaskHandle PdfiumWorker::post(Task task, Priority priority, TaskKind kind) {
-  return impl_->post(std::move(task), priority, kind);
+TaskHandle PdfiumWorker::post(Task task, Priority priority, TaskKind kind, int page) {
+  return impl_->post(std::move(task), priority, kind, page);
 }
 std::optional<RunningTask> PdfiumWorker::running_task() const noexcept {
   return impl_->running_task();

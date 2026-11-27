@@ -8,13 +8,21 @@
 #include "dialog_helpers.h"
 #include "document_view.h"
 #include "main_window.h"
+#include "print_job.h"
+#include "thumbnail_panel.h"
 #include "ui_dispatcher.h"
 #include <QAbstractButton>
 #include <QApplication>
 #include <QEventLoop>
+#include <QFileInfo>
 #include <QMessageBox>
+#include <QMouseEvent>
+#include <QPageSize>
+#include <QPrinter>
 #include <QStatusBar>
 #include <QStringList>
+#include <QTabWidget>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <algorithm>
 #include <chrono>
@@ -51,14 +59,14 @@ bool spin_until(Pred pred, int timeout_ms = 30000) {
 // 워커를 막는 작업 (종류 지정). 소멸자가 풀어 워커가 hang 하지 않는다
 class Block {
  public:
-  Block(engine::PdfiumWorker& worker, engine::TaskKind kind)
+  Block(engine::PdfiumWorker& worker, engine::TaskKind kind, int page = 3)
       : entered_(std::make_shared<std::latch>(1)), release_(std::make_shared<std::latch>(1)) {
     worker.post(
         [entered = entered_, release = release_](bool) {
           entered->count_down();
           release->wait();
         },
-        engine::Priority::kNormal, kind);
+        engine::Priority::kNormal, kind, page);
     entered_->wait();
   }
   ~Block() { open(); }
@@ -100,6 +108,7 @@ class StallTest : public ::testing::Test {
     return nullptr;
   }
 
+  QTemporaryDir dir_;
   UiDispatcher dispatcher_;
   engine::PdfiumWorker worker_;
   MainWindow window_;
@@ -113,7 +122,10 @@ TEST_F(StallTest, WarnsOnceWhenRenderTaskStallsAndRecovers) {
   EXPECT_TRUE(window_.worker_stalled());
   auto* box = qobject_cast<QMessageBox*>(find_dialog("worker_stalled"));
   ASSERT_NE(box, nullptr);
-  EXPECT_FALSE(box->isModal());
+  EXPECT_TRUE(box->isModal());  // 선택할 때까지 다른 조작을 막는다
+  EXPECT_NE(box->text().indexOf(QStringLiteral("simple.pdf")), -1);
+  // 쪽 번호: 막은 작업은 쪽 3 (0 기준) 으로 태깅했다
+  EXPECT_NE(box->text().indexOf(QStringLiteral("4쪽")), -1) << box->text().toStdString();
   // "기다리기": 같은 작업으로는 다시 묻지 않는다
   QAbstractButton* wait = button_with_role(box, QMessageBox::RejectRole);
   ASSERT_NE(wait, nullptr);
@@ -180,6 +192,79 @@ TEST_F(StallTest, RefusedPageShowsPlaceholderAndStatus) {
   // 정상 쪽은 그대로 그려진다 (거부 집합 밖)
   EXPECT_FALSE(view->refused_pages().contains(0));
   EXPECT_FALSE(window_.worker_stalled());
+}
+
+TEST_F(StallTest, OpeningShowsHazardNoticeAndThumbnailsMarkRefusedPages) {
+  ASSERT_TRUE(open("pattern-bomb.pdf"));
+  // 열 때 비모달 안내: 2, 3, 4쪽
+  ASSERT_TRUE(spin_until([] { return find_dialog("render_hazards_notice") != nullptr; }, 5000));
+  auto* notice = qobject_cast<QMessageBox*>(find_dialog("render_hazards_notice"));
+  ASSERT_NE(notice, nullptr);
+  EXPECT_FALSE(notice->isModal());
+  EXPECT_NE(notice->text().indexOf(QStringLiteral("2, 3, 4")), -1) << notice->text().toStdString();
+  notice->close();
+  // 썸네일: 거부 쪽 표시
+  auto* thumbs = window_.thumbnail_panel();
+  window_.sidebar()->setCurrentWidget(thumbs);
+  thumbs->request_visible_now();
+  ASSERT_TRUE(spin_until([&] { return thumbs->is_refused(1) && thumbs->is_refused(3); }));
+  EXPECT_FALSE(thumbs->is_refused(0));
+  EXPECT_FALSE(find_dialog("worker_stalled"));
+}
+
+TEST_F(StallTest, ToolsAreBlockedOnRefusedPages) {
+  QStringList messages;
+  QObject::connect(window_.statusBar(), &QStatusBar::messageChanged, &window_,
+                   [&messages](const QString& m) { messages << m; });
+  ASSERT_TRUE(open("pattern-bomb.pdf"));
+  auto* view = window_.document_view();
+  view->go_to_page(1);
+  ASSERT_TRUE(spin_until([&] { return view->refused_pages().contains(1); }));
+  view->set_tool(AnnotationTool::kNote);
+  int requested = 0;
+  QObject::connect(view, &DocumentView::note_requested, &window_,
+                   [&requested](int, onpdf::Point) { ++requested; });
+  const QPointF center(view->viewport()->rect().center());
+  QMouseEvent press(QEvent::MouseButtonPress, center, view->viewport()->mapToGlobal(center),
+                    Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+  QMouseEvent release(QEvent::MouseButtonRelease, center, view->viewport()->mapToGlobal(center),
+                      Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(view->viewport(), &press);
+  QApplication::sendEvent(view->viewport(), &release);
+  EXPECT_TRUE(spin_until(
+      [&] {
+        return std::any_of(messages.begin(), messages.end(), [](const QString& m) {
+          return m.contains(QStringLiteral("넣을 수 없"));
+        });
+      },
+      5000))
+      << messages.join(QStringLiteral(" | ")).toStdString();
+  EXPECT_EQ(requested, 0);
+}
+
+TEST_F(StallTest, PrintingSkipsRefusedPagesAndFinishes) {
+  ASSERT_TRUE(open("pattern-bomb.pdf"));
+  QPrinter printer(QPrinter::HighResolution);
+  printer.setOutputFormat(QPrinter::PdfFormat);
+  printer.setOutputFileName(dir_.filePath(QStringLiteral("bomb-print.pdf")));
+  printer.setPageSize(QPageSize(QPageSize::Letter));
+  ASSERT_TRUE(window_.print_with(printer));
+  // 끝나면 "일부 쪽을 인쇄할 수 없습니다" 모달 상자가 뜬다 → 자동으로 닫는다
+  int warned = 0;
+  QTimer closer;
+  closer.setInterval(10);
+  QObject::connect(&closer, &QTimer::timeout, &closer, [&] {
+    auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+    if (box == nullptr) return;
+    ++warned;
+    box->accept();
+  });
+  closer.start();
+  ASSERT_TRUE(
+      spin_until([&] { return window_.print_job() != nullptr && !window_.print_job()->active(); }));
+  EXPECT_EQ(window_.print_job()->failed_pages(), (std::vector<int>{1, 2, 3}));
+  EXPECT_TRUE(spin_until([&] { return warned > 0; }, 5000));
+  EXPECT_TRUE(QFileInfo::exists(dir_.filePath(QStringLiteral("bomb-print.pdf"))));
 }
 
 }  // namespace

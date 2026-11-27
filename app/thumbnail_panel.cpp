@@ -175,6 +175,14 @@ class ThumbnailDelegate : public QStyledItemDelegate {
     const QImage image = panel_->thumbnail(page);
     if (image.isNull()) {
       painter->fillRect(box, Qt::white);
+      if (panel_->is_refused(page)) {  // 렌더 거부 쪽 (#121)
+        painter->setPen(QColor(128, 128, 128));
+        QFont small = option.font;
+        small.setPointSizeF(std::max(7.0, option.font.pointSizeF() * 0.8));
+        painter->setFont(small);
+        painter->drawText(box.adjusted(2, 2, -2, -2), Qt::AlignCenter | Qt::TextWordWrap,
+                          ThumbnailPanel::tr("Cannot display"));
+      }
     } else {
       painter->drawImage(QRectF(box), image);  // 이전 폭의 썸네일은 늘려 그린다
     }
@@ -265,6 +273,7 @@ void ThumbnailPanel::set_document(const engine::DocumentHandle& handle, UiDispat
   ++generation_;
   cache_.clear();
   failed_.clear();
+  refused_.clear();
   current_page_ = -1;
   update_thumb_width(true);
   {
@@ -281,6 +290,7 @@ void ThumbnailPanel::clear_document() {
   ++generation_;
   cache_.clear();
   failed_.clear();
+  refused_.clear();
   current_page_ = -1;
   const QScopedValueRollback guard(syncing_, true);
   model_->reset_rows(0);
@@ -333,6 +343,7 @@ void ThumbnailPanel::reset_pages(int current_page) {
   ++generation_;  // 밀린 쪽 번호로 오는 늦은 렌더를 버린다
   cache_.clear();
   failed_.clear();
+  refused_.clear();
   const int scroll = list_->verticalScrollBar()->value();
   {
     const QScopedValueRollback guard(syncing_, true);
@@ -431,6 +442,7 @@ void ThumbnailPanel::update_thumb_width(bool force) {
   cancel_all();
   ++generation_;
   failed_.clear();
+  refused_.clear();
   model_->relayout();
   schedule_request();
 }
@@ -448,6 +460,7 @@ bool ThumbnailPanel::event(QEvent* event) {
     cancel_all();
     ++generation_;
     failed_.clear();
+    refused_.clear();
     schedule_request();
   }
   return QWidget::event(event);
@@ -536,6 +549,10 @@ void ThumbnailPanel::on_rendered(int page, int generation, std::uint64_t serial,
   pending_.erase(it);
   if (!result) {
     if (result.error().code != ErrorCode::kCancelled) failed_.insert(page);  // 다시 시도하지 않는다
+    if (result.error().code == ErrorCode::kRenderRefused) {                  // 안내를 그린다 (#121)
+      refused_.insert(page);
+      model_->page_changed(page);
+    }
     schedule_request();
     return;
   }

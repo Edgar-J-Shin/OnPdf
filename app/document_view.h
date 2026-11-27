@@ -219,6 +219,7 @@ class DocumentView : public QAbstractScrollArea {
   void first_view_rendered();
   void tiles_changed();  // 타일이 캐시에 들어왔다 (통계 갱신용, 자주 온다)
   void page_refused(int page, const QString& reason);  // 쪽 렌더 거부 (#121, 쪽마다 처음 한 번)
+  void tool_blocked(int page);  // 거부된 쪽에 주석·텍스트·이미지를 넣으려 했다 (#121) — 안내용
   void selection_changed(bool has_selection);
   void text_index_ready(int page);
   void link_activated(const onpdf::view::Link& link);  // 안전 검사 전. 수신자가 is_safe_uri 로 판단

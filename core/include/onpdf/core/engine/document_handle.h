@@ -17,6 +17,7 @@
 #include "onpdf/core/engine/editable_document.h"
 #include "onpdf/core/engine/form.h"
 #include "onpdf/core/engine/pdfium_worker.h"
+#include "onpdf/core/engine/render_hazard.h"
 #include "onpdf/core/engine/render_types.h"
 #include "onpdf/core/engine/save.h"
 #include "onpdf/core/error.h"
@@ -46,6 +47,7 @@ struct DocumentInfo {
       permissions;  // 편집 권한 (종류별). 소유자 암호로 열었거나 암호화되지 않았으면 모두 참
   int signature_count = 0;               // 전자서명 수. 0 보다 크면 저장은 증분 저장
   FormType form_type = FormType::kNone;  // AcroForm·XFA (#51)
+  std::vector<RenderHazard> hazards;  // 열 때 찾은 렌더 위험 쪽 (#121). 구조 편집 뒤에는 갱신 안 함
 };
 
 class DocumentHandle {

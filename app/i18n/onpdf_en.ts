@@ -46,13 +46,23 @@
         </translation>
     </message>
     <message numerus="yes">
-        <source>Rendering has not finished for %n second(s). The document may contain hostile content.
+        <source>Rendering %1 has not finished for %n second(s). The document may contain hostile content.
 If you force quit, unsaved changes are lost.</source>
         <translation>
-            <numerusform>Rendering has not finished for %n second. The document may contain hostile content.
+            <numerusform>Rendering %1 has not finished for %n second. The document may contain hostile content.
 If you force quit, unsaved changes are lost.</numerusform>
-            <numerusform>Rendering has not finished for %n seconds. The document may contain hostile content.
+            <numerusform>Rendering %1 has not finished for %n seconds. The document may contain hostile content.
 If you force quit, unsaved changes are lost.</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n page(s) of this document contain a pattern that cannot be rendered safely and will stay blank: %1.
+Other pages, search, editing and saving work as usual.</source>
+        <translation>
+            <numerusform>%n page of this document contains a pattern that cannot be rendered safely and will stay blank: %1.
+Other pages, search, editing and saving work as usual.</numerusform>
+            <numerusform>%n pages of this document contain a pattern that cannot be rendered safely and will stay blank: %1.
+Other pages, search, editing and saving work as usual.</numerusform>
         </translation>
     </message>
 </context>

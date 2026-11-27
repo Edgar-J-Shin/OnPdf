@@ -59,14 +59,15 @@
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QStringList>
 #include <QTabWidget>
 #include <QTimer>
-#include <cstdlib>
 #include <QToolBar>
 #include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <utility>
@@ -211,6 +212,7 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(stall_timer_, &QTimer::timeout, this, &MainWindow::check_worker_stall);
   stall_timer_->start();
   connect(view_, &DocumentView::page_refused, this, &MainWindow::on_page_refused);
+  connect(view_, &DocumentView::tool_blocked, this, &MainWindow::on_tool_blocked);
   connect(view_, &DocumentView::selection_changed, this, [this](bool has) {
     copy_action_->setEnabled(has);
     update_edit_actions();
@@ -445,7 +447,8 @@ void MainWindow::on_opened(const QString& path, int page_count) {
     on_search_query(search_bar_->query(), search_bar_->options());
   }
   refresh_status();
-  if (print_unlock_) {  // 권한 암호로 다시 열었다 (#23)
+  show_hazard_notice();  // 렌더 위험 쪽이 있으면 한 번 알린다 (#121)
+  if (print_unlock_) {   // 권한 암호로 다시 열었다 (#23)
     const PendingPrintUnlock unlock = *print_unlock_;
     print_unlock_.reset();
     if (unlock.page > 0) view_->go_to_page(unlock.page);
@@ -2893,17 +2896,21 @@ void MainWindow::show_stall_warning() {
     stall_box_->activateWindow();
     return;
   }
-  const auto seconds = static_cast<int>(
-      std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - running->since)
-          .count());
+  const auto seconds = static_cast<int>(std::chrono::duration_cast<std::chrono::seconds>(
+                                            std::chrono::steady_clock::now() - running->since)
+                                            .count());
+  const QString file = session_.has_document() ? QFileInfo(session_.path()).fileName() : QString();
+  const QString where =
+      running->page >= 0 ? tr("page %1 of '%2'").arg(running->page + 1).arg(file) : file;
   auto* box = new QMessageBox(
       QMessageBox::Warning, tr("Not responding"),
-      tr("Rendering has not finished for %n second(s). The document may contain hostile content.\n"
-         "If you force quit, unsaved changes are lost.",
-         nullptr, seconds),
+      tr("Rendering %1 has not finished for %n second(s). The document may contain hostile "
+         "content.\nIf you force quit, unsaved changes are lost.",
+         nullptr, seconds)
+          .arg(where),
       QMessageBox::NoButton, this);
   box->setObjectName(QStringLiteral("worker_stalled"));
-  box->setWindowModality(Qt::NonModal);
+  box->setWindowModality(Qt::WindowModal);  // 선택할 때까지 다른 조작을 막는다
   box->setAttribute(Qt::WA_DeleteOnClose);
   QPushButton* quit = box->addButton(tr("Force quit"), QMessageBox::DestructiveRole);
   box->addButton(tr("Keep waiting"), QMessageBox::RejectRole);
@@ -2916,6 +2923,29 @@ void MainWindow::show_stall_warning() {
 
 void MainWindow::on_page_refused(int page, const QString& reason) {
   show_transient(tr("Page %1 cannot be displayed: %2").arg(page + 1).arg(reason));
+}
+
+void MainWindow::on_tool_blocked(int page) {
+  show_transient(tr("Page %1 cannot be displayed, so annotations, text and images cannot be added")
+                     .arg(page + 1));
+}
+
+void MainWindow::show_hazard_notice() {
+  const auto& hazards = session_.handle().info().hazards;
+  if (hazards.empty()) return;
+  QStringList pages;
+  for (const auto& h : hazards) pages << QString::number(h.page + 1);
+  auto* box = new QMessageBox(
+      QMessageBox::Information, tr("Pages that cannot be displayed"),
+      tr("%n page(s) of this document contain a pattern that cannot be rendered safely and "
+         "will stay blank: %1.\nOther pages, search, editing and saving work as usual.",
+         nullptr, static_cast<int>(hazards.size()))
+          .arg(pages.join(QStringLiteral(", "))),
+      QMessageBox::Ok, this);
+  box->setObjectName(QStringLiteral("render_hazards_notice"));
+  box->setWindowModality(Qt::NonModal);
+  box->setAttribute(Qt::WA_DeleteOnClose);
+  box->show();
 }
 
 void MainWindow::refresh_status() {

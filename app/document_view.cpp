@@ -7,11 +7,11 @@
 #include "qt_image.h"
 #include <QApplication>
 #include <QCursor>
+#include <QFont>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QNativeGestureEvent>
 #include <QPaintEvent>
-#include <QFont>
 #include <QPainter>
 #include <QPen>
 #include <QPolygonF>
@@ -565,8 +565,7 @@ void DocumentView::paint_page(QPainter& painter, int page, const QRectF& page_lo
     QFont font = painter.font();
     font.setPointSizeF(12.0);
     painter.setFont(font);
-    painter.drawText(page_logical.adjusted(24, 24, -24, -24),
-                     Qt::AlignCenter | Qt::TextWordWrap,
+    painter.drawText(page_logical.adjusted(24, 24, -24, -24), Qt::AlignCenter | Qt::TextWordWrap,
                      tr("This page cannot be displayed (hazardous pattern)"));
     painter.restore();
     return;
@@ -2034,6 +2033,13 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
   last_click_pos_ = event->position();
 
   pressed_link_.reset();
+  // 렌더가 거부된 쪽(#121)에는 주석·텍스트·이미지를 넣지 않는다 (AP 없이 저장되고 보이지도 않는다)
+  if (tool_ != AnnotationTool::kSelect) {
+    if (auto hit = page_point_at(event->position()); hit && refused_.contains(hit->first)) {
+      emit tool_blocked(hit->first);
+      return;
+    }
+  }
   // ---- 주석 도구 ----
   if (tool_ == AnnotationTool::kNote) {
     if (auto hit = page_point_at(event->position())) {
@@ -2389,7 +2395,16 @@ void DocumentView::mouseReleaseEvent(QMouseEvent* event) {
   update_hover(event->position());
   // 마크업 도구: 드래그를 놓으면 선택 범위가 바로 주석이 된다 (인덱스 없는 쪽은 빠진다)
   if (was_text_drag && tool_ != AnnotationTool::kSelect && !selection_.empty()) {
-    const MarkupItems items = selection_markup_items();
+    MarkupItems items = selection_markup_items();
+    // 거부된 쪽(#121)의 범위는 뺀다
+    for (auto it = items.begin(); it != items.end();) {
+      if (refused_.contains(it->first)) {
+        emit tool_blocked(it->first);
+        it = items.erase(it);
+      } else {
+        ++it;
+      }
+    }
     if (!items.empty()) {
       const engine::AnnotationKind kind =
           tool_ == AnnotationTool::kHighlight   ? engine::AnnotationKind::kHighlight
