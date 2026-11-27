@@ -18,6 +18,7 @@
 
 #include "../manifest.h"
 #include "../test_support.h"
+#include "roundtrip_checks.h"
 #include <gtest/gtest.h>
 #include <string>
 
@@ -30,69 +31,12 @@ using onpdf::test::ScopedTempDir;
 using onpdf::test::test_name;
 using onpdf::test::testdata;
 
-// 렌더 결과 비교: 채널 차이가 허용치를 넘는 픽셀 비율
-double different_fraction(const Bitmap& a, const Bitmap& b) {
-  if (a.width != b.width || a.height != b.height) return 1.0;
-  std::size_t diff = 0;
-  for (int y = 0; y < a.height; ++y) {
-    for (int x = 0; x < a.width; ++x) {
-      const auto* pa = a.pixels.data() +
-                       static_cast<std::size_t>(y) * static_cast<std::size_t>(a.stride) +
-                       static_cast<std::size_t>(x) * 4;
-      const auto* pb = b.pixels.data() +
-                       static_cast<std::size_t>(y) * static_cast<std::size_t>(b.stride) +
-                       static_cast<std::size_t>(x) * 4;
-      for (int c = 0; c < 3; ++c) {
-        if (std::abs(int{pa[c]} - int{pb[c]}) > onpdf::test::kChannelTolerance) {
-          ++diff;
-          break;
-        }
-      }
-    }
-  }
-  return static_cast<double>(diff) / static_cast<double>(std::max(1, a.width * a.height));
-}
-
 class RoundtripTest : public ::testing::TestWithParam<ManifestEntry> {};
 
 TEST_P(RoundtripTest, SaveAndReopenMatches) {
   const ManifestEntry& e = GetParam();
   if (e.expect == "invalid") GTEST_SKIP() << "not openable by design";
-  auto original = PdfiumDocument::open(testdata(e.file.c_str()), e.password);
-  ASSERT_TRUE(original) << original.error().message;
-
-  ScopedTempDir dir;
-  const auto target = dir / "roundtrip.pdf";
-  SaveOptions options;
-  options.incremental = original->signature_count() > 0;
-  auto saved = save_document_safely(*original, target, options);
-  ASSERT_TRUE(saved) << e.file << ": " << saved.error().message;
-
-  auto reopened = PdfiumDocument::open(target, e.password);
-  ASSERT_TRUE(reopened) << reopened.error().message;
-  ASSERT_EQ(reopened->page_count(), original->page_count());
-  for (int i = 0; i < original->page_count(); ++i) {
-    EXPECT_NEAR(reopened->page_size(i)->width, original->page_size(i)->width, 0.01) << "page " << i;
-    EXPECT_NEAR(reopened->page_size(i)->height, original->page_size(i)->height, 0.01)
-        << "page " << i;
-  }
-  if (original->page_count() > 0) {
-    auto text_before = original->load_text(0);
-    auto text_after = reopened->load_text(0);
-    ASSERT_TRUE(text_before && text_after);
-    EXPECT_EQ(text_after->char_count(), text_before->char_count());
-    EXPECT_EQ(text_after->all_text(), text_before->all_text());
-    RenderOptions render;
-    render.scale = 0.5f;
-    auto before = original->render_page(0, render);
-    auto after = reopened->render_page(0, render);
-    ASSERT_TRUE(before && after);
-    EXPECT_LE(different_fraction(*before, *after), onpdf::test::kMaxDifferentFraction);
-  }
-
-  // 라이브러리 qpdf 로 구조 검사 (CI 에도 항상 돈다). 경고(원본에도 있던 경고 포함)는 통과
-  auto checked = engine::QpdfTools::check(target, e.password);
-  EXPECT_TRUE(checked) << "qpdf check: " << (checked ? "" : checked.error().message);
+  onpdf::test::expect_roundtrip(testdata(e.file.c_str()), e.password, e.file);
 }
 
 INSTANTIATE_TEST_SUITE_P(Testdata, RoundtripTest, ::testing::ValuesIn(load_manifest()), test_name);
@@ -791,7 +735,7 @@ TEST(Roundtrip, MergedDocumentMatchesInputs) {
   auto a = merged->render_page(10, render);
   auto b = simple->render_page(0, render);
   ASSERT_TRUE(a && b);
-  EXPECT_LE(different_fraction(*a, *b), onpdf::test::kMaxDifferentFraction);
+  EXPECT_LE(onpdf::test::different_fraction(*a, *b), onpdf::test::kMaxDifferentFraction);
   expect_qpdf_ok(dir, out);
 }
 
