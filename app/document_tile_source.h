@@ -11,6 +11,7 @@
 #include <QPointer>
 #include <QString>
 #include <functional>
+#include <memory>
 #include <utility>
 
 namespace onpdf::app {
@@ -24,7 +25,8 @@ class DocumentTileSource : public view::TileSource {
                              view::TileCallback on_done) override;
 
   // 렌더 거부(kRenderRefused, #121) 를 뷰에 알린다 (메인 스레드, 스케줄러 콜백 직전). 스케줄러는
-  // 오류 코드를 버리고 실패 집합에만 넣으므로 여기서 따로 전한다
+  // 오류 코드를 버리고 실패 집합에만 넣으므로 여기서 따로 전한다. 이 소스가 소멸한 뒤(문서 교체)
+  // 도착한 결과는 알리지 않는다 — 옛 문서의 쪽 번호가 새 문서에 붙으면 안 된다
   using RefusedCallback = std::function<void(int page, const QString& reason)>;
   void set_on_refused(RefusedCallback on_refused) { on_refused_ = std::move(on_refused); }
 
@@ -33,6 +35,7 @@ class DocumentTileSource : public view::TileSource {
   UiDispatcher& dispatcher_;
   QPointer<QObject> owner_;
   RefusedCallback on_refused_;
+  std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);  // 늦은 거부 통지 보호 (#121)
 };
 
 }  // namespace onpdf::app
