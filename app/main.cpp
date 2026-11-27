@@ -15,6 +15,7 @@
 #include "file_open_filter.h"
 #include "i18n.h"
 #include "main_window.h"
+#include "settings.h"
 #include "ui_dispatcher.h"
 #include <QApplication>
 #include <QCommandLineOption>
@@ -29,9 +30,12 @@ int main(int argc, char** argv) {
   QApplication app(argc, argv);
   QApplication::setApplicationName(QStringLiteral("OnPdf"));
   QApplication::setApplicationVersion(QStringLiteral(ONPDF_VERSION));
+  // 설정 저장소(QSettings, #129)의 위치를 정한다 — 언어 결정보다 먼저
+  QApplication::setOrganizationName(QStringLiteral("OnPdf"));
+  QApplication::setOrganizationDomain(QStringLiteral("onpdf.app"));
 
-  // UI 언어 (#8): --lang → ONPDF_LANG → 시스템 선호 언어(ko 외에는 영어). 파서의 도움말 문구도
-  // 번역되도록 파서보다 먼저 argv 를 훑는다
+  // UI 언어 (#8): --lang → ONPDF_LANG → 설정(#129) → 시스템 선호 언어(ko 외에는 영어). 파서의
+  // 도움말 문구도 번역되도록 파서보다 먼저 argv 를 훑는다
   std::optional<onpdf::app::Language> forced;
   const QStringList args = QCoreApplication::arguments();
   for (qsizetype i = 0; i < args.size(); ++i) {
@@ -48,6 +52,18 @@ int main(int argc, char** argv) {
   }
   if (!forced && qEnvironmentVariableIsSet("ONPDF_LANG"))
     forced = onpdf::app::parse_language(qEnvironmentVariable("ONPDF_LANG"));
+  if (!forced) {
+    switch (onpdf::app::Settings().language()) {
+      case onpdf::app::LanguageChoice::kKorean:
+        forced = onpdf::app::Language::kKorean;
+        break;
+      case onpdf::app::LanguageChoice::kEnglish:
+        forced = onpdf::app::Language::kEnglish;
+        break;
+      case onpdf::app::LanguageChoice::kSystem:
+        break;
+    }
+  }
   (void)onpdf::app::set_language(
       app, forced.value_or(onpdf::app::language_from_locale(QLocale::system().uiLanguages())));
 

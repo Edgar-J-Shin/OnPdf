@@ -80,6 +80,10 @@
         <translation>열기(&amp;O)...</translation>
     </message>
     <message>
+        <source>Open &amp;Recent</source>
+        <translation>최근 파일 열기(&amp;R)</translation>
+    </message>
+    <message>
         <source>Open a PDF file</source>
         <translation>PDF 파일을 연다</translation>
     </message>
@@ -158,6 +162,10 @@
     <message>
         <source>Find &amp;Previous</source>
         <translation>이전 찾기(&amp;P)</translation>
+    </message>
+    <message>
+        <source>&amp;Preferences...</source>
+        <translation>설정(&amp;P)...</translation>
     </message>
     <message>
         <source>&amp;Page</source>
@@ -1047,6 +1055,26 @@ If you know its permissions (owner) password, you can unlock printing.</source>
         <source>This document does not allow printing</source>
         <translation>이 문서는 인쇄가 허용되지 않습니다</translation>
     </message>
+    <message>
+        <source>Settings cannot be saved</source>
+        <translation>설정을 저장할 수 없습니다</translation>
+    </message>
+    <message>
+        <source>(none)</source>
+        <translation>(없음)</translation>
+    </message>
+    <message>
+        <source>&amp;Clear List</source>
+        <translation>목록 비우기(&amp;C)</translation>
+    </message>
+    <message>
+        <source>Language</source>
+        <translation>언어</translation>
+    </message>
+    <message>
+        <source>The language will change the next time OnPdf starts.</source>
+        <translation>언어는 OnPdf 를 다음에 실행할 때부터 바뀝니다.</translation>
+    </message>
     <message numerus="yes">
         <source>Rendering %1 has not finished for %n second(s). The document may contain hostile content.
 If you force quit, unsaved changes are lost.</source>
@@ -1231,6 +1259,12 @@ If you force quit, unsaved changes are lost.</source>
         <source>Page %1 cannot be displayed, so annotations, text and images cannot be added</source>
         <translation>%1쪽은 표시할 수 없어 주석·텍스트·이미지를 넣을 수 없습니다</translation>
     </message>
+    <message numerus="yes">
+        <source>%n page(s) cannot be displayed (hazardous pattern)</source>
+        <translation>
+            <numerusform>%n쪽을 표시할 수 없습니다 (위험한 패턴)</numerusform>
+        </translation>
+    </message>
     <message>
         <source>Pages that cannot be displayed</source>
         <translation>표시할 수 없는 쪽</translation>
@@ -1372,6 +1406,133 @@ Other pages, search, editing and saving work as usual.</source>
     <message>
         <source>+ (too many)</source>
         <translation>+ (너무 많음)</translation>
+    </message>
+</context>
+<context>
+    <name>onpdf::app::SettingsDialog</name>
+    <message>
+        <source>Preferences</source>
+        <translation>설정</translation>
+    </message>
+    <message>
+        <source>System default</source>
+        <translation>시스템 기본값</translation>
+    </message>
+    <message>
+        <source>Language:</source>
+        <translation>언어:</translation>
+    </message>
+    <message>
+        <source>Fit width</source>
+        <translation>폭 맞춤</translation>
+    </message>
+    <message>
+        <source>Fit page</source>
+        <translation>쪽 맞춤</translation>
+    </message>
+    <message>
+        <source>Actual size</source>
+        <translation>실제 크기</translation>
+    </message>
+    <message>
+        <source>Last used</source>
+        <translation>마지막 값</translation>
+    </message>
+    <message>
+        <source>Zoom when opening:</source>
+        <translation>열 때 배율:</translation>
+    </message>
+    <message>
+        <source>Show</source>
+        <translation>보임</translation>
+    </message>
+    <message>
+        <source>Hide</source>
+        <translation>숨김</translation>
+    </message>
+    <message>
+        <source>Remember</source>
+        <translation>마지막 상태 기억</translation>
+    </message>
+    <message>
+        <source>Sidebar at startup:</source>
+        <translation>시작 때 사이드바:</translation>
+    </message>
+    <message>
+        <source>General</source>
+        <translation>일반</translation>
+    </message>
+    <message>
+        <source>%1 pt</source>
+        <translation>%1 pt</translation>
+    </message>
+    <message>
+        <source>Line width (shapes and pen):</source>
+        <translation>선 두께 (도형·펜):</translation>
+    </message>
+    <message>
+        <source>%1%</source>
+        <translation>%1%</translation>
+    </message>
+    <message>
+        <source>Opacity:</source>
+        <translation>불투명도:</translation>
+    </message>
+    <message>
+        <source>Annotation color:</source>
+        <translation>주석 색:</translation>
+    </message>
+    <message>
+        <source>Text size:</source>
+        <translation>텍스트 크기:</translation>
+    </message>
+    <message>
+        <source>Text color:</source>
+        <translation>텍스트 색:</translation>
+    </message>
+    <message>
+        <source>Written into new annotations (leave empty to omit)</source>
+        <translation>새 주석에 기록합니다 (비워 두면 쓰지 않음)</translation>
+    </message>
+    <message>
+        <source>Author name:</source>
+        <translation>작성자 이름:</translation>
+    </message>
+    <message>
+        <source>Editing</source>
+        <translation>편집</translation>
+    </message>
+    <message>
+        <source> MB</source>
+        <translation> MB</translation>
+    </message>
+    <message>
+        <source>Page cache limit:</source>
+        <translation>쪽 캐시 상한:</translation>
+    </message>
+    <message>
+        <source>Show a notice when a document has pages that cannot be displayed safely</source>
+        <translation>안전하게 표시할 수 없는 쪽이 있는 문서를 열면 안내 창을 띄웁니다</translation>
+    </message>
+    <message>
+        <source> s</source>
+        <translation>초</translation>
+    </message>
+    <message>
+        <source>Warn when rendering has not finished for:</source>
+        <translation>렌더링이 다음 시간 동안 끝나지 않으면 경고:</translation>
+    </message>
+    <message>
+        <source>Advanced</source>
+        <translation>고급</translation>
+    </message>
+    <message>
+        <source>Black</source>
+        <translation>검정</translation>
+    </message>
+    <message>
+        <source>Custom (%1)</source>
+        <translation>직접 지정 (%1)</translation>
     </message>
 </context>
 <context>
