@@ -323,6 +323,8 @@ void MainWindow::build_menus() {
                                         &MainWindow::open_preferences);  // (#129)
   preferences_action_->setObjectName(QStringLiteral("preferences"));
   preferences_action_->setMenuRole(QAction::PreferencesRole);  // macOS 는 앱 메뉴 ⌘,
+  if (preferences_action_->shortcut().isEmpty())  // Windows·Linux 에는 표준 키가 없다 → Ctrl+,
+    preferences_action_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Comma));
 
   QMenu* page = menuBar()->addMenu(tr("&Page"));
   rotate_cw_action_ = page->addAction(tr("Rotate &Right"), QKeySequence(Qt::CTRL | Qt::Key_R), this,
