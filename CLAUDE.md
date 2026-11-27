@@ -11,7 +11,7 @@ Your goal is to write Safe, Testable, and Maintainable modern C++ (C++23, std::e
 Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜치 `develop`, 릴리스 `main`)
 1인 개발(주 10~15시간). 전체 계획서: [pdf-editor-plan.md](pdf-editor-plan.md) — 범위·로드맵·위험 대응은 이 문서가 기준이다.
 
-**현재 단계**: v0.5.3 릴리스(2026-11-27: Intel Mac DMG·최소 macOS 13·공식 Qt(#108), CI 자동 재시도(#105)). M5 코드 범위 완료 — 남은 것은 코드 서명·공증(인증서 생기면 비밀 값만)과 수동 QA: Intel Mac·macOS 13 기기에서 DMG 실행, Windows 실기기 설치기(설치·연결 프로그램·업그레이드·제거), 실제 프린터에서 미리보기와 출력 비교, 영어·한국어 시스템 화면, Adobe Reader·Chrome·Edge 에서 고친 줄·추가한 한글 텍스트·주석·CFF 변환 글꼴 표시. 그 뒤 v1.0
+**현재 단계**: v0.5.3 릴리스(2026-11-27)로 M5 코드 범위 완료. **v1.0 게이트(#117)**: ① 코드 서명·공증(`docs/signing.md`; Windows 는 클라우드 서명 전환 #116 — 인증서·구독은 사용자 준비) ② 실기기·타 뷰어 수동 QA(Windows 10/11 설치기, Intel Mac·macOS 13 DMG, 실제 프린터, Adobe Reader·Chrome·Edge 표시, 영어·한국어 화면) ③ 왕복 테스트 PDF 200개. 설정 화면·충돌 보고는 1.1(2026-11-27 결정). CI 관찰: #112(Windows 텍스트 도구 테스트 간헐 멈춤 — 수정 반영, 재발 없으면 닫음)
 
 | 마일스톤 | 핵심 | 완료 기준 |
 |---|---|---|
@@ -20,7 +20,7 @@ Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜
 | M2 주석·페이지 | 주석, 페이지 조작, 저장, 실행 취소 | Adobe Reader 에서 동일 표시 → v0.2 |
 | M3 객체 편집 | 텍스트·이미지 추가, 폼, 폰트 임베딩 | 한글 텍스트 타 뷰어 정상 → v0.3 |
 | M4 텍스트 수정 | 줄 단위 수정(qpdf 콘텐츠 수술 — #55), 폰트 대체 | 50개 문서: 줄 밖 보존 + 폭 ±5% → v0.5 |
-| M5 마무리 | 성능, 설치 파일, 다국어, 문서화 | 성공 기준 전부 → v1.0 |
+| M5 마무리 | 배포물·설치기·DMG 2종·다국어·인쇄 미리보기 (v0.5.3 완료) · 서명·공증 | 서명 + 실기기·타 뷰어 QA + 왕복 200개(#117) → v1.0. 설정·충돌 보고는 1.1 |
 
 # Tech Stack
 - Language: C++23 (std::expected 사용), CMake ≥ 3.25 + vcpkg(manifest 모드), Ninja
