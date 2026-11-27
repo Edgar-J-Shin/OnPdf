@@ -7,8 +7,11 @@ name: Release
 # 수동 실행(workflow_dispatch)은 브랜치나 태그를 골라 빌드·점검만 하거나(publish=false), 태그면 Release 에 올린다.
 # 배포 관련 파일을 바꾸는 PR 에서는 같은 빌드·점검을 리허설한다(게시 없음).
 #
-# 서명은 저장소 비밀 값이 있을 때만:
-#   Windows  WINDOWS_CERT_PFX(base64), WINDOWS_CERT_PASSWORD
+# 서명은 저장소 비밀 값이 있을 때만(docs/signing.md):
+#   Windows  배포용 = Microsoft Artifact Signing(#116, GitHub OIDC): AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_SUBSCRIPTION_ID,
+#            SIGNING_ENDPOINT, SIGNING_ACCOUNT_NAME, SIGNING_CERT_PROFILE
+#            점검용 = WINDOWS_CERT_PFX(base64), WINDOWS_CERT_PASSWORD (자체 서명으로 파이프라인만 확인 — 공개 신뢰 인증서는
+#            2023-06 부터 HSM 보관이라 .pfx 로 내보낼 수 없다). 두 제공자를 동시에 설정하면 실패
 #   macOS    MACOS_CERT_P12(base64), MACOS_CERT_PASSWORD, APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD
 # 한 플랫폼의 비밀이 전부 없으면 서명 없이(macOS 는 ad-hoc — arm64 는 서명 없는 바이너리를 실행하지 못한다),
 # 일부만 있으면 실패한다(조용히 서명 없는 배포물을 내지 않는다).
@@ -77,6 +80,12 @@ jobs:
     name: windows-x64
     needs: version
     runs-on: windows-latest
+    # Artifact Signing 의 GitHub OIDC 로그인(#116): id-token 과, federated credential 의 subject 를 태그·브랜치와 무관하게
+    # "repo:Edgar-J-Shin/OnPdf:environment:release" 로 고정하는 environment(보호 규칙 없음)
+    permissions:
+      contents: read
+      id-token: write
+    environment: release
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
@@ -126,20 +135,80 @@ jobs:
           Copy-Item "$($crt.FullName)/*.dll" $stage
           Copy-Item packaging/README-windows.txt "$stage/README.txt"
           "STAGE=$stage" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Sign (optional)
+      - name: Choose signing provider
+        shell: pwsh
+        env:
+          CERT: ${{ secrets.WINDOWS_CERT_PFX }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          AZ_TENANT: ${{ secrets.AZURE_TENANT_ID }}
+          AZ_CLIENT: ${{ secrets.AZURE_CLIENT_ID }}
+          AZ_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZ_ENDPOINT: ${{ secrets.SIGNING_ENDPOINT }}
+          AZ_ACCOUNT: ${{ secrets.SIGNING_ACCOUNT_NAME }}
+          AZ_PROFILE: ${{ secrets.SIGNING_CERT_PROFILE }}
+        run: |
+          # 배포용 Artifact Signing(6개) / 점검용 PFX(2개) / 없음. 일부만 있거나 둘 다 있으면 실패 (#116)
+          $azure = @($env:AZ_TENANT, $env:AZ_CLIENT, $env:AZ_SUBSCRIPTION, $env:AZ_ENDPOINT, $env:AZ_ACCOUNT, $env:AZ_PROFILE)
+          $pfx = @($env:CERT, $env:CERT_PASSWORD)
+          $azureSet = @($azure | Where-Object { $_ }).Count
+          $pfxSet = @($pfx | Where-Object { $_ }).Count
+          if ($azureSet -ne 0 -and $azureSet -ne $azure.Count) { Write-Output "::error::Artifact Signing 비밀이 일부만 있다 ($azureSet/$($azure.Count))"; exit 1 }
+          if ($pfxSet -ne 0 -and $pfxSet -ne $pfx.Count) { Write-Output "::error::Windows PFX 비밀이 일부만 있다"; exit 1 }
+          if ($azureSet -gt 0 -and $pfxSet -gt 0) { Write-Output "::error::Artifact Signing 과 PFX 가 동시에 설정돼 있다 — 하나만 남긴다"; exit 1 }
+          $provider = "none"
+          if ($azureSet -gt 0) { $provider = "azure" }
+          elseif ($pfxSet -gt 0) { $provider = "pfx"; Write-Output "::warning::PFX 서명은 파이프라인 점검용이다(자체 서명 — SmartScreen 경고 그대로). 공개 릴리스에는 쓰지 않는다" }
+          else { Write-Output "::warning::Windows 서명 비밀이 없어 서명 없이 배포한다" }
+          Write-Output "signing provider: $provider"
+          "SIGN_PROVIDER=$provider" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # 서명 단계가 실패하면 잡이 멈추므로, 제공자가 있으면 설치기도 서명된 빌드(/DSigned=1)로 만든다
+          if ($provider -ne "none") { "SIGNED=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
+      - name: Azure login (OIDC)
+        if: env.SIGN_PROVIDER == 'azure'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Sign with Artifact Signing
+        if: env.SIGN_PROVIDER == 'azure'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ secrets.SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.SIGNING_CERT_PROFILE }}
+          files: ${{ github.workspace }}\${{ env.STAGE }}\onpdf_app.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: OnPdf
+          description-url: https://github.com/Edgar-J-Shin/OnPdf
+      - name: Sign with PFX (pipeline check only)
+        if: env.SIGN_PROVIDER == 'pfx'
         shell: pwsh
         env:
           CERT: ${{ secrets.WINDOWS_CERT_PFX }}
           CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
-          if (-not $env:CERT -and -not $env:CERT_PASSWORD) { Write-Output "::warning::Windows 서명 비밀이 없어 서명 없이 배포한다"; exit 0 }
-          if (-not $env:CERT -or -not $env:CERT_PASSWORD) { Write-Output "::error::Windows 서명 비밀이 일부만 있다"; exit 1 }
           [IO.File]::WriteAllBytes("$env:RUNNER_TEMP/cert.pfx", [Convert]::FromBase64String($env:CERT))
           $signtool = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin" -Recurse -Filter signtool.exe | Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
           & $signtool.FullName sign /f "$env:RUNNER_TEMP/cert.pfx" /p $env:CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "$env:STAGE/onpdf_app.exe"
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Remove-Item "$env:RUNNER_TEMP/cert.pfx"
-          "SIGNED=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Verify the signature
+        if: env.SIGN_PROVIDER != 'none'
+        shell: pwsh
+        run: |
+          # 배포용(azure)은 공개 신뢰 체인까지(signtool /pa), 점검용(pfx)은 서명이 붙었는지만
+          $exe = "$env:STAGE/onpdf_app.exe"
+          $sig = Get-AuthenticodeSignature $exe
+          Write-Output "onpdf_app.exe: $($sig.Status) - $($sig.SignerCertificate.Subject)"
+          if ($null -eq $sig.SignerCertificate) { Write-Output "::error::onpdf_app.exe is not signed"; exit 1 }
+          if ($env:SIGN_PROVIDER -eq 'azure') {
+            $signtool = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin" -Recurse -Filter signtool.exe | Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+            & $signtool.FullName verify /pa /v $exe
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
       - name: Check DLL dependencies
         shell: pwsh
         run: |
@@ -199,19 +268,43 @@ jobs:
           & $iscc "/DAppVersion=$env:VERSION" "/DStageDir=$old" "/DRepoDir=$PWD" "/DOutputDir=$env:RUNNER_TEMP" "/DOutputBase=old-setup" packaging/windows/onpdf.iss | Select-Object -Last 1
           if ($LASTEXITCODE -ne 0) { exit 1 }
           "OLD_SETUP=$(Join-Path $env:RUNNER_TEMP 'old-setup.exe')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Sign the installer (optional)
+      - name: Sign the installer with Artifact Signing
+        if: env.SIGN_PROVIDER == 'azure'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ secrets.SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.SIGNING_CERT_PROFILE }}
+          files: ${{ github.workspace }}\${{ env.SETUP }}
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: OnPdf Setup
+          description-url: https://github.com/Edgar-J-Shin/OnPdf
+      - name: Sign the installer with PFX (pipeline check only)
+        if: env.SIGN_PROVIDER == 'pfx'
         shell: pwsh
         env:
           CERT: ${{ secrets.WINDOWS_CERT_PFX }}
           CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
-          if (-not $env:CERT -and -not $env:CERT_PASSWORD) { Write-Output "::warning::Windows 서명 비밀이 없어 설치기도 서명 없이 배포한다"; exit 0 }
-          if (-not $env:CERT -or -not $env:CERT_PASSWORD) { Write-Output "::error::Windows 서명 비밀이 일부만 있다"; exit 1 }
           [IO.File]::WriteAllBytes("$env:RUNNER_TEMP/cert.pfx", [Convert]::FromBase64String($env:CERT))
           $signtool = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin" -Recurse -Filter signtool.exe | Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
           & $signtool.FullName sign /f "$env:RUNNER_TEMP/cert.pfx" /p $env:CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $env:SETUP
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Remove-Item "$env:RUNNER_TEMP/cert.pfx"
+      - name: Verify the installer signature
+        if: env.SIGN_PROVIDER != 'none'
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature $env:SETUP
+          Write-Output "$($env:SETUP): $($sig.Status) - $($sig.SignerCertificate.Subject)"
+          if ($null -eq $sig.SignerCertificate) { Write-Output "::error::installer is not signed"; exit 1 }
+          if ($env:SIGN_PROVIDER -eq 'azure') {
+            $signtool = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin" -Recurse -Filter signtool.exe | Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+            & $signtool.FullName verify /pa /v $env:SETUP
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
       - name: Self-test the installer
         shell: pwsh
         run: |
