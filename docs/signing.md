@@ -7,7 +7,8 @@
 | 플랫폼 | 비밀 값 | 서명 단계 |
 |---|---|---|
 | macOS | `MACOS_CERT_P12`(base64 .p12), `MACOS_CERT_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` | 임시 키체인에 .p12 가져오기 → `codesign --force --deep --options runtime --timestamp -s "Developer ID Application: …"` → `--self-test` → DMG → `xcrun notarytool submit --wait` → `xcrun stapler staple` |
-| Windows | `WINDOWS_CERT_PFX`(base64 .pfx), `WINDOWS_CERT_PASSWORD` | `signtool sign /f cert.pfx /p … /fd SHA256 /tr http://timestamp.digicert.com /td SHA256` 을 `onpdf_app.exe` 와 설치기(`…-setup.exe`)에 각각. 설치기는 `/DSigned=1` 로 "서명 없음" 안내를 빼고 만든다 |
+| Windows 배포용 | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_SUBSCRIPTION_ID`, `SIGNING_ENDPOINT`, `SIGNING_ACCOUNT_NAME`, `SIGNING_CERT_PROFILE` | **Microsoft Artifact Signing**(#116): `azure/login`(GitHub OIDC, 비밀 키 없음) → `azure/artifact-signing-action@v2` 가 `onpdf_app.exe` 와 설치기(`…-setup.exe`)를 각각 서명(SHA256, 타임스탬프 `timestamp.acs.microsoft.com`) → `signtool verify /pa` 로 공개 신뢰 체인 확인. 설치기는 `/DSigned=1` 로 "서명 없음" 안내를 빼고 만든다 |
+| Windows 점검용 | `WINDOWS_CERT_PFX`(base64 .pfx), `WINDOWS_CERT_PASSWORD` | `signtool sign /f cert.pfx …` — 자체 서명으로 파이프라인만 확인(아래). 배포용과 **동시에 설정하면 실패** |
 
 비밀 값이 없을 때: macOS 는 `codesign -s -`(ad-hoc) 라 첫 실행에 Control-클릭 → 열기가 필요하고, Windows 는 SmartScreen 경고가 뜬다(README 안내).
 
@@ -49,17 +50,41 @@ gh secret set APPLE_APP_PASSWORD    # 앱 암호 (xxxx-xxxx-xxxx-xxxx)
 
 ## Windows — 코드 서명
 
-### 현재 규칙과 우리 워크플로우의 차이
-CA/Browser Forum 규칙(2023-06-01 발효)으로 **공개 신뢰 코드 서명 인증서(OV·EV)의 개인 키는 FIPS 140-2 Level 2 이상 하드웨어(토큰·HSM)에 있어야** 한다. 새로 발급받는 인증서는 **.pfx 로 내보낼 수 없다**. 따라서 워크플로우의 `WINDOWS_CERT_PFX` 경로는 **자체 서명 인증서로 파이프라인을 점검할 때**(아래)와 2023 년 이전에 발급된 소프트웨어 키에만 쓸 수 있다. 실제 배포 서명은 아래 두 방식 가운데 하나로 워크플로우를 바꿔야 한다(후속 이슈).
+### 왜 클라우드 서명인가
+CA/Browser Forum 규칙(2023-06-01 발효)으로 **공개 신뢰 코드 서명 인증서(OV·EV)의 개인 키는 FIPS 140-2 Level 2 이상 하드웨어(토큰·HSM)에 있어야** 한다. 새로 발급받는 인증서는 **.pfx 로 내보낼 수 없다**. 그래서 워크플로우는 두 제공자를 둔다(#116): **배포용 Microsoft Artifact Signing**(구 Trusted Signing, 2026-01 GA — Azure 가 키를 보관하고 GitHub Action 이 서명)과 **점검용 PFX**(자체 서명으로 파이프라인만 확인). 대안인 상용 CA(Sectigo·DigiCert 등) OV/EV + 클라우드 HSM(DigiCert KeyLocker·SSL.com eSigner·Cloud KMS + signtool CNG 공급자)은 연 수백 USD + HSM 비용이 들고 설정이 복잡해 쓰지 않는다. USB 토큰은 CI 자동화가 안 된다.
 
-### 선택지
-| 방식 | 내용 | 장단점 |
-|---|---|---|
-| **A. Microsoft Artifact Signing**(구 Trusted Signing, 2026-01 GA) | Azure 구독 + 신원 검증(개인·조직) → Azure 가 키를 보관, GitHub Action(`azure/trusted-signing-action`, OIDC 로그인)이 signtool 대행 | 하드웨어 토큰 없음, 월 구독(저렴하다는 보고가 있으나 확인 필요), Microsoft 발급이라 SmartScreen 평판에 유리. Azure 계정·신원 검증 절차가 필요 |
-| **B. 상용 CA(Sectigo·DigiCert 등) OV/EV + 클라우드 HSM** | CA 가 제공하는 클라우드 서명(DigiCert KeyLocker, SSL.com eSigner) 또는 Google Cloud KMS·AWS KMS 에 키를 두고 signtool 의 CNG 공급자로 서명 | 연 수백 USD + HSM 비용, EV 는 SmartScreen 평판 즉시. 설정이 복잡 |
-| C. USB 토큰 | 개인 PC 에서 수동 서명 | CI 자동화 불가 — 제외 |
+### 준비 (Artifact Signing)
+1. **Azure 구독** 생성(종량제). 리소스 그룹 하나.
+2. **Artifact Signing 계정**: Azure Portal → "Artifact Signing"(Trusted Signing) → 계정 만들기. 지역을 고르면 엔드포인트가 정해진다(예: East US → `https://eus.codesigning.azure.net/`, West Europe → `https://weu.codesigning.azure.net/`). 계정 이름이 `SIGNING_ACCOUNT_NAME`, 엔드포인트가 `SIGNING_ENDPOINT`.
+3. **신원 검증**(Identity validation): 개인(Individual) 또는 조직(Organization). 개인은 정부 신분증·주소 확인, 조직은 등록 서류 — 수일. **Public Trust** 유형.
+4. **인증서 프로필**(Certificate profile): 유형 *Public Trust*, 위 신원 검증에 연결. 이름이 `SIGNING_CERT_PROFILE`. 서명자 이름(Subject)은 검증된 신원 그대로 들어간다.
+5. **GitHub OIDC 용 앱 등록**(비밀 키 없음):
+   - Microsoft Entra ID → 앱 등록 → 새 등록(예: `onpdf-github-release`). 애플리케이션(클라이언트) ID → `AZURE_CLIENT_ID`, 디렉터리(테넌트) ID → `AZURE_TENANT_ID`, 구독 ID → `AZURE_SUBSCRIPTION_ID`.
+   - 그 앱 → 인증서 및 비밀 → **페더레이션 자격 증명** → GitHub Actions: 조직 `Edgar-J-Shin`, 저장소 `OnPdf`, 엔터티 **Environment**, 환경 이름 `release`. subject 는 `repo:Edgar-J-Shin/OnPdf:environment:release`, audience `api://AzureADTokenExchange`. (워크플로우의 `windows-x64` 잡이 `environment: release` 를 쓰므로 태그·브랜치·PR 어느 실행이든 subject 가 같다 — 페더레이션 자격 증명은 와일드카드를 받지 않는다.)
+   - Artifact Signing 계정(또는 인증서 프로필) → 액세스 제어(IAM) → 역할 할당 → **Artifact Signing Certificate Profile Signer** 를 그 앱에.
+   - 저장소의 `release` 환경은 Settings → Environments 에 이미 있다(보호 규칙 없음). 없으면 만든다.
+6. (선택) 로컬 확인: `az login` 뒤 `signtool`(Windows SDK) + Trusted Signing dlib 로 임의 exe 서명 — 필수는 아니다. 리허설(아래)이 같은 것을 CI 에서 한다.
 
-권고: **A**. 1인 개발·CI 자동화·비용에서 유리하다. 전환 작업: `release.yml` 의 두 서명 단계를 "서명 제공자" 분기(PFX = 점검용 / Artifact Signing = 배포용)로 바꾸고, 비밀 값을 `AZURE_TENANT_ID`·`AZURE_CLIENT_ID`·`AZURE_SUBSCRIPTION_ID`(OIDC) + 엔드포인트·계정·프로필 이름으로 바꾼다. 설치기 `/DSigned=1` 규칙은 그대로.
+### 비밀 값 등록
+```bash
+gh secret set AZURE_TENANT_ID
+gh secret set AZURE_CLIENT_ID
+gh secret set AZURE_SUBSCRIPTION_ID
+gh secret set SIGNING_ENDPOINT        # https://<region>.codesigning.azure.net/
+gh secret set SIGNING_ACCOUNT_NAME
+gh secret set SIGNING_CERT_PROFILE
+```
+여섯 개를 **한 번에** 넣는다(일부만 있으면 리허설이 실패한다). `WINDOWS_CERT_PFX`·`WINDOWS_CERT_PASSWORD` 가 남아 있으면 "동시에 설정" 으로 실패하므로 지운다. 엔드포인트·계정·프로필은 비밀이 아니지만 "전부 또는 없음" 규칙을 한 곳에서 보려고 secrets 로 둔다.
+
+### 검증
+1. Actions → Release → Run workflow(ref `develop`, publish 끔) → `windows-x64` 잡 로그: `signing provider: azure`, `Azure login (OIDC)` 성공, `Sign with Artifact Signing` 와 `Sign the installer with Artifact Signing` 성공, `Verify the signature`·`Verify the installer signature` 에 `Status: Valid` 와 `signtool verify /pa` 의 "Successfully verified". `Build the installer` 로그에 `/DSigned=1`(설치기 첫 화면의 "서명 없음" 안내가 빠진다).
+2. 아티팩트 zip 의 `onpdf_app.exe` 와 `…-setup.exe` 를 Windows 에서: 속성 → 디지털 서명 탭에 서명자(검증된 신원 이름)·타임스탬프, 또는 `signtool verify /pa /v onpdf_app.exe`.
+3. 흔한 실패: `AADSTS70021`/`No matching federated identity record` → 페더레이션 자격 증명의 subject·audience 확인(환경 이름 `release`). `403` → 역할 할당(Certificate Profile Signer)이 계정 범위에 없음. 엔드포인트 지역 불일치 → 계정을 만든 지역의 엔드포인트.
+
+### 운영
+- Artifact Signing 인증서는 **짧은 수명(며칠)으로 자동 갱신**되므로 만료 관리가 없다. 타임스탬프가 있어 서명은 인증서 만료 뒤에도 유효하다.
+- 신원 검증은 주기적으로 재검증을 요구할 수 있다(포털 알림). 구독 결제가 끊기면 서명 단계가 403 으로 실패하고 릴리스가 나가지 않는다(의도된 안전장치).
+- 앱 등록에는 비밀 키가 없다(OIDC). 저장소 secrets 가 새도 서명 권한은 이 저장소의 `release` 환경에서 돌아가는 워크플로우에만 있다.
 
 ### 파이프라인 점검용 자체 서명(지금 할 수 있는 것)
 자체 서명 인증서는 사용자 PC 에서 신뢰되지 않지만(SmartScreen 경고 그대로) **워크플로우의 서명 단계가 동작하는지**는 확인할 수 있다.
@@ -73,11 +98,10 @@ Export-PfxCertificate -Cert $cert -FilePath onpdf-test.pfx -Password $pw
 gh secret set WINDOWS_CERT_PFX < onpdf-test.pfx.b64
 gh secret set WINDOWS_CERT_PASSWORD   # test-password
 ```
-리허설(publish 끔) 로그에 `signtool` 성공 두 번(exe·설치기), 설치기 로그에 "서명 없음" 안내가 빠졌는지 확인한 뒤, **반드시 비밀 값을 지운다**(`gh secret delete …`). 자체 서명으로 공개 릴리스를 만들지 않는다.
+리허설(publish 끔) 로그에 `signing provider: pfx`(경고 "점검용"), `Sign with PFX` 성공 두 번(exe·설치기), 검증 단계에 서명자 `CN=OnPdf CI test`(상태는 `NotSigned` 가 아니면 됨 — 자체 서명이라 `UnknownError`), 설치기 로그에 "서명 없음" 안내가 빠졌는지 확인한 뒤, **반드시 비밀 값을 지운다**(`gh secret delete …`). 자체 서명으로 공개 릴리스를 만들지 않는다.
 
-### 검증(실제 인증서 뒤)
-- 아티팩트 zip 의 `onpdf_app.exe` 와 `…-setup.exe`: 속성 → 디지털 서명 탭에 서명자·타임스탬프, 또는 `signtool verify /pa /v onpdf_app.exe`.
-- SmartScreen: OV·Artifact Signing 은 다운로드 수가 쌓여야 경고가 사라진다(수주), EV 는 즉시. README 의 "추가 정보 → 실행" 안내는 평판이 쌓인 뒤 뺀다.
+### SmartScreen
+- OV·Artifact Signing 은 다운로드 수가 쌓여야 경고가 사라진다(수주), EV 는 즉시. `packaging/README-windows.txt` 의 "추가 정보 → 실행" 안내는 평판이 쌓인 뒤 뺀다.
 
 ## 공통 체크리스트
 - [ ] 비밀 값은 플랫폼별로 **전부** 넣는다(일부만 있으면 리허설 실패).
