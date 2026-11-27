@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """pdfium-binaries 사전 빌드를 받아 third_party/pdfium/<platform>/ 에 푼다.
 
-버전은 third_party/pdfium-version.txt 의 태그(예: chromium/8152)로 고정한다.
+버전은 third_party/pdfium-version.txt 의 태그(예: chromium/8179)로 고정한다.
 같은 버전이 이미 있으면 아무것도 하지 않는다.
 
 사용법:
