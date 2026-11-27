@@ -11,7 +11,7 @@ Your goal is to write Safe, Testable, and Maintainable modern C++ (C++23, std::e
 Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜치 `develop`, 릴리스 `main`)
 1인 개발(주 10~15시간). 전체 계획서: [pdf-editor-plan.md](pdf-editor-plan.md) — 범위·로드맵·위험 대응은 이 문서가 기준이다.
 
-**현재 단계**: v0.5.3 릴리스(2026-11-27)로 M5 코드 범위 완료. **v1.0 게이트(#117)**: ① 코드 서명·공증(`docs/signing.md`; Windows 는 Microsoft Artifact Signing 으로 워크플로우 전환 완료 #116 — Apple 인증서·Azure 계정과 비밀 값은 사용자 준비) ② 실기기·타 뷰어 수동 QA(Windows 10/11 설치기, Intel Mac·macOS 13 DMG, 실제 프린터, Adobe Reader·Chrome·Edge 표시, 영어·한국어 화면) ③ 왕복 테스트 PDF 200개 — **완료**(#119: 공개 코퍼스 260개 `testdata/corpus.tsv`, `onpdf_corpus_tests` 전부 통과, CI 매 PR). 설정 화면·충돌 보고는 1.1(2026-11-27 결정). **1.1 후속**: #121 악성 PDF 완화(PDFium 렌더 폭탄 시간 제한 — progressive render + `IFSDK_PAUSE`, JPX 디코더 크래시는 chromium/8179 에서도 재현(#125) — 상류 수정을 기다린다; #119 코퍼스에서 발견). #112(Windows 텍스트 도구 테스트 멈춤)는 수정 뒤 4회 연속 통과로 닫음
+**현재 단계**: v0.5.4 릴리스(2026-11-28: 악성 PDF 완화 #121, 왕복 코퍼스 #119, PDFium chromium/8179 #125). M5 코드 범위 완료. **v1.0 게이트(#117)**: ① 코드 서명·공증(`docs/signing.md`; Windows 는 Microsoft Artifact Signing 으로 워크플로우 전환 완료 #116 — Apple 인증서·Azure 계정과 비밀 값은 사용자 준비) ② 실기기·타 뷰어 수동 QA(Windows 10/11 설치기, Intel Mac·macOS 13 DMG, 실제 프린터, Adobe Reader·Chrome·Edge 표시, 영어·한국어 화면) ③ 왕복 테스트 PDF 200개 — **완료**(#119: 공개 코퍼스 260개 `testdata/corpus.tsv`, `onpdf_corpus_tests` 전부 통과, CI 매 PR). 설정 화면·충돌 보고는 1.1(2026-11-27 결정). #121 악성 PDF 완화는 앞당겨 완료(qpdf 사전 검사 + 워커 멈춤 감시 — 원칙 6). JPX 디코더 크래시(#119 코퍼스에서 발견)는 chromium/8179 에서도 재현(#125) — 상류 수정을 기다리며 판을 올릴 때마다 재확인. #112(Windows 텍스트 도구 테스트 멈춤)는 수정 뒤 4회 연속 통과로 닫음
 
 | 마일스톤 | 핵심 | 완료 기준 |
 |---|---|---|
