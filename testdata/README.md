@@ -88,7 +88,7 @@ pdfcpu 테스트 자료는 제3자 저작물(ITU-T T.81·Adobe 정오표 등)이
 - **넣지 않는 것**: 문서는 열리지만 어떤 쪽을 못 여는 파일(저장 검증이 거절하므로 왕복 대상이 아님, `--probe` 가 `broken-page` 로 표시),
   암호를 모르는 암호 파일, PDFium 이 처리하지 못하는 입력 — pdf.js `tiling-pattern-tiny-steps*.pdf`(XStep 0.001 렌더 폭탄: #121 뒤 앱은 그 쪽을
   거부해 안전하지만 첫 쪽이 폭탄이라 왕복 테스트의 첫 쪽 렌더 비교가 안 된다 — 같은 구조의 `pattern-bomb.pdf` 가 거부를 검증한다)와
-  `jpx_numcomps.pdf`(PDFium chromium/8152 JPX 디코더 CHECK 실패로 프로세스 종료 — 상류 버그, PDFium 판을 올릴 때 다시 확인)
+  `jpx_numcomps.pdf`(PDFium JPX 디코더 CHECK 실패로 프로세스 종료 — 상류 버그. chromium/8152·8179 모두 재현(#125), 판을 올릴 때마다 다시 확인)
 - **qpdf-broken 태그**(7개): 원본부터 qpdf 가 오류로 거절하는 파일(PDFium 만 복구해 여는 손상 파일, qpdf 12 가 모르는 Brotli 필터, qpdf 가 못 여는
   암호 설정). 저장본의 qpdf 오류는 우리 탓이 아니므로 참고만 하고, PDFium 다시 열기·비교까지는 통과해야 한다
 - **갱신**: PDFium 판을 올리면 `fetch_corpus.py --probe build/dev/bin/onpdf_cli` 로 `expect` 를 다시 맞춘다. 출처 커밋을 올리면 `SOURCES` 의 SHA 를 바꾸고

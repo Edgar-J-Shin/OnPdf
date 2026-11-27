@@ -5,7 +5,7 @@ OnPdf 는 Apache License 2.0 으로 배포되며, 아래 제3자 구성 요소�
 ## 배포물에 포함되는 구성 요소
 
 ### PDFium
-- 출처: https://pdfium.googlesource.com/pdfium (chromium/8152), 사전 빌드 https://github.com/bblanchon/pdfium-binaries
+- 출처: https://pdfium.googlesource.com/pdfium (chromium/8179), 사전 빌드 https://github.com/bblanchon/pdfium-binaries
 - 라이선스: BSD-3-Clause (PDFium), MIT (pdfium-binaries 빌드 스크립트)
 - PDFium 공유 라이브러리에는 다음 구성 요소가 정적으로 들어 있다. 전체 라이선스 문구는 사전 빌드의 `licenses/` 폴더에 있다.
 
