@@ -231,5 +231,31 @@ TEST(PdfiumWorker, PostAfterStopRunsCancelledInline) {
   EXPECT_EQ(ran_on, caller);
 }
 
+// 실행 중 작업의 종류·시작 시각 (#121 멈춤 감시): 막힌 kRender 작업 동안 보고하고, 끝나면 비어 있다
+TEST(PdfiumWorker, RunningTaskReportsKindAndAge) {
+  PdfiumWorker worker;
+  EXPECT_FALSE(worker.running_task().has_value());
+  auto entered = std::make_shared<std::latch>(1);
+  auto release = std::make_shared<std::latch>(1);
+  worker.post([entered, release](bool) {
+    entered->count_down();
+    release->wait();
+  }, Priority::kNormal, TaskKind::kRender);
+  entered->wait();
+  auto running = worker.running_task();
+  ASSERT_TRUE(running.has_value());
+  EXPECT_EQ(running->kind, TaskKind::kRender);
+  std::this_thread::sleep_for(50ms);
+  const auto age = std::chrono::steady_clock::now() - running->since;
+  EXPECT_GE(age, 50ms);
+  EXPECT_LT(age, kTimeout);
+  release->count_down();
+  auto done = worker.submit([] { return 1; });
+  EXPECT_EQ(get_or_fail(done).value_or(0), 1);
+  // 짧은 작업이 끝난 뒤에는 비어 있다 (워커가 다음 작업을 돌리지 않을 때)
+  for (int i = 0; i < 100 && worker.running_task().has_value(); ++i) std::this_thread::sleep_for(5ms);
+  EXPECT_FALSE(worker.running_task().has_value());
+}
+
 }  // namespace
 }  // namespace onpdf::engine

@@ -45,6 +45,16 @@
             <numerusform>Copied %n characters</numerusform>
         </translation>
     </message>
+    <message numerus="yes">
+        <source>Rendering has not finished for %n second(s). The document may contain hostile content.
+If you force quit, unsaved changes are lost.</source>
+        <translation>
+            <numerusform>Rendering has not finished for %n second. The document may contain hostile content.
+If you force quit, unsaved changes are lost.</numerusform>
+            <numerusform>Rendering has not finished for %n seconds. The document may contain hostile content.
+If you force quit, unsaved changes are lost.</numerusform>
+        </translation>
+    </message>
 </context>
 <context>
     <name>onpdf::app::PrintPreviewDialog</name>

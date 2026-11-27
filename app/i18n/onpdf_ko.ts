@@ -45,6 +45,10 @@
 <context>
     <name>onpdf::app::DocumentView</name>
     <message>
+        <source>This page cannot be displayed (hazardous pattern)</source>
+        <translation>이 쪽은 표시할 수 없습니다 (위험한 패턴)</translation>
+    </message>
+    <message>
         <source>Page %1</source>
         <translation>%1 쪽</translation>
     </message>
@@ -1194,6 +1198,30 @@ If you know its permissions (owner) password, you can unlock printing.</source>
     <message>
         <source>Link: %1</source>
         <translation>링크: %1</translation>
+    </message>
+    <message>
+        <source>Not responding</source>
+        <translation>응답 없음</translation>
+    </message>
+    <message numerus="yes">
+        <source>Rendering has not finished for %n second(s). The document may contain hostile content.
+If you force quit, unsaved changes are lost.</source>
+        <translation>
+            <numerusform>렌더링이 %n초째 끝나지 않습니다. 문서에 위험한 내용이 있을 수 있습니다.
+강제 종료하면 저장하지 않은 변경은 잃습니다.</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Force quit</source>
+        <translation>강제 종료</translation>
+    </message>
+    <message>
+        <source>Keep waiting</source>
+        <translation>계속 기다리기</translation>
+    </message>
+    <message>
+        <source>Page %1 cannot be displayed: %2</source>
+        <translation>%1쪽을 표시할 수 없습니다: %2</translation>
     </message>
     <message>
         <source>%1 · %2% · cache %3 MB · tile %4 ms</source>

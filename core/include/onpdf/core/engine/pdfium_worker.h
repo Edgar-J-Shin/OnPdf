@@ -18,11 +18,13 @@
 #include "onpdf/core/error.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <future>
 #include <memory>
+#include <optional>
 #include <type_traits>
 #include <utility>
 
@@ -33,6 +35,15 @@ class PdfiumLibrary;
 struct PdfiumWorkerImpl;
 
 enum class Priority { kLow = 0, kNormal = 1, kHigh = 2 };
+
+// 작업 종류 (#121 감시용): 앱은 kRender 가 오래 돌면 "응답 없음" 으로 본다. 저장·수술은 길어도 끝난다
+enum class TaskKind { kOther = 0, kOpen, kRender, kQuery, kModify, kSave };
+
+// 지금 실행 중인 작업 (어느 스레드에서든 읽기, 잠금 없음)
+struct RunningTask {
+  TaskKind kind = TaskKind::kOther;
+  std::chrono::steady_clock::time_point since;
+};
 
 using DocumentId = std::uint64_t;  // 0 = 없음
 
@@ -82,12 +93,16 @@ class PdfiumWorker {
 
   // 작업을 큐에 넣는다. 워커가 이미 멈췄으면 호출 스레드에서 즉시 task(true) 를 실행하고 빈 핸들을
   // 돌려준다.
-  TaskHandle post(Task task, Priority priority = Priority::kNormal);
+  TaskHandle post(Task task, Priority priority = Priority::kNormal,
+                  TaskKind kind = TaskKind::kOther);
 
   // fn 을 워커에서 실행하고 결과를 future 로 받는다.
   // fn 은 Result<T> 또는 T 를 돌려줄 수 있다. 취소 → kCancelled, 예외 → kUnknown.
   template <class F>
-  auto submit(F&& fn, Priority priority = Priority::kNormal);
+  auto submit(F&& fn, Priority priority = Priority::kNormal, TaskKind kind = TaskKind::kOther);
+
+  // 지금 실행 중인 작업의 종류와 시작 시각. 없으면 nullopt. 어느 스레드에서든 (#121 멈춤 감시)
+  [[nodiscard]] std::optional<RunningTask> running_task() const noexcept;
 
   // 대기 중인 작업을 전부 취소한다. 실행 중인 작업은 끝까지 간다.
   void cancel_all() noexcept;
@@ -127,7 +142,7 @@ struct SubmitResult<Result<R>> {
 }  // namespace detail
 
 template <class F>
-auto PdfiumWorker::submit(F&& fn, Priority priority) {
+auto PdfiumWorker::submit(F&& fn, Priority priority, TaskKind kind) {
   using Raw = std::remove_cvref_t<std::invoke_result_t<F>>;
   static_assert(!std::is_void_v<Raw>, "submit 의 함수는 값 또는 Result<T> 를 돌려줘야 한다");
   using Wrapper = detail::SubmitResult<Raw>;
@@ -150,7 +165,7 @@ auto PdfiumWorker::submit(F&& fn, Priority priority) {
           promise->set_value(make_error(ErrorCode::kUnknown, "task threw unknown exception"));
         }
       },
-      priority);
+      priority, kind);
   return future;
 }
 

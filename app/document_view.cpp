@@ -11,6 +11,7 @@
 #include <QMouseEvent>
 #include <QNativeGestureEvent>
 #include <QPaintEvent>
+#include <QFont>
 #include <QPainter>
 #include <QPen>
 #include <QPolygonF>
@@ -106,6 +107,9 @@ void DocumentView::set_document(const engine::DocumentHandle& handle, UiDispatch
   horizontalScrollBar()->setValue(0);
   layout_ = std::make_unique<view::PageLayout>(handle.info().page_sizes);
   source_ = std::make_unique<DocumentTileSource>(handle, dispatcher, this);
+  source_->set_on_refused(
+      [this](int page, const QString& reason) { on_tile_refused(page, reason); });
+  refused_.clear();
   scheduler_ = std::make_unique<view::TileScheduler>(*source_, cache_);
   scheduler_->set_layout(layout_.get());
   scheduler_->set_on_tile([this](const view::TileKey& key) { on_tile_ready(key); });
@@ -118,6 +122,7 @@ void DocumentView::set_document(const engine::DocumentHandle& handle, UiDispatch
 }
 
 void DocumentView::invalidate_pages(const std::vector<int>& pages, bool sizes_changed) {
+  for (int p : pages) refused_.erase(p);  // 편집 뒤 다시 요청해 판정을 새로 받는다 (#121)
   if (!layout_ || !source_) return;
   // 진행 중인 텍스트 추출은 이전 모양 기준이다: 세대를 올려 늦은 결과를 버리고, 보이는 쪽은 다시
   // 요청한다
@@ -216,6 +221,7 @@ void DocumentView::invalidate_pages(const std::vector<int>& pages, bool sizes_ch
 }
 
 void DocumentView::rebuild_pages(int keep_page) {
+  refused_.clear();  // 쪽 번호가 바뀐다 — 다시 요청하면 엔진이 재배치된 판정으로 답한다 (#121)
   if (!layout_ || !source_) return;
   ++doc_generation_;  // 진행 중인 텍스트 추출·타일은 옛 쪽 번호 기준이다
   for (auto& [page, task] : text_requested_) task.cancel();
@@ -492,6 +498,17 @@ void DocumentView::schedule_update() {
   }
 }
 
+void DocumentView::on_tile_refused(int page, const QString& reason) {
+  if (!layout_ || refused_.contains(page)) return;
+  refused_.emplace(page, reason);
+  const double d = dpr();
+  const onpdf::Rect rect = layout_->page_rect(page);
+  const QRectF logical(horizontal_offset_logical() + rect.x / d - horizontalScrollBar()->value(),
+                       rect.y / d - verticalScrollBar()->value(), rect.w / d, rect.h / d);
+  viewport()->update(logical.toAlignedRect().adjusted(-1, -1, kShadow + 1, kShadow + 1));
+  emit page_refused(page, reason);
+}
+
 void DocumentView::on_tile_ready(const view::TileKey& key) {
   if (!layout_) return;
   const double d = dpr();
@@ -542,6 +559,18 @@ void DocumentView::paint_page(QPainter& painter, int page, const QRectF& page_lo
   const double d = dpr();
   painter.fillRect(page_logical.translated(kShadow, kShadow), kShadowColor);
   painter.fillRect(page_logical, Qt::white);
+  if (refused_.contains(page)) {  // 렌더 거부 쪽 (#121): 타일 대신 안내만
+    painter.save();
+    painter.setPen(QColor(128, 128, 128));
+    QFont font = painter.font();
+    font.setPointSizeF(12.0);
+    painter.setFont(font);
+    painter.drawText(page_logical.adjusted(24, 24, -24, -24),
+                     Qt::AlignCenter | Qt::TextWordWrap,
+                     tr("This page cannot be displayed (hazardous pattern)"));
+    painter.restore();
+    return;
+  }
 
   const int scale_q = layout_->scale_q();
   const engine::PageSize pt = layout_->page_size_pt(page);

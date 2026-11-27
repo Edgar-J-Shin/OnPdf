@@ -31,8 +31,10 @@
 #include <exception>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 namespace onpdf::engine {
@@ -772,6 +774,177 @@ Result<SurgeryReport> QpdfTools::remove_text_show_ops(const std::vector<std::uin
     return make_error(ErrorCode::kJobFailed, std::string("qpdf: ") + e.what());
   }
   return report;
+}
+
+// ---- 렌더 위험 검사 (#121) ----
+namespace {
+
+constexpr int kHazardMaxDepth = 8;
+
+struct HazardScan {
+  std::unordered_map<int, RenderHazard> best;  // 쪽 → 가장 큰 위험
+  std::set<QPDFObjGen> visited;                // 간접 객체 방문 집합 (순환·중복 방지)
+};
+
+double number_or(QPDFObjectHandle h, double fallback) {
+  return h.isNumber() ? h.getNumericValue() : fallback;
+}
+
+// 타일링 패턴 사전 → 쪽당 추정 타일 수. XStep/YStep 이 0·없음이면 BBox 크기(규격 8.7.3.1)
+std::optional<RenderHazard> judge_pattern(QPDFObjectHandle dict, int page, double page_area) {
+  double xstep = number_or(dict.getKey("/XStep"), 0.0);
+  double ystep = number_or(dict.getKey("/YStep"), 0.0);
+  QPDFObjectHandle bbox = dict.getKey("/BBox");
+  if (bbox.isArray() && bbox.getArrayNItems() == 4) {
+    const double bw = std::abs(number_or(bbox.getArrayItem(2), 0.0) - number_or(bbox.getArrayItem(0), 0.0));
+    const double bh = std::abs(number_or(bbox.getArrayItem(3), 0.0) - number_or(bbox.getArrayItem(1), 0.0));
+    if (xstep == 0.0) xstep = bw;
+    if (ystep == 0.0) ystep = bh;
+  }
+  double det = 1.0;
+  QPDFObjectHandle m = dict.getKey("/Matrix");
+  if (m.isArray() && m.getArrayNItems() == 6) {
+    const double a = number_or(m.getArrayItem(0), 1.0), b = number_or(m.getArrayItem(1), 0.0);
+    const double c = number_or(m.getArrayItem(2), 0.0), d = number_or(m.getArrayItem(3), 1.0);
+    det = std::abs(a * d - b * c);
+  }
+  const double cell = std::abs(xstep * ystep) * det;
+  RenderHazard hazard;
+  hazard.page = page;
+  if (!(cell > 0.0) || !std::isfinite(cell)) {
+    hazard.kind = RenderHazardKind::kTilingPatternDegenerate;
+    hazard.estimate = 0.0;
+    hazard.detail = "page " + std::to_string(page + 1) + ": degenerate tiling pattern (XStep " +
+                    std::to_string(xstep) + ", YStep " + std::to_string(ystep) + ")";
+    return hazard;
+  }
+  const double tiles = page_area / cell;
+  if (!std::isfinite(tiles) || tiles > kMaxPatternTilesPerPage) {
+    char buf[160];
+    std::snprintf(buf, sizeof buf,
+                  "page %d: tiling pattern needs about %.3g tiles per page (XStep %g, YStep %g)",
+                  page + 1, tiles, xstep, ystep);
+    hazard.kind = RenderHazardKind::kTilingPatternTooDense;
+    hazard.estimate = tiles;
+    hazard.detail = buf;
+    return hazard;
+  }
+  return std::nullopt;
+}
+
+void note_hazard(HazardScan& scan, const RenderHazard& h) {
+  auto it = scan.best.find(h.page);
+  if (it == scan.best.end()) {
+    scan.best.emplace(h.page, h);
+    return;
+  }
+  // degenerate 는 estimate 0 이지만 더 심각하므로 우선
+  const bool worse = h.kind == RenderHazardKind::kTilingPatternDegenerate ||
+                     (it->second.kind != RenderHazardKind::kTilingPatternDegenerate &&
+                      h.estimate > it->second.estimate);
+  if (worse) it->second = h;
+}
+
+// 간접 객체면 한 번만 들어간다. 직접 객체는 순환할 수 없으므로 항상 들어간다
+bool enter_once(HazardScan& scan, QPDFObjectHandle h) {
+  if (!h.isIndirect()) return true;
+  return scan.visited.insert(h.getObjGen()).second;
+}
+
+void walk_resources(QPDFObjectHandle resources, int page, double page_area, int depth,
+                    HazardScan& scan);
+
+void walk_stream_resources(QPDFObjectHandle stream, int page, double page_area, int depth,
+                           HazardScan& scan) {
+  if (!stream.isStream() || !enter_once(scan, stream)) return;
+  walk_resources(stream.getDict().getKey("/Resources"), page, page_area, depth + 1, scan);
+}
+
+void walk_resources(QPDFObjectHandle resources, int page, double page_area, int depth,
+                    HazardScan& scan) {
+  if (depth > kHazardMaxDepth || !resources.isDictionary() || !enter_once(scan, resources)) return;
+  QPDFObjectHandle patterns = resources.getKey("/Pattern");
+  if (patterns.isDictionary()) {
+    for (const auto& [name, pattern] : patterns.ditems()) {
+      QPDFObjectHandle dict = pattern.isStream() ? pattern.getDict() : pattern;
+      if (!dict.isDictionary()) continue;
+      if (number_or(dict.getKey("/PatternType"), 0.0) == 1.0) {
+        if (auto h = judge_pattern(dict, page, page_area)) note_hazard(scan, *h);
+      }
+      // 패턴 셀 콘텐츠도 자원을 가진다 (패턴 안의 패턴·Form)
+      walk_stream_resources(pattern, page, page_area, depth, scan);
+    }
+  }
+  QPDFObjectHandle xobjects = resources.getKey("/XObject");
+  if (xobjects.isDictionary()) {
+    for (const auto& [name, x] : xobjects.ditems()) {
+      if (x.isStream() && x.getDict().getKey("/Subtype").isNameAndEquals("/Form"))
+        walk_stream_resources(x, page, page_area, depth, scan);
+    }
+  }
+}
+
+// 주석 외형(/AP /N: 스트림 또는 상태 사전)의 자원
+void walk_annotations(QPDFObjectHandle page_dict, int page, double page_area, HazardScan& scan) {
+  QPDFObjectHandle annots = page_dict.getKey("/Annots");
+  if (!annots.isArray()) return;
+  for (auto& annot : annots.getArrayAsVector()) {
+    if (!annot.isDictionary()) continue;
+    QPDFObjectHandle ap = annot.getKey("/AP");
+    if (!ap.isDictionary()) continue;
+    QPDFObjectHandle normal = ap.getKey("/N");
+    if (normal.isStream()) {
+      walk_stream_resources(normal, page, page_area, 0, scan);
+    } else if (normal.isDictionary()) {
+      for (const auto& [state, stream] : normal.ditems())
+        walk_stream_resources(stream, page, page_area, 0, scan);
+    }
+  }
+}
+
+double media_box_area(QPDFPageObjectHelper& page) {
+  QPDFObjectHandle box = page.getAttribute("/MediaBox", false);
+  if (box.isArray() && box.getArrayNItems() == 4) {
+    const double w = std::abs(number_or(box.getArrayItem(2), 0.0) - number_or(box.getArrayItem(0), 0.0));
+    const double h = std::abs(number_or(box.getArrayItem(3), 0.0) - number_or(box.getArrayItem(1), 0.0));
+    if (w > 0.0 && h > 0.0 && std::isfinite(w * h)) return w * h;
+  }
+  return 612.0 * 792.0;  // Letter
+}
+
+}  // namespace
+
+Result<std::vector<RenderHazard>> QpdfTools::scan_render_hazards(
+    const std::vector<std::uint8_t>& bytes, std::string_view password) {
+  try {
+    QPDF q;
+    q.setSuppressWarnings(true);
+    const std::string pw(password);
+    q.processMemoryFile("document", reinterpret_cast<const char*>(bytes.data()), bytes.size(),
+                        pw.empty() ? nullptr : pw.c_str());
+    HazardScan scan;
+    auto pages = QPDFPageDocumentHelper(q).getAllPages();
+    for (std::size_t i = 0; i < pages.size(); ++i) {
+      QPDFPageObjectHelper& page = pages[i];
+      const int index = static_cast<int>(i);
+      const double area = media_box_area(page);
+      // 쪽마다 방문 집합을 새로 — 같은 Form 을 여러 쪽이 쓰면 쪽마다 판정해야 한다
+      scan.visited.clear();
+      walk_resources(page.getAttribute("/Resources", false), index, area, 0, scan);
+      walk_annotations(page.getObjectHandle(), index, area, scan);
+    }
+    std::vector<RenderHazard> out;
+    out.reserve(scan.best.size());
+    for (auto& [page, hazard] : scan.best) out.push_back(hazard);
+    std::sort(out.begin(), out.end(),
+              [](const RenderHazard& a, const RenderHazard& b) { return a.page < b.page; });
+    return out;
+  } catch (const std::exception& e) {
+    const std::string what = e.what();
+    return make_error(
+        is_password_error(what) ? ErrorCode::kPasswordRequired : ErrorCode::kInvalidFormat,
+        "qpdf: " + tidy_error(what));
+  }
 }
 
 }  // namespace onpdf::engine

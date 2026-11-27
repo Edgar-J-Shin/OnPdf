@@ -52,6 +52,8 @@
 | `text-lines-form.pdf` | ok |  | 4 | gen | Apache-2.0 | Form XObject 1단계 줄(수정 가능)·2단계 줄(불가), 쪽 직속 줄, 이미지; 2쪽은 BT 안에서 나뉜 /Contents 배열(밀림); 3·4쪽은 공유 Form(불가) |
 | `text-lines-type3.pdf` | ok |  | 1 | gen | Apache-2.0 | Type3 줄(대체 글꼴)·임베딩 CID 한글 줄(원본 글꼴 재사용)·보이지 않는 3 Tr 줄(불가) |
 | `text-lines-kern.pdf` | ok |  | 1 | gen | Apache-2.0 | 줄 폭 맞춤(#77): TJ 넓힘·Tc 자간·끝 공백·좁힘 커닝·보통·큰 자간(한계)·배열 문자열 하나 TJ 줄 |
+| `text-lines-split.pdf` | ok |  | 1 | gen | Apache-2.0 | /Contents 배열이 피연산자와 연산자 사이에서 나뉜 쪽(Word·LiveCycle 식, #81): 이어 붙여 세고 스트림별로 지운다 |
+| `pattern-bomb.pdf` | ok |  | 4 | gen | Apache-2.0 | 렌더 위험(#121): 1쪽 정상(36pt 스텝 패턴), 2쪽 /XStep 0.001 타일링 패턴 폭탄, 3쪽 Form XObject 안 폭탄, 4쪽 Square 주석 AP 안 폭탄 — 2~4쪽 렌더는 kRenderRefused |
 <!-- manifest:end -->
 
 ## 출처·라이선스
@@ -84,7 +86,8 @@ pdfcpu 테스트 자료는 제3자 저작물(ITU-T T.81·Adobe 정오표 등)이
 선형화·증분·PDF 2.0·투명도·셰이딩·패턴·서명·JavaScript·100쪽 이상)마다 3개 이상, 나머지는 해시 순으로 보충. 100쪽 이상은 공개 코퍼스에
 하나뿐이라(pdf.js `freeculture.pdf` 352쪽) 다쪽 검증은 저장소의 `large-1000.pdf` 가 맡는다.
 - **넣지 않는 것**: 문서는 열리지만 어떤 쪽을 못 여는 파일(저장 검증이 거절하므로 왕복 대상이 아님, `--probe` 가 `broken-page` 로 표시),
-  암호를 모르는 암호 파일, PDFium 이 처리하지 못하는 입력 — pdf.js `tiling-pattern-tiny-steps*.pdf`(XStep 0.001 렌더 폭탄, 렌더가 끝나지 않음)와
+  암호를 모르는 암호 파일, PDFium 이 처리하지 못하는 입력 — pdf.js `tiling-pattern-tiny-steps*.pdf`(XStep 0.001 렌더 폭탄: #121 뒤 앱은 그 쪽을
+  거부해 안전하지만 첫 쪽이 폭탄이라 왕복 테스트의 첫 쪽 렌더 비교가 안 된다 — 같은 구조의 `pattern-bomb.pdf` 가 거부를 검증한다)와
   `jpx_numcomps.pdf`(PDFium chromium/8152 JPX 디코더 CHECK 실패로 프로세스 종료 — 상류 버그, PDFium 판을 올릴 때 다시 확인)
 - **qpdf-broken 태그**(7개): 원본부터 qpdf 가 오류로 거절하는 파일(PDFium 만 복구해 여는 손상 파일, qpdf 12 가 모르는 Brotli 필터, qpdf 가 못 여는
   암호 설정). 저장본의 qpdf 오류는 우리 탓이 아니므로 참고만 하고, PDFium 다시 열기·비교까지는 통과해야 한다

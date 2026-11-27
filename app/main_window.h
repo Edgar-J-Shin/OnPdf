@@ -17,7 +17,9 @@
 #include <QColor>
 #include <QImage>
 #include <QMainWindow>
+#include <QPointer>
 #include <QString>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
@@ -29,6 +31,7 @@
 
 class QCloseEvent;
 class QLabel;
+class QMessageBox;
 class QPrinter;
 class QToolBar;
 class QActionGroup;
@@ -161,6 +164,11 @@ class MainWindow : public QMainWindow {
   bool print_with(QPrinter& printer, PrintJob::Request request);
   // 첫 쪽이 그려지면 창을 PNG 로 저장하고 앱을 종료한다 (QA·CI 스크린샷용, --screenshot 옵션).
   void screenshot_after_render(const QString& png_path);
+  // 워커 멈춤 감시 (#121): 렌더 작업이 threshold 를 넘으면 "응답 없음" 경고. 테스트는 짧게 주입하고
+  // 강제 종료(std::_Exit)를 훅으로 가로챈다
+  void set_stall_threshold(std::chrono::milliseconds threshold) { stall_threshold_ = threshold; }
+  void set_force_exit_hook(std::function<void(int code)> hook) { force_exit_ = std::move(hook); }
+  [[nodiscard]] bool worker_stalled() const;
 
  protected:
   void closeEvent(QCloseEvent* event) override;
@@ -281,11 +289,15 @@ class MainWindow : public QMainWindow {
   void update_outline_highlight();
   void on_zoom_changed(double zoom);
   void refresh_status();
+  void check_worker_stall();   // 1초마다: 렌더 작업이 오래 돌면 경고 (#121)
+  void show_stall_warning();   // 비모달 "응답 없음" 상자 (objectName worker_stalled)
+  void on_page_refused(int page, const QString& reason);
   void set_document_status(const QString& text);  // 문서 정보 (지속)
   void show_transient(const QString& text);       // 진행·오류 안내 (몇 초 뒤 사라짐)
   void fail_screenshot(const QString& reason);    // --screenshot 모드에서 실패 시 종료
 
   UiDispatcher& dispatcher_;
+  engine::PdfiumWorker& worker_;  // 멈춤 감시용 (#121). main.cpp 의 스택 객체 — 창보다 오래 산다
   DocumentSession session_;
   DocumentView* view_ = nullptr;
   QSpinBox* page_spin_ = nullptr;
@@ -405,6 +417,12 @@ class MainWindow : public QMainWindow {
       false;  // 문서마다 처음 인쇄할 때 문서 인쇄 기본값을 대화상자에 넣는다
   QTimer* outline_highlight_timer_ = nullptr;
   QTimer* status_timer_ = nullptr;
+  // 워커 멈춤 감시 (#121)
+  QTimer* stall_timer_ = nullptr;
+  std::chrono::milliseconds stall_threshold_{30000};
+  std::function<void(int code)> force_exit_;
+  QPointer<QMessageBox> stall_box_;
+  std::optional<std::chrono::steady_clock::time_point> warned_since_;  // 경고한 작업의 시작 시각
   engine::TaskHandle outline_task_;  // 진행 중인 목차 로드 (문서 교체 시 취소)
   int outline_generation_ =
       0;  // 목차 로드마다 증가 (문서 열기·구조 편집 뒤 재로드). 늦게 온 목차를 버린다

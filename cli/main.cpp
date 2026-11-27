@@ -137,6 +137,9 @@ int cmd_info(const Args& args) {
     if (!size) return fail(size.error());
     std::printf("  page %d: %.2f x %.2f pt\n", i, size->width, size->height);
   }
+  for (const auto& hazard : doc->render_hazards()) {  // 렌더 위험 (#121). detail 에 1 기준 쪽 번호
+    std::printf("hazard: %s (%s)\n", hazard.detail.c_str(), to_string(hazard.kind));
+  }
   auto print = doc->print_preferences();
   if (!print) return fail(print.error());
   std::string ranges;

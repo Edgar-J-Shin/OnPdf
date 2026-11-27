@@ -35,6 +35,13 @@ bool PdfiumWorkerImpl::pop_next(Entry& out) {
 }
 
 void PdfiumWorkerImpl::run_entry(Entry& entry, bool cancelled) noexcept {
+  // 실행 중 표시 (#121): since 를 먼저 쓰고 kind 로 공개한다. 취소 통지는 짧으므로 기록하지 않는다
+  if (!cancelled) {
+    const auto now = std::chrono::steady_clock::now().time_since_epoch();
+    running_since_ns.store(std::chrono::duration_cast<std::chrono::nanoseconds>(now).count(),
+                           std::memory_order_relaxed);
+    running_kind.store(static_cast<int>(entry.kind), std::memory_order_release);
+  }
   try {
     entry.task(cancelled);
   } catch (const std::exception& e) {
@@ -42,6 +49,16 @@ void PdfiumWorkerImpl::run_entry(Entry& entry, bool cancelled) noexcept {
   } catch (...) {
     std::fprintf(stderr, "[onpdf] worker task threw an unknown exception\n");
   }
+  if (!cancelled) running_kind.store(-1, std::memory_order_release);
+}
+
+std::optional<RunningTask> PdfiumWorkerImpl::running_task() const noexcept {
+  const int kind = running_kind.load(std::memory_order_acquire);
+  if (kind < 0) return std::nullopt;
+  const auto ns = std::chrono::nanoseconds(running_since_ns.load(std::memory_order_relaxed));
+  return RunningTask{static_cast<TaskKind>(kind),
+                     std::chrono::steady_clock::time_point(
+                         std::chrono::duration_cast<std::chrono::steady_clock::duration>(ns))};
 }
 
 void PdfiumWorkerImpl::run_loop(const PdfiumWorker::Options& options) {
@@ -86,20 +103,20 @@ void PdfiumWorkerImpl::run(const PdfiumWorker::Options& options) noexcept {
   stop();  // 남은 작업이 있으면 이후 post 가 inline 취소되도록
 }
 
-TaskHandle PdfiumWorkerImpl::post(PdfiumWorker::Task task, Priority priority) {
+TaskHandle PdfiumWorkerImpl::post(PdfiumWorker::Task task, Priority priority, TaskKind kind) {
   assert(task && "빈 작업은 넣을 수 없다");
   auto flag = std::make_shared<std::atomic<bool>>(false);
   {
     std::lock_guard lock(mutex);
     if (!stopping) {
-      queues[static_cast<std::size_t>(priority)].push_back(Entry{flag, std::move(task)});
+      queues[static_cast<std::size_t>(priority)].push_back(Entry{flag, std::move(task), kind});
       cv.notify_one();
       return TaskHandle(std::move(flag));
     }
   }
   // 이미 멈춘 워커: 호출 스레드에서 취소 통지만 한다.
   flag->store(true, std::memory_order_relaxed);
-  Entry entry{flag, std::move(task)};
+  Entry entry{flag, std::move(task), kind};
   run_entry(entry, true);
   return TaskHandle{};
 }
@@ -172,8 +189,11 @@ PdfiumWorker::~PdfiumWorker() {
   // 핸들이 weak_ptr 로 잡고 있을 수 있으므로 Impl 은 마지막 참조가 사라질 때 해제된다.
 }
 
-TaskHandle PdfiumWorker::post(Task task, Priority priority) {
-  return impl_->post(std::move(task), priority);
+TaskHandle PdfiumWorker::post(Task task, Priority priority, TaskKind kind) {
+  return impl_->post(std::move(task), priority, kind);
+}
+std::optional<RunningTask> PdfiumWorker::running_task() const noexcept {
+  return impl_->running_task();
 }
 void PdfiumWorker::cancel_all() noexcept {
   impl_->cancel_all();

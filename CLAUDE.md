@@ -90,6 +90,7 @@ core/engine/  PdfiumLibrary(init RAII) · PdfiumDocument(열기·크기·렌더�
 core/engine/  EditableDocument(PDFium 없는 편집 인터페이스 — edit/ 가 씀: 회전·삭제·이동·스냅샷(SnapshotId)·삽입·주석)·ChangeSet(structural+all_sizes)
               save(write_files_safely: 생산자 무관 "임시 → 검증 → 교체" 골격, 여러 대상은 전부-또는-없음; save_document_safely 는 그 위) · page_ranges("1-3,5,8-" 파서·N쪽마다·파일 이름 패턴)
               annotation.h(AnnotationInfo·AnnotationSpec(쪽 포인트)·AnnotationSnapshot(사용자 좌표 원시값+AP) — PDFium 없음)
+              render_hazard.h(RenderHazard·kMaxPatternTilesPerPage — 렌더 폭탄 판정 타입, #121) · QpdfTools::scan_render_hazards 가 만든다
               save(save_document_safely: 임시→검증→rename)
 core/platform/ fs_sync(flush_file_to_disk·replace_file·flush_directory — 저장의 플랫폼 분기는 여기만)
 core/image/   png_io (stb 기반 PNG 읽기/쓰기, BGRA↔RGBA)
@@ -127,7 +128,7 @@ Qt 가 필요한 기능이 core 에 들어가려 하면, core 에 순수 C++ 인
 3. **모든 문서 변경은 Command 로.** `execute()` / `undo()` 를 가진 명령 객체 외의 경로로 문서를 바꾸지 않는다.
 4. **핸들은 RAII.** `FPDF_DOCUMENT`, `FPDF_PAGE`, `FPDF_TEXTPAGE`, `FPDF_BITMAP` 등은 `std::unique_ptr` + 커스텀 삭제자로만 보유한다. raw 핸들을 반환하는 public API 금지.
 5. **원본 파일은 건드리지 않는다.** 저장은 임시 파일 → 다시 열어 검증(페이지 수·렌더링·qpdf check) → 교체. 서명된 문서는 증분 저장.
-6. **JavaScript 실행은 기본 비활성화.** 악성 PDF 대응. 외부 링크는 `view::is_safe_uri`(http/https/mailto) 를 통과한 것만 사용자 확인 후 연다. `file:`·`javascript:`·`data:` 와 Launch/RemoteGoTo 액션은 무시한다.
+6. **JavaScript 실행은 기본 비활성화.** 악성 PDF 대응. 외부 링크는 `view::is_safe_uri`(http/https/mailto) 를 통과한 것만 사용자 확인 후 연다. `file:`·`javascript:`·`data:` 와 Launch/RemoteGoTo 액션은 무시한다. **렌더 폭탄(#121)**: PDFium 이 끝내지 못하는 입력(타일링 패턴 `/XStep 0.001` — progressive render 의 pause 도 객체 사이에서만 확인돼 소용없다)은 `QpdfTools::scan_render_hazards` 가 쪽 자원·Form·주석 AP 를 걷어 쪽당 추정 타일 수 > 10⁷ 이면 `RenderHazard`(`render_hazard.h`) 로 판정하고, `PdfiumDocument` 가 쪽별 캐시(첫 렌더·구조 편집 전에 1회 검사, 삭제·이동 재배치, 스냅샷 삽입 이식, 줄 수정의 `replace_bytes` 는 쪽 수가 같으면 유지)로 `render_page/render_region` 을 `kRenderRefused` 로 즉시 거절한다(저장 전 AP 생성·줄 수정·자간 정산도 그 쪽은 건너뜀). 뷰는 그 쪽에 안내만 그리고(`DocumentTileSource::set_on_refused` → `DocumentView::refused_pages`) 상태 표시줄에 한 번 알린다. **워커 멈춤 감시**: `PdfiumWorker::running_task()`(`TaskKind` open·render·query·modify·save + 시작 시각, 원자)로 `MainWindow` 가 1초마다 렌더 작업 30초 초과를 보고 비모달 `worker_stalled` 상자([강제 종료] = `std::_Exit(3)` 훅 — `~PdfiumWorker` 가 join 하므로 정상 종료 불가, [계속 기다리기])를 띄우며 `closeEvent`·열기도 같은 상자로 간다. JPX 디코더 크래시(`jpx_numcomps.pdf`, 사전 빌드 PDFium 의 CHECK)는 막을 수 없다 — 상류 판 갱신 뒤 재확인.
 
 ### 편집·저장 (구현: edit + core/engine/save + app/EditController)
 - `edit/` 는 PDFium 헤더를 끌어오는 `pdfium_document.h` 를 쓰지 않고 `engine::EditableDocument`(PDFium 없음)로만 문서를 바꾼다

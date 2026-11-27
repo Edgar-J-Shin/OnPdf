@@ -17,13 +17,20 @@ engine::TaskHandle DocumentTileSource::request(const view::TileRequest& request,
   const view::TileKey key = request.key;
   UiDispatcher* dispatcher = &dispatcher_;
   QPointer<QObject> owner = owner_;
+  RefusedCallback on_refused = on_refused_;
   return handle_.render_region(
       key.page, options, view::tile_rect_px(key, request.page_pt), priority,
       // 워커 스레드: 결과를 메인 스레드로 넘기기만 한다
-      [dispatcher, owner, key, on_done = std::move(on_done)](onpdf::Result<onpdf::Bitmap> result) {
+      [dispatcher, owner, key, on_done = std::move(on_done),
+       on_refused = std::move(on_refused)](onpdf::Result<onpdf::Bitmap> result) {
         auto shared = std::make_shared<onpdf::Result<onpdf::Bitmap>>(std::move(result));
-        dispatcher->post_to(owner,
-                            [key, on_done, shared](QObject*) { on_done(key, std::move(*shared)); });
+        dispatcher->post_to(owner, [key, on_done, on_refused, shared](QObject*) {
+          if (!*shared && (*shared).error().code == onpdf::ErrorCode::kRenderRefused &&
+              on_refused) {
+            on_refused(key.page, QString::fromStdString((*shared).error().message));
+          }
+          on_done(key, std::move(*shared));
+        });
       });
 }
 

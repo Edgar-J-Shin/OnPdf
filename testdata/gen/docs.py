@@ -795,6 +795,40 @@ def make_transparency() -> bytes:
     info = g.info_dict(w, "Transparency")
     return w.write(root=root, info=info, file_id=g.file_id_for("transparency.pdf"))
 
+
+def make_pattern_bomb() -> bytes:
+    """렌더 위험 (#121): 타일링 패턴 /XStep 0.001 은 PDFium 렌더가 끝나지 않는다 (pdf.js
+    tiling-pattern-tiny-steps 와 같은 구조). 4쪽 — 1 정상(라벨 + 36pt 스텝 패턴), 2 폭탄 채우기,
+    3 Form XObject 안의 폭탄, 4 Square 주석 외형(/AP) 안의 폭탄. 쪽 1 만 렌더할 수 있다."""
+    w = PdfWriter()
+    pages = w.reserve()
+    helv = g.simple_font(w)
+    cell = b"q 0 0 1 rg 0 0 18 18 re f Q"
+    safe = w.stream(b"/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 36 36] /XStep 36 /YStep 36"
+                    b" /Resources << >>", cell)
+    bomb = w.stream(b"/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 612 792] /XStep 0.001"
+                    b" /YStep 0.001 /Resources << >>", b"q 1 0 0 rg 500 700 100 80 re f Q")
+    fill = "q /Pattern cs /P1 scn 72 72 468 648 re f Q"
+    c1 = w.stream(b"", content(_label(72, 740, 18, "Pattern bomb test: page 1 is safe"), fill))
+    p1 = g.page(w, pages, g.LETTER, c1,
+                b"<< /Font << /F1 %d 0 R >> /Pattern << /P1 %d 0 R >> >>" % (helv, safe))
+    c2 = w.stream(b"", content(fill))
+    p2 = g.page(w, pages, g.LETTER, c2, b"<< /Pattern << /P1 %d 0 R >> >>" % bomb)
+    form = w.stream(b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Pattern << /P1 %d 0 R >> >>"
+                    % bomb, content(fill))
+    c3 = w.stream(b"", content("q /Fx0 Do Q"))
+    p3 = g.page(w, pages, g.LETTER, c3, b"<< /XObject << /Fx0 %d 0 R >> >>" % form)
+    ap = w.stream(b"/Type /XObject /Subtype /Form /BBox [0 0 200 100] /Resources << /Pattern << /P1 %d 0 R >> >>"
+                  % bomb, content("q /Pattern cs /P1 scn 0 0 200 100 re f Q"))
+    annot = w.add(b"<< /Type /Annot /Subtype /Square /Rect [100 600 300 700] /F 4 /C [1 0 0]"
+                  b" /AP << /N %d 0 R >> >>" % ap)
+    c4 = w.stream(b"", content(_border(612, 792)))
+    p4 = g.page(w, pages, g.LETTER, c4, b"<< >>", annots=[annot])
+    g.pages_tree(w, pages, [p1, p2, p3, p4])
+    root = g.catalog(w, pages)
+    info = g.info_dict(w, "Pattern bomb")
+    return w.write(root=root, info=info, file_id=g.file_id_for("pattern-bomb.pdf"))
+
 # ----------------------------------------------------------------- 기존 텍스트 줄 수정 (#65)
 
 

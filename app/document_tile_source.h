@@ -9,6 +9,9 @@
 #include "ui_dispatcher.h"
 #include <QObject>
 #include <QPointer>
+#include <QString>
+#include <functional>
+#include <utility>
 
 namespace onpdf::app {
 
@@ -20,10 +23,16 @@ class DocumentTileSource : public view::TileSource {
   engine::TaskHandle request(const view::TileRequest& request, engine::Priority priority,
                              view::TileCallback on_done) override;
 
+  // 렌더 거부(kRenderRefused, #121) 를 뷰에 알린다 (메인 스레드, 스케줄러 콜백 직전). 스케줄러는
+  // 오류 코드를 버리고 실패 집합에만 넣으므로 여기서 따로 전한다
+  using RefusedCallback = std::function<void(int page, const QString& reason)>;
+  void set_on_refused(RefusedCallback on_refused) { on_refused_ = std::move(on_refused); }
+
  private:
   engine::DocumentHandle handle_;
   UiDispatcher& dispatcher_;
   QPointer<QObject> owner_;
+  RefusedCallback on_refused_;
 };
 
 }  // namespace onpdf::app

@@ -24,6 +24,7 @@
 #include "print_preview_dialog.h"
 #include "search_bar.h"
 #include "thumbnail_panel.h"
+#include <QAbstractButton>
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
@@ -60,6 +61,7 @@
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QTimer>
+#include <cstdlib>
 #include <QToolBar>
 #include <QToolButton>
 #include <QUrl>
@@ -72,7 +74,11 @@
 namespace onpdf::app {
 
 MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, QWidget* parent)
-    : QMainWindow(parent), dispatcher_(dispatcher), session_(worker, dispatcher, this) {
+    : QMainWindow(parent),
+      dispatcher_(dispatcher),
+      worker_(worker),
+      session_(worker, dispatcher, this),
+      force_exit_([](int code) { std::_Exit(code); }) {
   setWindowTitle(QStringLiteral("OnPdf"));
   setAcceptDrops(true);
 
@@ -198,6 +204,13 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(view_, &DocumentView::tiles_changed, this, [this] {
     if (!status_timer_->isActive()) status_timer_->start();
   });
+  // 워커 멈춤 감시 (#121): 렌더 작업이 상한을 넘으면 "응답 없음" 경고
+  stall_timer_ = new QTimer(this);
+  stall_timer_->setObjectName(QStringLiteral("stall_timer"));
+  stall_timer_->setInterval(1000);
+  connect(stall_timer_, &QTimer::timeout, this, &MainWindow::check_worker_stall);
+  stall_timer_->start();
+  connect(view_, &DocumentView::page_refused, this, &MainWindow::on_page_refused);
   connect(view_, &DocumentView::selection_changed, this, [this](bool has) {
     copy_action_->setEnabled(has);
     update_edit_actions();
@@ -356,6 +369,10 @@ void MainWindow::fail_screenshot(const QString& reason) {
 }
 
 void MainWindow::open_file(const QString& path) {
+  if (worker_stalled()) {  // 워커가 멈춰 있으면 저장도 열기도 못 한다 (#121)
+    show_stall_warning();
+    return;
+  }
   // 수정된 문서면 먼저 저장 여부를 묻고, 그다음 인쇄 확인 (순서: 수정 → 인쇄)
   maybe_save([this, path] { continue_open(path); });
 }
@@ -2308,6 +2325,11 @@ void MainWindow::maybe_save(std::function<void()> then) {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+  if (worker_stalled()) {  // 워커가 멈춰 있으면 저장 확인도 종료(join)도 불가 — 강제 종료만 (#121)
+    show_stall_warning();
+    event->ignore();
+    return;
+  }
   if (structure_job_ != nullptr &&
       structure_job_->active()) {  // 병합·분할이 끝나기 전에는 닫지 않는다 (임시 파일 정리를 위해)
     show_transient(tr("You can close after merging or splitting finishes"));
@@ -2837,6 +2859,63 @@ void MainWindow::on_current_page_changed(int page) {
 
 void MainWindow::on_zoom_changed(double) {
   refresh_status();
+}
+
+// ---------------------------------------------------------------- 워커 멈춤 감시 (#121)
+
+bool MainWindow::worker_stalled() const {
+  const auto running = worker_.running_task();
+  if (!running || running->kind != engine::TaskKind::kRender) return false;
+  return std::chrono::steady_clock::now() - running->since >= stall_threshold_;
+}
+
+void MainWindow::check_worker_stall() {
+  const auto running = worker_.running_task();
+  if (!running || running->kind != engine::TaskKind::kRender ||
+      std::chrono::steady_clock::now() - running->since < stall_threshold_) {
+    // 작업이 끝났거나 바뀌었다: 경고 상태를 풀고 상자가 떠 있으면 닫는다 (복구)
+    if (warned_since_ && (!running || running->since != *warned_since_)) {
+      warned_since_.reset();
+      if (stall_box_) stall_box_->close();
+    }
+    return;
+  }
+  if (warned_since_ && *warned_since_ == running->since) return;  // 같은 작업은 한 번만
+  show_stall_warning();
+}
+
+void MainWindow::show_stall_warning() {
+  const auto running = worker_.running_task();
+  if (!running) return;
+  warned_since_ = running->since;
+  if (stall_box_) {
+    stall_box_->raise();
+    stall_box_->activateWindow();
+    return;
+  }
+  const auto seconds = static_cast<int>(
+      std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - running->since)
+          .count());
+  auto* box = new QMessageBox(
+      QMessageBox::Warning, tr("Not responding"),
+      tr("Rendering has not finished for %n second(s). The document may contain hostile content.\n"
+         "If you force quit, unsaved changes are lost.",
+         nullptr, seconds),
+      QMessageBox::NoButton, this);
+  box->setObjectName(QStringLiteral("worker_stalled"));
+  box->setWindowModality(Qt::NonModal);
+  box->setAttribute(Qt::WA_DeleteOnClose);
+  QPushButton* quit = box->addButton(tr("Force quit"), QMessageBox::DestructiveRole);
+  box->addButton(tr("Keep waiting"), QMessageBox::RejectRole);
+  connect(box, &QMessageBox::buttonClicked, this, [this, quit](QAbstractButton* clicked) {
+    if (clicked == quit) force_exit_(3);  // 워커가 join 되지 않으므로 소멸자 없이 끝낸다
+  });
+  stall_box_ = box;
+  box->show();
+}
+
+void MainWindow::on_page_refused(int page, const QString& reason) {
+  show_transient(tr("Page %1 cannot be displayed: %2").arg(page + 1).arg(reason));
 }
 
 void MainWindow::refresh_status() {
