@@ -296,7 +296,7 @@ void Settings::set_stall_seconds(int seconds) {
 }
 
 bool Settings::render_process() const {
-  return read_bool(kKeyRenderProcess, true);
+  return read_bool(kKeyRenderProcess, false);  // 기본 끔 (2026-11-28 결정) — 설정 > 고급에서 켠다
 }
 
 void Settings::set_render_process(bool on) {

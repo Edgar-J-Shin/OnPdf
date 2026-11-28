@@ -1,4 +1,4 @@
-// 렌더 자식 프로세스 (#137) 앱 통합: 기본(켬)에서 타일이 자식에서 오는지, 편집 뒤 타일이 새
+// 렌더 자식 프로세스 (#137) 앱 통합: 켰을 때 타일이 자식에서 오는지, 편집 뒤 타일이 새
 // 내용인지, 크래시 주입 → 그 쪽만 거부·나머지 정상·저장 정상, 멈춤 주입 → 예산 뒤 거부, 설정 끔 →
 // 워커 경로, 실행 파일이 잘못되면 폴백 안내 + 설정 자동 끔. 자식은 테스트 바이너리 자신(test_main
 // 분기)
@@ -61,6 +61,7 @@ class RenderProcessAppTest : public ::testing::Test {
  protected:
   RenderProcessAppTest() : worker_(options()) {
     Settings().reset_all();
+    Settings().set_render_process(true);  // 기본은 끔 — 이 테스트들은 켠다
     unsetenv("ONPDF_RENDER_CHILD_FAULT");
   }
   ~RenderProcessAppTest() override {
@@ -120,7 +121,7 @@ class RenderProcessAppTest : public ::testing::Test {
   std::unique_ptr<MainWindow> window_;
 };
 
-TEST_F(RenderProcessAppTest, TilesComeFromChildByDefault) {
+TEST_F(RenderProcessAppTest, TilesComeFromChildWhenEnabled) {
   MainWindow& w = make_window();
   ASSERT_TRUE(open("korean-embedded.pdf"));
   ASSERT_TRUE(wait_visible_tiles());
@@ -192,8 +193,8 @@ TEST_F(RenderProcessAppTest, HangIsCutByTimeout) {
       [&] { return view()->pending_visible_tiles() == 0 && view()->cache_stats().count > 0; }));
 }
 
-TEST_F(RenderProcessAppTest, SettingOffUsesWorker) {
-  Settings().set_render_process(false);
+TEST_F(RenderProcessAppTest, DefaultIsOffAndUsesWorker) {
+  Settings().reset_all();  // 기본값: 끔
   MainWindow& w = make_window();
   ASSERT_TRUE(open("simple.pdf"));
   ASSERT_TRUE(wait_visible_tiles());

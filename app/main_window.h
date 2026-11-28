@@ -186,7 +186,11 @@ class MainWindow : public QMainWindow {
   void set_render_child_system_fonts(bool on) { render_child_system_fonts_ = on; }
   // 테스트 진입점이 한 번 끈다 (워커도 내장 글꼴만 쓰므로 자식도 같게)
   static void set_default_render_child_system_fonts(bool on);
-  void require_render_process_for_screenshot() { screenshot_requires_render_process_ = true; }
+  // --self-test: 설정과 무관하게 자식 경로를 켜고 첫 쪽이 자식에서 왔는지 확인한다 (코드 4)
+  void require_render_process_for_screenshot() {
+    screenshot_requires_render_process_ = true;
+    render_process_forced_ = true;
+  }
   [[nodiscard]] std::shared_ptr<engine::RenderProcess> render_process() const {
     return session_.render_process();
   }
@@ -362,6 +366,7 @@ class MainWindow : public QMainWindow {
   bool render_child_system_fonts_ = default_render_child_system_fonts();  // 테스트는 false
   static bool default_render_child_system_fonts();
   bool screenshot_requires_render_process_ = false;  // --self-test: 자식이 그렸는지 확인 (코드 4)
+  bool render_process_forced_ = false;               // 설정이 꺼져 있어도 자식 사용 (점검 모드)
   int render_process_timeout_applied_ = -1;          // 설정이 바뀌면 다음 문서부터 새 자식
   QAction* print_action_ = nullptr;
   QAction* save_action_ = nullptr;

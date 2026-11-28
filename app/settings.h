@@ -74,7 +74,7 @@ class Settings : public QObject {
   void set_stall_seconds(int seconds);
   [[nodiscard]] bool crash_notice() const;  // 비정상 종료 안내 (#131)
   void set_crash_notice(bool on);
-  [[nodiscard]] bool render_process() const;  // 렌더를 별도 프로세스에서 (#137, 기본 켬)
+  [[nodiscard]] bool render_process() const;  // 렌더를 별도 프로세스에서 (#137, 기본 끔)
   void set_render_process(bool on);
   [[nodiscard]] int render_timeout_seconds() const;  // 렌더 한 건 예산 5~120 (#137)
   void set_render_timeout_seconds(int seconds);

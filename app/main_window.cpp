@@ -3214,7 +3214,7 @@ bool MainWindow::default_render_child_system_fonts() {
 }
 
 void MainWindow::ensure_render_process() {
-  if (!settings_->render_process()) {
+  if (!settings_->render_process() && !render_process_forced_) {
     session_.set_render_process(nullptr);  // 워커 렌더 (다음 문서부터)
     render_process_timeout_applied_ = -1;
     return;

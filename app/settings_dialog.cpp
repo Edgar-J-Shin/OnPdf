@@ -204,7 +204,7 @@ void SettingsDialog::load_defaults() {
   hazard_notice_->setChecked(true);
   stall_seconds_->setValue(Settings::kDefaultStallSeconds);
   crash_notice_->setChecked(true);
-  render_process_->setChecked(true);
+  render_process_->setChecked(false);
   render_timeout_->setValue(Settings::kDefaultRenderTimeoutSeconds);
 }
 
