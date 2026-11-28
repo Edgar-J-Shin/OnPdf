@@ -17,6 +17,8 @@
 #include "onpdf/edit/text_line_commands.h"
 
 #include "annotation_dialog.h"
+#include "crash_handler.h"
+#include "crash_report.h"
 #include "document_view.h"
 #include "form_field_editor.h"
 #include "image_import.h"
@@ -30,9 +32,11 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QCheckBox>
 #include <QClipboard>
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
 #include <QDragEnterEvent>
@@ -44,6 +48,7 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLocale>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -184,6 +189,7 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(view_, &DocumentView::annotation_delete_requested, this,
           [this](int, const QString&) { delete_selected_annotation(); });
   connect(edit_, &EditController::state_changed, this, [this] {
+    if (edit_->busy()) set_action(QStringLiteral("edit"));  // (#131)
     update_edit_actions();
     update_title();
     announce_line_edit();
@@ -197,6 +203,8 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(&session_, &DocumentSession::password_required, this, &MainWindow::on_password_required);
   connect(&session_, &DocumentSession::open_failed, this, &MainWindow::on_open_failed);
   connect(view_, &DocumentView::current_page_changed, this, &MainWindow::on_current_page_changed);
+  connect(view_, &DocumentView::current_page_changed, this,
+          [this](int page) { set_action(QStringLiteral("render p.%1").arg(page + 1)); });  // (#131)
   connect(view_, &DocumentView::zoom_changed, this, &MainWindow::on_zoom_changed);
   connect(view_, &DocumentView::first_view_rendered, this, &MainWindow::on_first_view_rendered);
   // 타일이 도착할 때마다 캐시·렌더 통계를 갱신하되 1초에 한 번으로 묶는다
@@ -367,10 +375,15 @@ void MainWindow::build_menus() {
   sidebar_action_->setChecked(true);
 
   QMenu* help = menuBar()->addMenu(tr("&Help"));
+  QAction* report_folder = help->addAction(tr("Open &Report Folder"), this,
+                                           &MainWindow::open_report_folder);  // (#131)
+  report_folder->setObjectName(QStringLiteral("open_report_folder"));
   help->addAction(tr("&About OnPdf"), this, [this] {
     QMessageBox::about(this, tr("About OnPdf"),
-                       tr("OnPdf %1 — PDF viewer and editor based on PDFium\nApache License 2.0")
-                           .arg(QApplication::applicationVersion()));
+                       tr("OnPdf %1 — PDF viewer and editor based on PDFium\nApache License 2.0\n\n"
+                          "PDFium %2 · Qt %3")
+                           .arg(QApplication::applicationVersion(), pdfium_version(),
+                                QString::fromLatin1(qVersion())));
   });
 }
 
@@ -405,6 +418,16 @@ void MainWindow::continue_open(const QString& path) {
   }
   show_transient(tr("Opening: %1").arg(QFileInfo(path).fileName()));
   print_unlock_.reset();
+  // 세션 표식 (#131): 여는 중에 죽으면 다음 실행이 어떤 파일이었는지 안다
+  SessionMarker marker;
+  marker.path = QFileInfo(path).absoluteFilePath();
+  marker.stage = QStringLiteral("opening");
+  marker.since = QDateTime::currentDateTime();
+  marker.last_action = QStringLiteral("open");
+  marker.version = app_version();
+  settings_->set_session_marker(marker);
+  last_action_ = marker.last_action;
+  crash::set_last_action("open");
   session_.open(path);
 }
 
@@ -425,6 +448,7 @@ void MainWindow::on_opened(const QString& path, int page_count) {
   }
   if (page_count <= 0) {
     print_unlock_.reset();
+    settings_->clear_session_marker();  // (#131)
     if (!screenshot_path_.isEmpty()) {
       fail_screenshot(QStringLiteral("no pages"));
       return;
@@ -456,6 +480,8 @@ void MainWindow::on_opened(const QString& path, int page_count) {
   view_->setFocus();
   settings_->add_recent(path);
   remember_dir(DirKind::kOpen, path);
+  settings_->set_session_stage(QStringLiteral("viewing"));  // (#131)
+  set_action(QStringLiteral("view"));
   discard_print_job();
   print_prefs_applied_ = false;
   update_print_action();
@@ -2271,8 +2297,9 @@ bool MainWindow::save_to(const QString& path) {
 
 bool MainWindow::start_save(const QString& path, std::function<void()> then) {
   if (!session_.has_document() || path.isEmpty()) return false;
-  settle_form_edits();             // 입력 중인 칸까지 저장한다 (#51)
-  if (saving_ || edit_->busy()) {  // 몇 ms 의 창이지만 조용히 멈추지 않는다 (리뷰 I1)
+  set_action(QStringLiteral("save"));  // (#131)
+  settle_form_edits();                 // 입력 중인 칸까지 저장한다 (#51)
+  if (saving_ || edit_->busy()) {      // 몇 ms 의 창이지만 조용히 멈추지 않는다 (리뷰 I1)
     show_transient(tr("Cannot save right now. Try again in a moment"));
     return false;
   }
@@ -2371,7 +2398,8 @@ void MainWindow::closeEvent(QCloseEvent* event) {
       event->ignore();
       return;
     }
-    save_window_state();  // 실제로 닫히는 유일한 경로 (#129)
+    save_window_state();                // 실제로 닫히는 유일한 경로 (#129)
+    settings_->clear_session_marker();  // 정상 종료 (#131)
     event->accept();
     return;
   }
@@ -2805,12 +2833,14 @@ void MainWindow::on_password_required(const QString& path) {
                             QLineEdit::Password, QString(), &ok);
   if (!ok) {
     show_transient(tr("Cancel Opening"));
+    settings_->clear_session_marker();  // (#131)
     return;
   }
   session_.open(path, password);
 }
 
 void MainWindow::on_open_failed(const QString& path, const QString& message) {
+  settings_->clear_session_marker();  // (#131)
   print_unlock_.reset();
   if (!screenshot_path_.isEmpty()) {
     fail_screenshot(message);
@@ -3049,6 +3079,108 @@ void MainWindow::open_preferences() {
   dialog.exec();
 }
 
+// ---------------------------------------------------------------- 충돌 보고 (#131)
+
+void MainWindow::set_action(const QString& action) {
+  if (action == last_action_) return;
+  last_action_ = action;
+  settings_->set_session_last_action(action);
+  crash::set_last_action(action.toUtf8().constData());
+}
+
+void MainWindow::open_report_folder() {
+  QDir dir = report_dir();
+  if (!dir.exists() && !dir.mkpath(QStringLiteral("."))) {
+    show_transient(tr("Cannot create the report folder: %1").arg(dir.absolutePath()));
+    return;
+  }
+  if (!QDesktopServices::openUrl(QUrl::fromLocalFile(dir.absolutePath()))) {
+    show_transient(tr("Cannot open the folder: %1").arg(dir.absolutePath()));
+  }
+}
+
+bool MainWindow::maybe_show_crash_notice(const QString& cli_file) {
+  const SessionMarker marker = settings_->session_marker();
+  if (!marker.valid()) {
+    if (!marker.stage.isEmpty() || !marker.path.isEmpty()) settings_->clear_session_marker();
+    return true;
+  }
+  settings_->clear_session_marker();  // 안내는 한 번만
+  const QString file_name = QFileInfo(marker.path).fileName();
+  const bool same_as_cli =
+      !cli_file.isEmpty() && QFileInfo(cli_file).absoluteFilePath() == marker.path;
+  if (!settings_->crash_notice()) {
+    show_transient(tr("OnPdf did not exit normally last time (%1)").arg(file_name));
+    return true;
+  }
+  const std::optional<CrashRecord> record = latest_record_since(report_dir(), marker.since);
+  const QString when = QLocale().toString(marker.since, QLocale::ShortFormat);
+  QString text = tr("Last time, OnPdf quit unexpectedly while %1 '%2' (%3).")
+                     .arg(stage_text(marker.stage), file_name, when);
+  if (record) text += QLatin1Char('\n') + tr("Signal: %1").arg(record->signal_text);
+  if (!marker.version.isEmpty() && marker.version != app_version())
+    text += QLatin1Char('\n') + tr("That was version %1.").arg(marker.version);
+
+  QString details =
+      tr("Last action: %1")
+          .arg(record && !record->last_action.isEmpty() ? record->last_action : marker.last_action);
+  details += QLatin1Char('\n') + tr("Report folder: %1").arg(report_dir().absolutePath());
+  details += QLatin1Char('\n') +
+             tr("OnPdf %1 · PDFium %2 · Qt %3")
+                 .arg(app_version(), pdfium_version(), QString::fromLatin1(qVersion()));
+
+  const bool can_reopen = !marker.path.isEmpty() && QFileInfo::exists(marker.path);
+  bool open_again = false;
+  bool dont_show = false;
+  for (;;) {  // ActionRole 버튼은 상자를 닫으므로 폴더·URL 을 연 뒤 다시 띄운다
+    QMessageBox box(QMessageBox::Warning, tr("OnPdf did not exit normally"), text,
+                    QMessageBox::NoButton, this);
+    box.setObjectName(QStringLiteral("crash_notice"));
+    box.setInformativeText(
+        tr("The file may contain content PDFium cannot handle. You can open it again or leave "
+           "it closed. The report folder holds what you can attach to a bug report."));
+    box.setDetailedText(details);
+    auto* check = new QCheckBox(tr("Do not show this again"), &box);
+    check->setObjectName(QStringLiteral("crash_notice_dont_show"));
+    check->setChecked(dont_show);
+    box.setCheckBox(check);
+    QPushButton* reopen =
+        can_reopen ? box.addButton(tr("Open It Again"), QMessageBox::AcceptRole) : nullptr;
+    if (reopen != nullptr) reopen->setObjectName(QStringLiteral("crash_notice_open"));
+    QPushButton* leave = box.addButton(tr("Leave It Closed"), QMessageBox::RejectRole);
+    leave->setObjectName(QStringLiteral("crash_notice_leave"));
+    QPushButton* folder = box.addButton(tr("Open Report Folder"), QMessageBox::ActionRole);
+    folder->setObjectName(QStringLiteral("crash_notice_folder"));
+    QPushButton* issue = box.addButton(tr("Report an Issue..."), QMessageBox::ActionRole);
+    issue->setObjectName(QStringLiteral("crash_notice_issue"));
+    box.setDefaultButton(leave);
+    box.setEscapeButton(leave);
+    box.exec();
+    dont_show = check->isChecked();
+    QAbstractButton* clicked = box.clickedButton();
+    if (clicked == folder) {
+      open_report_folder();
+      continue;
+    }
+    if (clicked == issue) {
+      const QUrl url = issue_url(marker, record);
+      if (!QDesktopServices::openUrl(url)) {
+        QApplication::clipboard()->setText(url.toString());
+        show_transient(tr("Cannot open the browser; the issue link was copied to the clipboard"));
+      }
+      continue;
+    }
+    open_again = reopen != nullptr && clicked == reopen;
+    break;
+  }
+  if (dont_show) settings_->set_crash_notice(false);
+  if (open_again) {
+    const QString path = marker.path;
+    QTimer::singleShot(0, this, [this, path] { open_file(path); });
+  }
+  return !same_as_cli;  // 같은 파일: "다시 열기" 면 이미 예약했고, "열지 않기" 면 열지 않는다
+}
+
 // ---------------------------------------------------------------- 워커 멈춤 감시 (#121)
 
 bool MainWindow::worker_stalled() const {
@@ -3100,7 +3232,12 @@ void MainWindow::show_stall_warning() {
   QPushButton* quit = box->addButton(tr("Force quit"), QMessageBox::DestructiveRole);
   box->addButton(tr("Keep waiting"), QMessageBox::RejectRole);
   connect(box, &QMessageBox::buttonClicked, this, [this, quit](QAbstractButton* clicked) {
-    if (clicked == quit) force_exit_(3);  // 워커가 join 되지 않으므로 소멸자 없이 끝낸다
+    if (clicked != quit) return;
+    // 다음 실행이 "강제 종료" 로 안내하게 표식을 남긴다 (#131). 핸들러는 _Exit 를 거치지 않는다
+    if (const auto running = worker_.running_task(); running && running->page >= 0)
+      settings_->set_session_last_action(QStringLiteral("render p.%1").arg(running->page + 1));
+    settings_->set_session_stage(QStringLiteral("forced-quit"));
+    force_exit_(3);  // 워커가 join 되지 않으므로 소멸자 없이 끝낸다
   });
   stall_box_ = box;
   box->show();

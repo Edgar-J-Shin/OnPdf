@@ -176,6 +176,11 @@ class MainWindow : public QMainWindow {
   // 사용자 설정 (#129). 창이 소유하고 툴바 기본값·창 상태·최근 파일을 여기에 쓴다
   [[nodiscard]] Settings& settings() noexcept { return *settings_; }
   void open_preferences();  // 설정 대화상자 (모달)
+  // 충돌 보고 (#131): 지난 실행의 세션 표식이 남아 있으면 안내 창(crash_notice). main 이 show()
+  // 전에 부른다. 돌려주는 값 = cli_file 을 열어도 되는가(안내에서 "열지 않기" 를 고른 같은 파일이면
+  // false)
+  bool maybe_show_crash_notice(const QString& cli_file);
+  void open_report_folder();
   [[nodiscard]] QMenu* recent_menu() const noexcept { return recent_menu_; }
 
  protected:
@@ -307,10 +312,11 @@ class MainWindow : public QMainWindow {
   // 문서를 열 때 시작 배율. set_document 가 zoom_changed 를 내 "마지막 값" 을 덮어쓰므로 값은 그
   // 전에 읽어 넘긴다
   void apply_start_zoom(StartZoom start, ZoomKind last_kind, double last_zoom);
-  void restore_window_state();  // 생성자 끝: 창 크기·분할·사이드바
-  void save_window_state();     // closeEvent 가 accept 하기 직전
-  void rebuild_recent_menu();   // 파일 > 최근 파일 (aboutToShow)
-  void sync_text_size_combo();  // text_size_ 를 콤보에 비춘다
+  void restore_window_state();             // 생성자 끝: 창 크기·분할·사이드바
+  void save_window_state();                // closeEvent 가 accept 하기 직전
+  void rebuild_recent_menu();              // 파일 > 최근 파일 (aboutToShow)
+  void sync_text_size_combo();             // text_size_ 를 콤보에 비춘다
+  void set_action(const QString& action);  // 세션 표식 last_action + 핸들러 버퍼 (#131)
   [[nodiscard]] QString start_dir(DirKind kind, const QString& preferred = {}) const;
   void remember_dir(DirKind kind, const QString& file_or_dir);
   void set_document_status(const QString& text);  // 문서 정보 (지속)
@@ -339,6 +345,7 @@ class MainWindow : public QMainWindow {
   QMenu* recent_menu_ = nullptr;  // 최근 파일 (#129)
   QAction* preferences_action_ = nullptr;
   bool settings_write_warned_ = false;  // "설정을 저장할 수 없습니다" 는 한 번만
+  QString last_action_;                 // (#131)
   QAction* print_action_ = nullptr;
   QAction* save_action_ = nullptr;
   QAction* save_as_action_ = nullptr;
