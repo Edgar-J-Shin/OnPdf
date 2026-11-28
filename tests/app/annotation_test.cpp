@@ -6,6 +6,7 @@
 
 #include "../test_support.h"
 #include "annotation_dialog.h"
+#include "dialog_helpers.h"
 #include "document_view.h"
 #include "main_window.h"
 #include "ui_dispatcher.h"
@@ -31,6 +32,7 @@ namespace {
 
 using onpdf::test::ScopedTempDir;
 using onpdf::test::testdata;
+using onpdf::test::when_dialog;
 
 template <class Pred>
 bool spin_until(Pred pred, int timeout_ms = 10000) {
@@ -48,20 +50,6 @@ bool spin_until(Pred pred, int timeout_ms = 10000) {
   if (pred()) return true;
   loop.exec();
   return !timed_out;
-}
-
-// 이름이 object_name 인 모달 대화상자가 뜨면 처리한다
-template <class Fn>
-void when_dialog(const char* object_name, Fn fn) {
-  auto* poll = new QTimer();
-  poll->setInterval(10);
-  QObject::connect(poll, &QTimer::timeout, poll, [poll, object_name, fn] {
-    QWidget* w = QApplication::activeModalWidget();
-    if (w == nullptr || w->objectName() != QString::fromLatin1(object_name)) return;
-    fn(w);
-    poll->deleteLater();
-  });
-  poll->start();
 }
 
 class AnnotationTest : public ::testing::Test {

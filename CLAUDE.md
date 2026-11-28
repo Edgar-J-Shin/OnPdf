@@ -30,7 +30,7 @@ Repo: `Edgar-J-Shin/OnPdf` · 라이선스 Apache 2.0 · git flow (기본 브랜
 - UI: Qt 6.7+ Widgets(+ LinguistTools), **동적 링크**(LGPL 준수). UI 원문은 영어, 한국어는 번역(#8)
 - 글자 배치·서브셋: HarfBuzz(vcpkg, `default-features: false`, `harfbuzz::harfbuzz-subset`) — **edit 에만** 링크. FreeType 은 쓰지 않는다(PDFium 공유 라이브러리가 `FT_*` 154개를 내보내 Linux 에서 충돌 위험). 번들 글꼴 Noto Sans KR(OFL)은 `third_party/fetch_fonts.py` 로 받아 앱 빌드가 `bin/fonts/` 로 복사한다(저장소에 없음)
 - 테스트: GoogleTest + 렌더링 이미지 비교
-- CI: GitHub Actions — `windows-latest`·`macos-latest` 는 Qt 앱·app 테스트까지(`dev-app`, Qt 는 릴리스와 같은 공식 6.9.x — #108), `ubuntu-latest` 는 core(`dev`) + testdata 결정성 검사. 호스트 러너 배정 실패("not acquired by Runner", 15분 뒤 취소)로 끝난 실행은 `retry.yml`(`workflow_run`) 이 실패한 잡만 자동으로 다시 돌린다(시도 3회 상한, #105). 앱 테스트의 `spin_until` 상한은 30초, `onpdf_app_tests` 의 ctest 상한은 300초(느린 Windows 러너는 전체가 70~120초)
+- CI: GitHub Actions — `windows-latest`·`macos-latest` 는 Qt 앱·app 테스트까지(`dev-app`, Qt 는 릴리스와 같은 공식 6.9.x — #108), `ubuntu-latest` 는 core(`dev`) + testdata 결정성 검사. 호스트 러너 배정 실패("not acquired by Runner", 15분 뒤 취소)로 끝난 실행은 `retry.yml`(`workflow_run`) 이 실패한 잡만 자동으로 다시 돌린다(시도 3회 상한, #105). 앱 테스트의 `spin_until` 상한은 30초, `onpdf_app_tests` 의 ctest 상한은 300초(느린 Windows 러너는 전체가 70~120초). **앱 테스트 멈춤 감시(#145)**: `tests/app/test_main.cpp` 의 `HangWatchdog` 리스너가 테스트별로 60초(`ONPDF_TEST_HANG_SECONDS`)에 열린 창을 stderr 에 적고 보이는 대화상자를 전부 거절해 실패로 끝내며, 120초에도 안 끝나면 이름을 남기고 `_Exit(3)` — ctest 시간 초과는 아무 출력도 없다. 대화상자 자동 응답은 `tests/app/dialog_helpers.h`(`when_dialog`·`answer_message_box`·`answer_input_dialog`·`find_any_dialog`, 보이는 최상위 창을 훑는다)만 쓴다 — `QApplication::activeModalWidget()` 폴링은 Windows offscreen 에서 간헐적으로 null 이라 `exec()` 가 영영 안 끝난다(#112·#145)
 - 설치 파일: Windows 는 Inno Setup(`packaging/windows/onpdf.iss`, #99) + 무설치 zip, macOS 는 DMG. 앱 아이콘은 `packaging/windows/make_icon.py`(표준 라이브러리, 결정적) → `app/onpdf.ico`(Windows: `app/onpdf.rc` 로 exe 에) + `app/onpdf.icns`(macOS: 번들 `Resources`, `CFBundleIconFile`) — 둘 다 커밋, 디자인을 바꾸면 둘 다 다시 만든다(#101). 설치기는 같은 AppId 의 이전 설치를 조용히 제거한 뒤 설치해 빠진 파일이 남지 않는다(리허설이 stale 파일로 검증); 서명된 빌드(`/DSigned=1`)는 "서명 없음" 안내를 넣지 않는다
 
 # Build Commands
@@ -93,7 +93,7 @@ core/engine/  EditableDocument(PDFium 없는 편집 인터페이스 — edit/ �
               annotation.h(AnnotationInfo·AnnotationSpec(쪽 포인트)·AnnotationSnapshot(사용자 좌표 원시값+AP) — PDFium 없음)
               render_hazard.h(RenderHazard·kMaxPatternTilesPerPage — 렌더 폭탄 판정 타입, #121) · QpdfTools::scan_render_hazards 가 만든다
               save(save_document_safely: 임시→검증→rename)
-core/platform/ fs_sync(flush_file_to_disk·replace_file·flush_directory — 저장의 플랫폼 분기는 여기만) · ipc(Pipe·SharedMemory·ChildProcess — 프로세스 간 통신의 플랫폼 분기, #137)
+core/platform/ fs_sync(flush_file_to_disk·replace_file·flush_directory — 저장의 플랫폼 분기는 여기만) · ipc(Pipe·SharedMemory·ChildProcess·exit_when_parent_dies — 프로세스 간 통신의 플랫폼 분기, #137)
 core/image/   png_io (stb 기반 PNG 읽기/쓰기, BGRA↔RGBA)
 core/view/    PageLayout(세로 연속 레이아웃·좌표 변환) · tile.h(TileKey, 512px, 1/64 배율 양자화) · TileCache(바이트 상한 LRU)
               TileScheduler(뷰포트→필요 타일, High/Low 요청·취소·실패 집합) · TileSource(SyncTileSource=CLI·테스트)

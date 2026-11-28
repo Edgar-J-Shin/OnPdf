@@ -35,6 +35,7 @@ namespace onpdf::app {
 namespace {
 
 using namespace std::chrono_literals;
+using onpdf::test::find_any_dialog;
 using onpdf::test::find_dialog;
 using onpdf::test::testdata;
 
@@ -254,7 +255,7 @@ TEST_F(StallTest, PrintingSkipsRefusedPagesAndFinishes) {
   QTimer closer;
   closer.setInterval(10);
   QObject::connect(&closer, &QTimer::timeout, &closer, [&] {
-    auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+    auto* box = qobject_cast<QMessageBox*>(find_any_dialog());
     if (box == nullptr) return;
     ++warned;
     box->accept();
