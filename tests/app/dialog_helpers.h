@@ -32,7 +32,9 @@ inline int open_dialog_count() {
   return n;
 }
 
-// 대화상자가 뜨면 fn 을 한 번 부른다 (10ms 폴링, 처리 뒤 타이머 해제)
+// 대화상자가 뜨면 fn 을 한 번 부른다 (10ms 폴링). fn 을 부르기 전에 타이머를 멈춘다 — deleteLater
+// 만으로는 Windows 에서 삭제되기 전에 한 번 더 발화해 같은 이름의 "다음" 대화상자에 이전 단계의
+// 조작을 적용했다 (#129 설정 테스트에서 발견)
 template <class Fn>
 void when_dialog(const char* object_name, Fn fn) {
   auto* poll = new QTimer();
@@ -40,8 +42,9 @@ void when_dialog(const char* object_name, Fn fn) {
   QObject::connect(poll, &QTimer::timeout, poll, [poll, object_name, fn] {
     QWidget* w = find_dialog(object_name);
     if (w == nullptr) return;
-    fn(w);
+    poll->stop();
     poll->deleteLater();
+    fn(w);
   });
   poll->start();
 }
