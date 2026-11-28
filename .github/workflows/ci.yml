@@ -36,6 +36,8 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: "6.11.*"
+          # aqtinstall 3.3.0(PyPI 최신, 2025-06)은 Qt 6.11 의 Windows 저장소 구조(아키텍처별 폴더)를 몰라 실패한다 → 고친 master 커밋 고정 (#159)
+          aqtsource: git+https://github.com/miurahr/aqtinstall.git@4c759852b1108cc801d8e24979136b895b5155d4
           cache: true
 
       # vcpkg 바이너리 캐시 (qpdf·zlib·libjpeg-turbo 소스 빌드를 매번 반복하지 않게). vcpkg 의 x-gha 백엔드는 제거됐으므로
@@ -97,6 +99,8 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: "6.11.*"
+          # aqtinstall 3.3.0(PyPI 최신, 2025-06)은 Qt 6.11 의 Windows 저장소 구조(아키텍처별 폴더)를 몰라 실패한다 → 고친 master 커밋 고정 (#159)
+          aqtsource: git+https://github.com/miurahr/aqtinstall.git@4c759852b1108cc801d8e24979136b895b5155d4
           cache: true
       # vcpkg 바이너리 캐시 (qpdf·zlib·libjpeg-turbo 소스 빌드를 매번 반복하지 않게). vcpkg 의 x-gha 백엔드는 제거됐으므로
       # files 백엔드 디렉터리를 actions/cache 로 보존한다

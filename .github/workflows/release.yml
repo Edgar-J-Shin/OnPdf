@@ -99,6 +99,8 @@ jobs:
       - uses: jurplel/install-qt-action@v4
         with:
           version: "6.11.*"
+          # aqtinstall 3.3.0(PyPI 최신, 2025-06)은 Qt 6.11 의 Windows 저장소 구조(아키텍처별 폴더)를 몰라 실패한다 → 고친 master 커밋 고정 (#159)
+          aqtsource: git+https://github.com/miurahr/aqtinstall.git@4c759852b1108cc801d8e24979136b895b5155d4
           cache: true
       # ci.yml 과 같은 vcpkg 바이너리 캐시 (키가 같아 CI 가 만든 캐시를 재사용한다)
       - uses: actions/cache@v4
@@ -387,6 +389,8 @@ jobs:
       - uses: jurplel/install-qt-action@v4
         with:
           version: "6.11.*"
+          # aqtinstall 3.3.0(PyPI 최신, 2025-06)은 Qt 6.11 의 Windows 저장소 구조(아키텍처별 폴더)를 몰라 실패한다 → 고친 master 커밋 고정 (#159)
+          aqtsource: git+https://github.com/miurahr/aqtinstall.git@4c759852b1108cc801d8e24979136b895b5155d4
           cache: true
       - uses: actions/cache@v4
         with:
