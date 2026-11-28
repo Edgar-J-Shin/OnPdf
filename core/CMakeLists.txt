@@ -3,6 +3,8 @@ add_library(onpdf_core STATIC
   src/engine/pdfium_document.cpp
   src/engine/pdfium_worker.cpp
   src/engine/document_handle.cpp
+  src/engine/render_child.cpp
+  src/engine/render_process.cpp
   src/engine/text_page.cpp
   src/engine/dest.cpp
   src/engine/text_lines.cpp
@@ -13,6 +15,7 @@ add_library(onpdf_core STATIC
   src/page_ranges.cpp
   src/image/png_io.cpp
   src/platform/fs_sync.cpp
+  src/platform/ipc.cpp
   src/platform/font_dirs.cpp
   src/view/page_layout.cpp
   src/view/tile_cache.cpp

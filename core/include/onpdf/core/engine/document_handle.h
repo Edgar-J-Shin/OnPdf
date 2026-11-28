@@ -50,6 +50,8 @@ struct DocumentInfo {
   std::vector<RenderHazard> hazards;  // 열 때 찾은 렌더 위험 쪽 (#121). 구조 편집 뒤에는 갱신 안 함
 };
 
+class RenderProcess;
+
 class DocumentHandle {
  public:
   DocumentHandle() = default;  // 빈 핸들
@@ -153,8 +155,16 @@ class DocumentHandle {
                   std::function<void(Result<SaveResult>)> on_done) const;
   [[nodiscard]] std::future<Result<SaveResult>> save(std::filesystem::path target,
                                                      SaveOptions options = {}) const;
-  // 메인 스레드 전용: 편집 결과로 문서 정보(쪽 크기)를 고친다. 같은 문서의 모든 핸들 사본에 보인다
+  // 메인 스레드 전용: 편집 결과로 문서 정보(쪽 크기)를 고친다. 같은 문서의 모든 핸들 사본에 보인다.
+  // 렌더 자식이 붙어 있으면 재동기화(워커 save_to_memory → 자식 Replace)도 시작한다 (#137)
   void apply_change(const ChangeSet& change);
+
+  // 렌더 자식 프로세스 (#137): 붙이면 render_page/render_region 이 자식으로 간다(워커는 편집·
+  // 텍스트·저장만). path·password 는 자식이 같은 문서를 열 때 쓴다. 자식을 쓸 수 없게 되면
+  // (spawn 실패·바이트 생성 실패) 워커 렌더로 조용히 돌아간다
+  void attach_render_process(std::shared_ptr<RenderProcess> process, std::filesystem::path path,
+                             std::string password);
+  [[nodiscard]] bool uses_render_process() const noexcept;
 
   // 워커에 문서 해제를 맡긴다. 이후 render_page 는 kInvalidState.
   void close() noexcept;

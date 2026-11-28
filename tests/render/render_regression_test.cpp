@@ -4,6 +4,7 @@
 // 비교 허용치는 tests/test_support.h 의 expect_bitmap_matches_png 참고.
 
 #include "onpdf/core/engine/pdfium_document.h"
+#include "onpdf/core/engine/render_process.h"
 #include "onpdf/core/engine/save.h"
 #include "onpdf/core/image/png_io.h"
 #include "onpdf/edit/add_text_command.h"
@@ -12,8 +13,10 @@
 #include "onpdf/edit/text_line_commands.h"
 
 #include "../test_support.h"
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <future>
 #include <gtest/gtest.h>
 #include <string>
 
@@ -62,6 +65,51 @@ void expect_matches_reference(const RenderCase& c) {
     GTEST_SKIP() << "reference updated: " << expected_path;
   }
   expect_bitmap_matches_png(*actual, expected_path, c.expected);
+}
+
+// 기준 PNG 와 비교하는 쪽 렌더 전부 — 아래 개별 TEST 와 같은 목록. 자식 프로세스 경로(#137)도
+// 같은 기준을 지켜야 한다
+constexpr RenderCase kReferenceCases[] = {
+    {"simple.pdf", 0, 1.0f, "simple-p0.png"},
+    {"simple.pdf", 1, 0.5f, "simple-p1.png"},
+    {"korean-embedded.pdf", 0, 1.0f, "korean-embedded-p0.png"},
+    {"scanned.pdf", 0, 0.5f, "scanned-p0.png"},
+    {"form-acro.pdf", 0, 1.0f, "form-acro-p0.png"},
+    {"annotations.pdf", 0, 1.0f, "annotations-p0.png"},
+    {"mixed-sizes.pdf", 5, 0.5f, "mixed-sizes-p5.png"},
+    {"print-flags.pdf", 0, 0.5f, "print-flags-p0-screen.png"},
+    {"print-flags.pdf", 0, 0.5f, "print-flags-p0-print.png", true},
+    {"simple.pdf", 1, 0.5f, "simple-p1-rot270.png", true, 270},
+};
+
+// 렌더 자식 프로세스(#137)로 그려도 기준 PNG 와 같다 — 자식은 이 테스트 바이너리 자신
+// (render_test_main.cpp 의 --render-child 분기). 자식은 자기 PdfiumLibrary(내장 글꼴만)를 만든다
+TEST(RenderRegression, ChildProcessMatchesReferences) {
+  if (update_references()) GTEST_SKIP() << "reference update runs in-process only";
+  engine::RenderProcess::Options options;
+  options.exe = std::filesystem::absolute(::testing::internal::GetArgvs().front());
+  options.use_system_fonts = false;
+  engine::RenderProcess process(options);
+  std::string current_pdf;
+  for (const RenderCase& c : kReferenceCases) {
+    if (current_pdf != c.pdf) {
+      process.open(testdata(c.pdf), "");
+      current_pdf = c.pdf;
+    }
+    RenderOptions o;
+    o.scale = c.scale;
+    o.printing = c.printing;
+    o.rotation = c.rotation;
+    std::promise<Result<Bitmap>> promise;
+    auto future = promise.get_future();
+    process.render_page(c.page, o, engine::Priority::kNormal,
+                        [&promise](Result<Bitmap> r) { promise.set_value(std::move(r)); });
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(60)), std::future_status::ready) << c.expected;
+    auto actual = future.get();
+    ASSERT_TRUE(actual) << c.expected << ": " << actual.error().message;
+    expect_bitmap_matches_png(*actual, testdata("expected") / c.expected, c.expected);
+  }
+  EXPECT_EQ(process.stats().restarts, 0);
 }
 
 TEST(RenderRegression, SimplePage0) {

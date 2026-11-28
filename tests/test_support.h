@@ -123,6 +123,22 @@ class ScopedTempDir {
   std::filesystem::path path_;
 };
 
+// 환경 변수 설정·해제 (Windows 에는 setenv/unsetenv 가 없다 — _putenv_s). 자식 프로세스 장애 주입용
+inline void set_env(const char* name, const char* value) {
+#ifdef _WIN32
+  _putenv_s(name, value);
+#else
+  setenv(name, value, 1);
+#endif
+}
+inline void unset_env(const char* name) {
+#ifdef _WIN32
+  _putenv_s(name, "");
+#else
+  unsetenv(name);
+#endif
+}
+
 inline std::vector<std::uint8_t> read_bytes(const std::filesystem::path& path) {
   std::ifstream in(path, std::ios::binary);
   return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
