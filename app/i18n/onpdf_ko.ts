@@ -1083,7 +1083,7 @@ If you know its permissions (owner) password, you can unlock printing.</source>
     </message>
     <message>
         <source>Last time, OnPdf quit unexpectedly while %1 &apos;%2&apos; (%3).</source>
-        <translation>지난번 OnPdf 가 '%2' 파일을 %1 예기치 않게 종료되었습니다 (%3).</translation>
+        <translation>지난번 OnPdf 가 &apos;%2&apos; 파일을 %1 예기치 않게 종료되었습니다 (%3).</translation>
     </message>
     <message>
         <source>Signal: %1</source>
@@ -1100,10 +1100,6 @@ If you know its permissions (owner) password, you can unlock printing.</source>
     <message>
         <source>Report folder: %1</source>
         <translation>보고 폴더: %1</translation>
-    </message>
-    <message>
-        <source>System crash reports: %1</source>
-        <translation>시스템 크래시 리포트: %1</translation>
     </message>
     <message>
         <source>OnPdf %1 · PDFium %2 · Qt %3</source>

@@ -24,6 +24,9 @@
 #include <csignal>
 #include <fcntl.h>
 #include <unistd.h>
+#if defined(__APPLE__) || defined(__GLIBC__)
+#include <execinfo.h>  // backtrace / backtrace_symbols_fd (malloc 없음)
+#endif
 #endif
 
 namespace onpdf::app::crash {
@@ -92,7 +95,10 @@ std::size_t build_file_name(char* out, std::size_t cap, long long epoch, const c
 #ifdef _WIN32
 
 LONG WINAPI unhandled_exception_filter(EXCEPTION_POINTERS* ep) {
-  if (g_handling.exchange(true)) return EXCEPTION_CONTINUE_SEARCH;  // 필터 안의 예외는 기본 처리로
+  if (g_handling.exchange(true)) {  // 필터 안의 예외: 더 할 수 있는 것이 없다
+    TerminateProcess(GetCurrentProcess(), static_cast<UINT>(0xC000'0000u | 0xDEADu));
+    return EXCEPTION_EXECUTE_HANDLER;
+  }
   const long long epoch = static_cast<long long>(std::time(nullptr));
   // 1) 기록 파일
   char name[kPathCap + 64];
@@ -139,7 +145,9 @@ LONG WINAPI unhandled_exception_filter(EXCEPTION_POINTERS* ep) {
       CloseHandle(dump);
     }
   }
-  return EXCEPTION_CONTINUE_SEARCH;  // 기본 처리(WER)로
+  // 기록·덤프를 남겼으니 WER 창 없이 조용히 끝낸다
+  TerminateProcess(GetCurrentProcess(), static_cast<UINT>(0xC000'0000u | 0xDEADu));
+  return EXCEPTION_EXECUTE_HANDLER;
 }
 
 #else
@@ -150,10 +158,7 @@ void signal_handler(int sig, siginfo_t*, void*) {
   // 먼저 모든 크래시 신호를 기본 처리로 되돌린다 — 핸들러 안에서 또 죽거나 raise 가 다시 들어와도
   // 재진입하지 않는다 (SA_RESETHAND 는 그 신호 하나만 되돌린다)
   for (int s : kSignals) ::signal(s, SIG_DFL);
-  if (g_handling.exchange(true)) {
-    ::raise(sig);
-    return;
-  }
+  if (g_handling.exchange(true)) ::_exit(128 + sig);
   const long long epoch = static_cast<long long>(std::time(nullptr));
   char name[kPathCap + 64];
   build_file_name(name, sizeof name, epoch, ".txt");
@@ -174,10 +179,19 @@ void signal_handler(int sig, siginfo_t*, void*) {
       if (w <= 0) break;
       done += static_cast<std::size_t>(w);
     }
+#if defined(__APPLE__) || defined(__GLIBC__)
+    // 시스템 크래시 리포트를 만들지 않으므로(아래) 스택은 여기에 남긴다
+    static const char kStackHeader[] = "stack=\n";
+    ::write(fd, kStackHeader, sizeof kStackHeader - 1);
+    void* frames[64];
+    const int n = ::backtrace(frames, 64);
+    if (n > 0) ::backtrace_symbols_fd(frames, n, fd);
+#endif
     ::close(fd);
   }
-  // SA_RESETHAND 로 기본 처리가 복원돼 있다 → 다시 올려 시스템 리포트·코어가 만들어진다
-  ::raise(sig);
+  // 조용히 끝낸다: 신호를 다시 올리면 macOS 가 "예기치 않게 종료되었습니다" 창을 띄운다. 기록
+  // 파일이 신호·스택을 담고 있으므로 시스템 리포트 없이 끝낸다(종료 코드는 셸 관례 128+신호)
+  ::_exit(128 + sig);
 }
 
 #endif

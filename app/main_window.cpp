@@ -3125,8 +3125,6 @@ bool MainWindow::maybe_show_crash_notice(const QString& cli_file) {
       tr("Last action: %1")
           .arg(record && !record->last_action.isEmpty() ? record->last_action : marker.last_action);
   details += QLatin1Char('\n') + tr("Report folder: %1").arg(report_dir().absolutePath());
-  if (const QString hint = system_report_hint(); !hint.isEmpty())
-    details += QLatin1Char('\n') + tr("System crash reports: %1").arg(hint);
   details += QLatin1Char('\n') +
              tr("OnPdf %1 · PDFium %2 · Qt %3")
                  .arg(app_version(), pdfium_version(), QString::fromLatin1(qVersion()));

@@ -2,9 +2,9 @@
 
 // 프로세스 크래시 핸들러 (#131). Qt 를 쓰지 않는다 — 핸들러는 크래시가 난 스레드(워커 포함)에서
 // 비동기 신호 안전한 호출만으로 기록 파일(crash-<epoch>.txt: 버전·PDFium 판·신호/예외·마지막
-// 동작)을 쓰고 기본 처리로 넘긴다(macOS 시스템 리포트·Windows WER 그대로). Windows 는 이어서
-// 미니덤프 (crash-<epoch>.dmp, dbghelp MiniDumpWriteDump)도 남긴다. 플랫폼 분기는 crash_handler.cpp
-// 안에만.
+// 동작·스택)을 쓰고 **조용히 종료**한다(신호를 다시 올리면 macOS 가 "예기치 않게 종료되었습니다"
+// 창을 띄우고 Windows 는 WER 로 가므로 그러지 않는다 — 대신 기록에 스택을 남기고 Windows 는
+// 미니덤프 crash-<epoch>.dmp 도 쓴다). 플랫폼 분기는 crash_handler.cpp 안에만.
 //
 //  - install() 은 평상시(main, 워커 생성 전)에 한 번: 보고 폴더를 만들고 경로·버전을 고정 버퍼에
 //    복사한다. 테스트 프로세스는 설치하지 않는다

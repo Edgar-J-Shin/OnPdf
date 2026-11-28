@@ -85,14 +85,6 @@ std::optional<CrashRecord> latest_record_since(const QDir& dir, const QDateTime&
   return best;
 }
 
-QString system_report_hint() {
-#if defined(Q_OS_MACOS)
-  return QDir::homePath() + QStringLiteral("/Library/Logs/DiagnosticReports");
-#else
-  return QString();
-#endif
-}
-
 QString pdfium_version() {
   return QStringLiteral(ONPDF_PDFIUM_VERSION);
 }

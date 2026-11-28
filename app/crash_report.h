@@ -40,8 +40,6 @@ void set_report_dir_override(const QString& dir);  // 테스트·--self-test
                                                              const QDateTime& since);
 [[nodiscard]] std::optional<CrashRecord> parse_record(const QString& text,
                                                       const QDateTime& fallback);
-// OS 가 따로 두는 크래시 리포트 위치 안내 (macOS). 없으면 빈 문자열
-[[nodiscard]] QString system_report_hint();
 [[nodiscard]] QString pdfium_version();  // 빌드에 고정한 PDFium 판 (chromium/NNNN)
 [[nodiscard]] QString app_version();
 // GitHub 새 이슈 URL. 버전·OS·Qt·PDFium·단계·신호·마지막 동작을 본문에 넣고 파일 경로·이름은 넣지
