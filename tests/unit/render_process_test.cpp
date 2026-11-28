@@ -256,6 +256,47 @@ TEST_F(RenderProcessTest, ReplaceGenerationGatesRenders) {
   EXPECT_NE(after->pixels, before->pixels);  // 새 문서의 내용
 }
 
+// 교체한 문서(편집본)는 클라이언트가 공유 메모리 세그먼트로만 들고 있다가 재시작 때 같은 이름으로
+// 다시 올린다 — 바이트 사본 없음 (#153)
+TEST_F(RenderProcessTest, ReplacedDocumentSurvivesRestart) {
+  onpdf::test::set_env("ONPDF_RENDER_CHILD_FAULT", "crash:1");
+  RenderProcess rp(options_for());
+  rp.open(testdata("simple.pdf"), "");
+  RenderOptions opts;
+  opts.scale = 0.5f;
+  auto original = render_sync(rp, 0, opts, std::nullopt);
+  ASSERT_TRUE(original.has_value()) << original.error().message;
+  const std::uint64_t gen = rp.begin_resync();
+  rp.replace(gen, onpdf::test::read_bytes(testdata("large-1000.pdf")));
+  auto replaced = render_sync(rp, 0, opts, std::nullopt);
+  ASSERT_TRUE(replaced.has_value()) << replaced.error().message;
+  EXPECT_NE(replaced->pixels, original->pixels);
+  auto lost = render_sync(rp, 1, opts, std::nullopt);  // 2쪽에서 죽는다
+  ASSERT_FALSE(lost.has_value());
+  EXPECT_EQ(lost.error().code, ErrorCode::kRenderProcessLost);
+  auto again = render_sync(rp, 0, opts, std::nullopt);
+  ASSERT_TRUE(again.has_value()) << again.error().message;
+  EXPECT_EQ(again->pixels, replaced->pixels) << "재시작 뒤에도 교체본이 그려진다";
+  EXPECT_EQ(rp.stats().restarts, 1);
+}
+
+TEST_F(RenderProcessTest, MemoryDocumentSurvivesRestart) {
+  onpdf::test::set_env("ONPDF_RENDER_CHILD_FAULT", "crash:1");
+  RenderProcess rp(options_for());
+  rp.open_from_memory(onpdf::test::read_bytes(testdata("simple.pdf")), "");
+  RenderOptions opts;
+  opts.scale = 0.5f;
+  auto first = render_sync(rp, 0, opts, std::nullopt);
+  ASSERT_TRUE(first.has_value()) << first.error().message;
+  auto lost = render_sync(rp, 1, opts, std::nullopt);
+  ASSERT_FALSE(lost.has_value());
+  EXPECT_EQ(lost.error().code, ErrorCode::kRenderProcessLost);
+  auto again = render_sync(rp, 0, opts, std::nullopt);
+  ASSERT_TRUE(again.has_value()) << again.error().message;
+  EXPECT_EQ(again->pixels, first->pixels);
+  EXPECT_EQ(rp.stats().restarts, 1);
+}
+
 TEST_F(RenderProcessTest, CrashRestartsAndRefusesAfterTwoFailures) {
   onpdf::test::set_env("ONPDF_RENDER_CHILD_FAULT", "crash:1");  // 2쪽(인덱스 1)에서 죽는다
   RenderProcess rp(options_for());
