@@ -6,6 +6,9 @@
 //  - SharedMemory: 이름 있는 공유 메모리(픽셀·문서 바이트). 만든 쪽이 지운다
 //  - ChildProcess: 자식 띄우기(파이프 두 끝만 상속)·생존 확인·kill·종료 대기. Windows 는 Job
 //    객체로 부모가 죽으면 자식도 끝난다
+//  - exit_when_parent_dies: 자식 쪽에서 부른다. POSIX 는 Job 객체가 없어 부모가 크래시·_Exit 로
+//    죽으면 멈춘 자식(렌더 폭탄·장애 주입)이 고아로 남아 파이프를 쥔다(#145: ctest 가 EOF 를 못
+//    받는다) → 감시 스레드가 getppid() 변화를 보고 프로세스를 끝낸다. Windows 는 아무것도 안 한다
 
 #include "onpdf/core/error.h"
 
@@ -146,5 +149,8 @@ class ChildProcess {
 };
 
 [[nodiscard]] long long current_process_id() noexcept;
+
+// 부모 프로세스가 죽으면 이 프로세스를 즉시 끝내는 감시 스레드를 시작한다 (위 설명)
+void exit_when_parent_dies();
 
 }  // namespace onpdf::platform

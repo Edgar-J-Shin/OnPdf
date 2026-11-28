@@ -4,6 +4,7 @@
 #include "onpdf/core/platform/path.h"
 
 #include "../test_support.h"
+#include "dialog_helpers.h"
 #include "document_view.h"
 #include "main_window.h"
 #include "outline_panel.h"
@@ -22,8 +23,11 @@
 namespace onpdf::app {
 namespace {
 
+using onpdf::test::answer_input_dialog;
+using onpdf::test::answer_message_box;
 using onpdf::test::ScopedTempDir;
 using onpdf::test::testdata;
+using onpdf::test::when_dialog;
 
 template <class Pred>
 bool spin_until(Pred pred, int timeout_ms = 15000) {
@@ -43,44 +47,8 @@ bool spin_until(Pred pred, int timeout_ms = 15000) {
   return !timed_out;
 }
 
-// 이름이 object_name 인 메시지 상자가 뜨면 role 버튼을 누르고 본문을 기록한다
-void answer_box(const char* object_name, QMessageBox::ButtonRole role, QString* text,
-                bool* answered) {
-  auto* poll = new QTimer();
-  poll->setInterval(10);
-  QObject::connect(poll, &QTimer::timeout, poll, [poll, object_name, role, text, answered] {
-    auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
-    if (box == nullptr || box->objectName() != QString::fromLatin1(object_name)) return;
-    if (text != nullptr) *text = box->text();
-    for (QAbstractButton* b : box->buttons()) {
-      if (box->buttonRole(b) == role) {
-        if (answered != nullptr) *answered = true;
-        b->click();
-        break;
-      }
-    }
-    poll->deleteLater();
-  });
-  poll->start();
-}
-
 QString q(const std::filesystem::path& p) {
   return QString::fromStdString(onpdf::path_to_utf8(p));
-}
-
-// 이름이 object_name 인 입력 대화상자가 뜨면 text 를 넣고 확인한다
-void answer_input(const char* object_name, const QString& text, bool* answered) {
-  auto* poll = new QTimer();
-  poll->setInterval(10);
-  QObject::connect(poll, &QTimer::timeout, poll, [poll, object_name, text, answered] {
-    auto* dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
-    if (dialog == nullptr || dialog->objectName() != QString::fromLatin1(object_name)) return;
-    *answered = true;
-    dialog->setTextValue(text);
-    dialog->accept();
-    poll->deleteLater();
-  });
-  poll->start();
 }
 
 class MergeSplitTest : public ::testing::Test {
@@ -141,17 +109,13 @@ TEST_F(MergeSplitTest, MergeFailureIsExplainedAndLeavesNoFile) {
   const auto out = dir_ / "merged.pdf";
   // 틀린 암호 → 작업 결과로 돌아와 그 파일의 암호를 묻는다. 취소하면 병합이 끝나고 파일은 없다
   bool asked = false;
-  auto* poll = new QTimer();
-  poll->setInterval(10);
-  QObject::connect(poll, &QTimer::timeout, poll, [poll, &asked] {
-    auto* dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
-    if (dialog == nullptr || dialog->objectName() != QStringLiteral("merge_password")) return;
+  when_dialog("merge_password", [&asked](QWidget* w) {
+    auto* dialog = qobject_cast<QInputDialog*>(w);
+    ASSERT_NE(dialog, nullptr);
     asked = true;
     EXPECT_TRUE(dialog->labelText().contains(QStringLiteral("encrypted-aes256.pdf")));
     dialog->reject();
-    poll->deleteLater();
   });
-  poll->start();
   ASSERT_TRUE(window_.merge_files(
       {{testdata("simple.pdf"), ""}, {testdata("encrypted-aes256.pdf"), "wrong"}}, q(out)));
   ASSERT_TRUE(spin_until([&] { return asked && !window_.structure_job()->active(); }));
@@ -160,7 +124,7 @@ TEST_F(MergeSplitTest, MergeFailureIsExplainedAndLeavesNoFile) {
   // 암호와 무관한 실패(손상 파일)는 안내 상자
   QString message;
   bool answered = false;
-  answer_box("structure_failed", QMessageBox::AcceptRole, &message, &answered);
+  answer_message_box("structure_failed", QMessageBox::AcceptRole, &answered, &message);
   ASSERT_TRUE(
       window_.merge_files({{testdata("simple.pdf"), ""}, {testdata("truncated.pdf"), ""}}, q(out)));
   ASSERT_TRUE(spin_until([&] { return answered && !window_.structure_job()->active(); }));
@@ -180,7 +144,7 @@ TEST_F(MergeSplitTest, SplitWritesPiecesAndReports) {
   std::filesystem::create_directory(out_dir);
   QString message;
   bool answered = false;
-  answer_box("split_done", QMessageBox::AcceptRole, &message, &answered);
+  answer_message_box("split_done", QMessageBox::AcceptRole, &answered, &message);
   ASSERT_TRUE(window_.split_document(3, q(out_dir)));
   ASSERT_TRUE(spin_until([&] { return answered && !window_.structure_job()->active(); }));
   EXPECT_TRUE(message.contains(QStringLiteral("4개"))) << message.toStdString();
@@ -202,21 +166,21 @@ TEST_F(MergeSplitTest, SplitAsksBeforeOverwriting) {
   const auto out_dir = dir_ / "pieces";
   std::filesystem::create_directory(out_dir);
   bool done = false;
-  answer_box("split_done", QMessageBox::AcceptRole, nullptr, &done);
+  answer_message_box("split_done", QMessageBox::AcceptRole, &done);
   ASSERT_TRUE(window_.split_document(5, q(out_dir)));
   ASSERT_TRUE(spin_until([&] { return done && !window_.structure_job()->active(); }));
   const auto first = out_dir / "bookmarks-1.pdf";
   const auto before = std::filesystem::last_write_time(first);
   bool asked = false;
-  answer_box("split_overwrite", QMessageBox::RejectRole, nullptr, &asked);
+  answer_message_box("split_overwrite", QMessageBox::RejectRole, &asked);
   EXPECT_FALSE(window_.split_document(5, q(out_dir)));
   EXPECT_TRUE(asked);
   EXPECT_FALSE(window_.structure_job()->active());
   EXPECT_EQ(std::filesystem::last_write_time(first), before);
   bool accepted = false;
-  answer_box("split_overwrite", QMessageBox::AcceptRole, nullptr, &accepted);
+  answer_message_box("split_overwrite", QMessageBox::AcceptRole, &accepted);
   bool done2 = false;
-  answer_box("split_done", QMessageBox::AcceptRole, nullptr, &done2);
+  answer_message_box("split_done", QMessageBox::AcceptRole, &done2);
   ASSERT_TRUE(window_.split_document(5, q(out_dir)));
   ASSERT_TRUE(spin_until([&] { return accepted && done2 && !window_.structure_job()->active(); }));
 }
@@ -249,7 +213,7 @@ TEST_F(MergeSplitTest, SplitUsesSessionPasswordForEncryptedDocument) {
   const auto out_dir = dir_ / "locked-pieces";
   std::filesystem::create_directory(out_dir);
   bool done = false;
-  answer_box("split_done", QMessageBox::AcceptRole, nullptr, &done);
+  answer_message_box("split_done", QMessageBox::AcceptRole, &done);
   ASSERT_TRUE(window_.split_document(1, q(out_dir)));
   ASSERT_TRUE(spin_until([&] { return done && !window_.structure_job()->active(); }));
   EXPECT_TRUE(std::filesystem::exists(out_dir / "locked-1.pdf"));
@@ -261,7 +225,7 @@ TEST_F(MergeSplitTest, SplitUsesSessionPasswordForEncryptedDocument) {
 TEST_F(MergeSplitTest, MergeAsksPasswordFromJobResultAndRetries) {
   const auto out = dir_ / "retry.pdf";
   bool asked = false;
-  answer_input("merge_password", QStringLiteral("user"), &asked);
+  answer_input_dialog("merge_password", QStringLiteral("user"), &asked);
   ASSERT_TRUE(window_.merge_files(
       {{testdata("simple.pdf"), ""}, {testdata("encrypted-aes256.pdf"), ""}}, q(out)));
   ASSERT_TRUE(spin_until([&] { return asked; }));
@@ -278,8 +242,8 @@ TEST_F(MergeSplitTest, SplitAsksToSaveModifiedDocumentFirst) {
   ASSERT_TRUE(spin_until([&] { return !window_.edit_controller()->busy(); }));
   ASSERT_TRUE(window_.isWindowModified());
   bool asked = false;
-  answer_box("save_changes_question", QMessageBox::RejectRole, nullptr,
-             &asked);  // 취소 → 분할하지 않는다
+  answer_message_box("save_changes_question", QMessageBox::RejectRole,
+                     &asked);  // 취소 → 분할하지 않는다
   window_.split_action()->trigger();
   ASSERT_TRUE(spin_until([&] { return asked; }));
   EXPECT_FALSE(window_.structure_job()->active());

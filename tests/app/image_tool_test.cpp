@@ -4,6 +4,7 @@
 #include "onpdf/core/platform/path.h"
 
 #include "../test_support.h"
+#include "dialog_helpers.h"
 #include "document_view.h"
 #include "image_import.h"
 #include "main_window.h"
@@ -30,6 +31,7 @@ namespace {
 
 using onpdf::test::ScopedTempDir;
 using onpdf::test::testdata;
+using onpdf::test::when_dialog;
 
 template <class Pred>
 bool spin_until(Pred pred, int timeout_ms = 10000) {
@@ -40,19 +42,6 @@ bool spin_until(Pred pred, int timeout_ms = 10000) {
     QApplication::processEvents(QEventLoop::AllEvents, 20);
   }
   return true;
-}
-
-template <class Fn>
-void when_dialog(const char* object_name, Fn fn) {
-  auto* poll = new QTimer();
-  poll->setInterval(10);
-  QObject::connect(poll, &QTimer::timeout, poll, [poll, object_name, fn] {
-    QWidget* w = QApplication::activeModalWidget();
-    if (w == nullptr || w->objectName() != QLatin1String(object_name)) return;
-    fn(w);
-    poll->deleteLater();
-  });
-  poll->start();
 }
 
 class ImageToolTest : public ::testing::Test {

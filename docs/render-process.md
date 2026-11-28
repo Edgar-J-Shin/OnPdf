@@ -24,7 +24,7 @@ onpdf_app (부모)                                  onpdf_app --render-child <in
 1. **열기**: `DocumentSession` 이 워커로 문서를 연 뒤 `DocumentHandle::attach_render_process` 로 자식을 붙인다 → 큐 맨 앞에 `Open`. 자식은 같은 파일을 열고(암호 포함) 렌더 위험을 qpdf 로 검사한다(부모와 같은 판정).
 2. **렌더**: `DocumentHandle::render_page/render_region` 이 자식이 붙어 있으면 `RenderProcess` 로 간다. 호출자(`DocumentTileSource`·`ThumbnailPanel`·`PrintJob`·`PrintPreviewView`)는 바뀌지 않았다 — 콜백은 클라이언트 스레드에서 오고 각자 `UiDispatcher::post_to` 로 메인에 넘긴다.
 3. **편집 뒤**(`apply_change`): `begin_resync()` 로 세대를 올려 이후 렌더 요청을 보류시키고, 워커가 `save_to_memory` 로 현재 바이트를 만들면 `replace(세대, 바이트)` → 자식이 메모리에서 다시 연다 → 보류된 요청 처리. 옛 바이트로 그린 타일은 뷰에 가지 않는다(`invalidate_pages` 가 스케줄러를 재생성해 늦은 결과를 버린다). 7.9MB 문서의 메모리 저장은 약 65ms.
-4. **닫기**: 핸들 소멸 → `Close`. 앱 종료 → 파이프 EOF → 자식 종료(1초 안에 안 끝나면 kill).
+4. **닫기**: 핸들 소멸 → `Close`. 앱 종료 → 파이프 EOF → 자식 종료(1초 안에 안 끝나면 kill). 부모가 크래시·강제 종료로 사라지면 Windows 는 Job 객체가, POSIX 는 자식의 `platform::exit_when_parent_dies()` 감시 스레드(`getppid()` 변화, 250ms)가 멈춘 렌더 중이라도 자식을 끝낸다(#145 — 고아가 파이프를 쥐면 ctest 가 EOF 를 못 받는다).
 
 ## 장애 처리
 
