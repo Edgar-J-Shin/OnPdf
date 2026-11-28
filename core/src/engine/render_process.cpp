@@ -64,13 +64,17 @@ struct RenderProcessImpl {
   std::uint64_t next_request_id = 1;
   int spawn_failures = 0;
   std::unordered_map<int, int> page_failures;
-  // 재시작 때 다시 보낼 문서 지정
+  // 재시작 때 다시 보낼 문서 지정. 바이트(from_memory 또는 마지막 Replace)는 클라이언트가 소유한
+  // 공유 메모리 세그먼트에만 있다 — 자식은 Replace 때 자기 메모리로 복사하므로 재시작 때 같은
+  // 이름을 다시 보내면 되고, 벡터 사본을 한 벌 더 들지 않는다 (#153). 다음 Replace·Close 가
+  // 세그먼트를 교체·해제한다
   struct Source {
     bool from_memory = false;
     std::filesystem::path path;
     std::string password;
-    std::vector<std::uint8_t> bytes;  // from_memory 또는 마지막 Replace
-    std::uint64_t generation = 0;     // 마지막 Replace 세대
+    platform::SharedMemory document;
+    std::size_t document_bytes = 0;
+    std::uint64_t generation = 0;  // 마지막 Replace 세대
   };
   std::optional<Source> source;
 
@@ -171,16 +175,12 @@ struct RenderProcessImpl {
     if (source) {
       bool ok = false;
       if (source->from_memory) {
-        ok = send_bytes(proto::Replace{source->generation, {}, 0}, source->bytes, source->password,
-                        true);
+        ok = send_document(source->generation, true);
       } else {
         ok = roundtrip_ok(proto::Open{options.use_system_fonts, onpdf::path_to_utf8(source->path),
                                       source->password},
                           options.control_timeout);
-        if (ok && !source->bytes.empty()) {
-          ok = send_bytes(proto::Replace{source->generation, {}, 0}, source->bytes,
-                          source->password, false);
-        }
+        if (ok && source->document.valid()) ok = send_document(source->generation, false);
       }
       if (!ok) return spawn_failed("document re-open failed");
     }
@@ -205,20 +205,33 @@ struct RenderProcessImpl {
     return stats.unavailable;
   }
 
-  // 바이트를 공유 메모리로 넘겨 Replace (from_memory 첫 열기도 Replace 로 — 자식은 Open 없이
-  // Replace 가 오면 library 가 없으므로 먼저 빈 Open? → 라이브러리 생성을 위해 Open 을 보낸다)
-  bool send_bytes(proto::Replace replace, const std::vector<std::uint8_t>& bytes,
-                  const std::string& password, bool needs_library) {
-    if (needs_library) {
-      // 자식 라이브러리 초기화 + 암호 등록: 존재하지 않는 경로로 Open → 실패 응답은 무시한다
-      (void)roundtrip(proto::Open{options.use_system_fonts, "", password}, options.control_timeout);
-    }
+  // 바이트를 source 의 공유 메모리 세그먼트에 둔다 (새 세그먼트로 교체 — 이전 것은 자식이 이미
+  // 복사해 갔다). 자식 없이도 된다
+  bool store_document(const std::vector<std::uint8_t>& bytes) {
+    if (!source) return false;
     auto shm = platform::SharedMemory::create(platform::SharedMemory::unique_name(),
                                               std::max<std::size_t>(bytes.size(), 1));
     if (!shm) return false;
     std::memcpy(shm->data(), bytes.data(), bytes.size());
-    replace.shm_name = shm->name();
-    replace.bytes = bytes.size();
+    source->document = std::move(*shm);
+    source->document_bytes = bytes.size();
+    return true;
+  }
+
+  // 보관한 세그먼트를 Replace 로 보낸다 (from_memory 첫 열기도 Replace 로 — 자식은 Open 없이
+  // Replace 가 오면 library 가 없으므로 needs_library 면 라이브러리 생성을 위해 Open 을 먼저
+  // 보낸다)
+  bool send_document(std::uint64_t generation, bool needs_library) {
+    if (!source || !source->document.valid()) return false;
+    if (needs_library) {
+      // 자식 라이브러리 초기화 + 암호 등록: 존재하지 않는 경로로 Open → 실패 응답은 무시한다
+      (void)roundtrip(proto::Open{options.use_system_fonts, "", source->password},
+                      options.control_timeout);
+    }
+    proto::Replace replace;
+    replace.generation = generation;
+    replace.shm_name = source->document.name();
+    replace.bytes = source->document_bytes;
     return roundtrip_ok(replace, options.control_timeout);
   }
 
@@ -272,7 +285,9 @@ struct RenderProcessImpl {
   void handle_control(Entry& e) {
     switch (e.kind) {
       case Kind::kOpen:
-        source = Source{false, e.path, e.password, {}, 0};
+        source.emplace();
+        source->path = e.path;
+        source->password = e.password;
         {
           std::lock_guard lock(mutex);
           refused_pages.clear();
@@ -287,27 +302,27 @@ struct RenderProcessImpl {
         }
         break;
       case Kind::kOpenMemory:
-        source = Source{true, {}, e.password, std::move(e.bytes), 0};
+        source.emplace();
+        source->from_memory = true;
+        source->password = e.password;
         {
           std::lock_guard lock(mutex);
           refused_pages.clear();
           applied_generation = pending_generation;
         }
         page_failures.clear();
+        if (!store_document(e.bytes)) {
+          emit(RenderProcess::Event::Kind::kSpawnFailed, -1, "shared memory for document failed");
+          source.reset();
+          return;
+        }
         if (!ensure_child()) return;
-        if (!send_bytes(proto::Replace{0, {}, 0}, source->bytes, source->password, true))
-          kill_child("open from memory failed");
+        if (!send_document(0, true)) kill_child("open from memory failed");
         break;
       case Kind::kReplace:
-        if (source) {
-          source->bytes = std::move(e.bytes);
-          source->generation = e.generation;
-        }
-        if (ensure_child() && source && !source->bytes.empty()) {
-          if (!send_bytes(proto::Replace{e.generation, {}, 0}, source->bytes, source->password,
-                          false)) {
-            kill_child("replace failed");
-          }
+        if (source && store_document(e.bytes)) source->generation = e.generation;
+        if (ensure_child() && source && source->document.valid()) {
+          if (!send_document(e.generation, false)) kill_child("replace failed");
         }
         {
           // 자식이 죽었더라도 세대는 적용으로 본다 — 재시작이 source 로 같은 바이트를 올린다
