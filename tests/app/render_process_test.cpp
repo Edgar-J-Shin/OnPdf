@@ -61,7 +61,7 @@ class RenderProcessAppTest : public ::testing::Test {
  protected:
   RenderProcessAppTest() : worker_(options()) {
     Settings().reset_all();
-    Settings().set_render_process(true);  // 기본은 끔 — 이 테스트들은 켠다
+    Settings().set_render_process(true);  // 기본 켬(#147)이지만 기본값과 무관하게 명시한다
     onpdf::test::unset_env("ONPDF_RENDER_CHILD_FAULT");
   }
   ~RenderProcessAppTest() override {
@@ -193,13 +193,20 @@ TEST_F(RenderProcessAppTest, HangIsCutByTimeout) {
       [&] { return view()->pending_visible_tiles() == 0 && view()->cache_stats().count > 0; }));
 }
 
-TEST_F(RenderProcessAppTest, DefaultIsOffAndUsesWorker) {
-  Settings().reset_all();  // 기본값: 끔
+TEST_F(RenderProcessAppTest, DefaultIsOnAndUsesChild) {
+  Settings().reset_all();  // 기본값: 켬 (#147)
+  EXPECT_TRUE(Settings().render_process());
   MainWindow& w = make_window();
   ASSERT_TRUE(open("simple.pdf"));
   ASSERT_TRUE(wait_visible_tiles());
-  EXPECT_EQ(w.render_process(), nullptr);
+  ASSERT_NE(w.render_process(), nullptr);
+  EXPECT_GT(w.render_process()->stats().rendered, 0u);
   EXPECT_FALSE(w.document_view()->refused_pages().contains(0));
+  // 끄면 다음 문서부터 워커 렌더
+  Settings().set_render_process(false);
+  ASSERT_TRUE(open("simple.pdf"));
+  ASSERT_TRUE(wait_visible_tiles());
+  EXPECT_EQ(w.render_process(), nullptr);
 }
 
 TEST_F(RenderProcessAppTest, BadExecutableFallsBackAndTurnsSettingOff) {
