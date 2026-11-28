@@ -58,8 +58,8 @@ class Settings : public QObject {
   [[nodiscard]] std::uint8_t opacity_alpha() const;  // percent → 0~255 (툴바와 같은 반올림)
   [[nodiscard]] engine::Color annotation_color() const;
   void set_annotation_color(engine::Color color);
-  [[nodiscard]] int text_size() const;  // {8,10,12,14,18,24,36,48,72}
-  void set_text_size(int size);
+  [[nodiscard]] double text_size() const;  // 1~500 (#141: 직접 입력)
+  void set_text_size(double size);
   [[nodiscard]] engine::Color text_color() const;
   void set_text_color(engine::Color color);
   [[nodiscard]] QString author() const;  // 앞뒤 공백 제거, 256자
@@ -108,7 +108,9 @@ class Settings : public QObject {
   // 기본값 (대화상자 "기본값으로" 가 위젯에 넣는다)
   static constexpr double kDefaultBorderWidth = 2.0;
   static constexpr int kDefaultOpacityPercent = 100;
-  static constexpr int kDefaultTextSize = 24;
+  static constexpr double kDefaultTextSize = 24.0;
+  static constexpr double kMinTextSize = 1.0;
+  static constexpr double kMaxTextSize = 500.0;
   static constexpr int kDefaultCacheMb = 256;
   static constexpr int kDefaultStallSeconds = 60;
   static constexpr int kMinCacheMb = 64;

@@ -321,6 +321,7 @@ class DocumentView : public QAbstractScrollArea {
   [[nodiscard]] std::string text_box_id_at(
       int page, onpdf::Point pt) const;  // 뒤(위)에 있는 것 먼저. 없으면 빈 문자열
   [[nodiscard]] std::optional<SelectedTextBox> text_box_at(int page, onpdf::Point pt) const;
+  void select_text_box_internal(int page, const SelectedTextBox& box);  // 선택 + 신호 (#141)
   [[nodiscard]] std::optional<SelectedTextBox> text_box_by_id(int page,
                                                               const std::string& box) const;
   void cancel_text_drag();

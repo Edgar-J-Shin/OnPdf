@@ -274,7 +274,7 @@ TEST(TextLines, EmbeddedCidLineReusesOriginalFontAndType3FallsBack) {
   ASSERT_TRUE(doc);
   auto lines = doc->text_lines(0);
   ASSERT_TRUE(lines);
-  EXPECT_EQ(lines->size(), 4u);
+  EXPECT_EQ(lines->size(), 5u);  // + 행렬 배율 줄 (#141)
   const TextLineInfo* korean = find_line(*lines, "한글 텍스트 줄");
   ASSERT_NE(korean, nullptr);
   EXPECT_TRUE(korean->font_embedded);
@@ -1144,5 +1144,31 @@ TEST(SpacingReapply, DISABLED_Bench) {
   ASSERT_TRUE(doc->move_page_objects(0, other->ids, {4.0, 4.0}));
   timed("unrelated move (cache)");
 }
+
+// #141: `1 Tf` + `Tm 18 0 0 18` 줄의 유효 크기는 18 이고, ofont 재수정(원본 행렬 복사) 뒤 상자의
+// font_size 도 유효 크기(36)로 보고된다 (이전: Tf 값 2)
+TEST(TextLines, ScaledMatrixLineReportsEffectiveSize) {
+  auto doc = PdfiumDocument::open(testdata("text-lines-type3.pdf"));
+  ASSERT_TRUE(doc);
+  auto lines = doc->text_lines(0);
+  ASSERT_TRUE(lines);
+  const TextLineInfo* scaled = find_line(*lines, "줄 텍스트");
+  ASSERT_NE(scaled, nullptr);
+  EXPECT_TRUE(scaled->editable) << scaled->reason;
+  EXPECT_NEAR(scaled->font_size, 18.0, 0.05);
+  LineReplacement bigger{"줄 텍스트", std::nullopt, 36.0,
+                         std::nullopt};  // utf8, fallback, size, color
+  auto replaced = doc->replace_text_line(0, scaled->id, bigger);
+  ASSERT_TRUE(replaced) << replaced.error().message;
+  EXPECT_FALSE(replaced->used_fallback);
+  auto objects = doc->text_objects(0);
+  ASSERT_TRUE(objects);
+  const auto it = std::find_if(objects->begin(), objects->end(),
+                               [](const auto& o) { return o.text == "줄 텍스트"; });
+  ASSERT_NE(it, objects->end());
+  EXPECT_TRUE(it->original_font);
+  EXPECT_NEAR(it->font_size, 36.0, 0.05) << "행렬 배율을 곱한 유효 크기";
+}
+
 }  // namespace
 }  // namespace onpdf::engine

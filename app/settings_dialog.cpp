@@ -5,6 +5,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QLineEdit>
 #include <QPixmap>
@@ -74,9 +75,12 @@ SettingsDialog::SettingsDialog(Settings& settings, QWidget* parent)
   annotation_color_ = new QComboBox(editing);
   annotation_color_->setObjectName(QStringLiteral("settings_annotation_color"));
   editing_form->addRow(tr("Annotation color:"), annotation_color_);
-  text_size_ = new QComboBox(editing);
+  text_size_ = new QDoubleSpinBox(editing);  // 직접 입력 (#141)
   text_size_->setObjectName(QStringLiteral("settings_text_size"));
-  for (int pt : {8, 10, 12, 14, 18, 24, 36, 48, 72}) text_size_->addItem(tr("%1 pt").arg(pt), pt);
+  text_size_->setRange(Settings::kMinTextSize, Settings::kMaxTextSize);
+  text_size_->setDecimals(1);
+  text_size_->setSingleStep(1.0);
+  text_size_->setSuffix(tr(" pt"));
   editing_form->addRow(tr("Text size:"), text_size_);
   text_color_ = new QComboBox(editing);
   text_color_->setObjectName(QStringLiteral("settings_text_color"));
@@ -179,7 +183,7 @@ void SettingsDialog::load() {
   select_data(border_width_, settings_.border_width());
   select_data(opacity_, settings_.opacity_percent());
   fill_color_combo(annotation_color_, settings_.annotation_color(), false);
-  select_data(text_size_, settings_.text_size());
+  text_size_->setValue(settings_.text_size());
   fill_color_combo(text_color_, settings_.text_color(), true);
   author_->setText(settings_.author());
   cache_mb_->setValue(settings_.cache_mb());
@@ -197,7 +201,7 @@ void SettingsDialog::load_defaults() {
   select_data(border_width_, Settings::kDefaultBorderWidth);
   select_data(opacity_, Settings::kDefaultOpacityPercent);
   fill_color_combo(annotation_color_, Settings::kDefaultAnnotationColor, false);
-  select_data(text_size_, Settings::kDefaultTextSize);
+  text_size_->setValue(Settings::kDefaultTextSize);
   fill_color_combo(text_color_, Settings::kDefaultTextColor, true);
   author_->clear();
   cache_mb_->setValue(Settings::kDefaultCacheMb);
@@ -216,7 +220,7 @@ void SettingsDialog::apply() {
   settings_.set_border_width(border_width_->currentData().toDouble());
   settings_.set_opacity_percent(opacity_->currentData().toInt());
   settings_.set_annotation_color(combo_color(annotation_color_, Settings::kDefaultAnnotationColor));
-  settings_.set_text_size(text_size_->currentData().toInt());
+  settings_.set_text_size(text_size_->value());
   settings_.set_text_color(combo_color(text_color_, Settings::kDefaultTextColor));
   settings_.set_author(author_->text());
   settings_.set_cache_mb(cache_mb_->value());
