@@ -45,6 +45,7 @@ class SettingsDialog : public QDialog {
   QSpinBox* cache_mb_ = nullptr;
   QCheckBox* hazard_notice_ = nullptr;
   QSpinBox* stall_seconds_ = nullptr;
+  QCheckBox* crash_notice_ = nullptr;
 };
 
 }  // namespace onpdf::app

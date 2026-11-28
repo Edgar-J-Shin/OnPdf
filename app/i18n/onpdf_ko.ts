@@ -236,12 +236,6 @@
         <translation>OnPdf 정보</translation>
     </message>
     <message>
-        <source>OnPdf %1 — PDF viewer and editor based on PDFium
-Apache License 2.0</source>
-        <translation>OnPdf %1 — PDFium 기반 PDF 뷰어·편집기
-Apache License 2.0</translation>
-    </message>
-    <message>
         <source>Not opened because a print job is running</source>
         <translation>인쇄 중이라 열지 않았습니다</translation>
     </message>
@@ -1075,6 +1069,78 @@ If you know its permissions (owner) password, you can unlock printing.</source>
         <source>The language will change the next time OnPdf starts.</source>
         <translation>언어는 OnPdf 를 다음에 실행할 때부터 바뀝니다.</translation>
     </message>
+    <message>
+        <source>Cannot create the report folder: %1</source>
+        <translation>보고 폴더를 만들 수 없습니다: %1</translation>
+    </message>
+    <message>
+        <source>Cannot open the folder: %1</source>
+        <translation>폴더를 열 수 없습니다: %1</translation>
+    </message>
+    <message>
+        <source>OnPdf did not exit normally last time (%1)</source>
+        <translation>지난번 OnPdf 가 정상 종료되지 않았습니다 (%1)</translation>
+    </message>
+    <message>
+        <source>Last time, OnPdf quit unexpectedly while %1 &apos;%2&apos; (%3).</source>
+        <translation>지난번 OnPdf 가 '%2' 파일을 %1 예기치 않게 종료되었습니다 (%3).</translation>
+    </message>
+    <message>
+        <source>Signal: %1</source>
+        <translation>신호: %1</translation>
+    </message>
+    <message>
+        <source>That was version %1.</source>
+        <translation>그때 버전은 %1 이었습니다.</translation>
+    </message>
+    <message>
+        <source>Last action: %1</source>
+        <translation>마지막 동작: %1</translation>
+    </message>
+    <message>
+        <source>Report folder: %1</source>
+        <translation>보고 폴더: %1</translation>
+    </message>
+    <message>
+        <source>System crash reports: %1</source>
+        <translation>시스템 크래시 리포트: %1</translation>
+    </message>
+    <message>
+        <source>OnPdf %1 · PDFium %2 · Qt %3</source>
+        <translation>OnPdf %1 · PDFium %2 · Qt %3</translation>
+    </message>
+    <message>
+        <source>OnPdf did not exit normally</source>
+        <translation>OnPdf 가 정상 종료되지 않았습니다</translation>
+    </message>
+    <message>
+        <source>The file may contain content PDFium cannot handle. You can open it again or leave it closed. The report folder holds what you can attach to a bug report.</source>
+        <translation>그 파일에 PDFium 이 처리하지 못하는 내용이 있을 수 있습니다. 다시 열거나 열지 않은 채 둘 수 있습니다. 보고 폴더에 버그 보고에 첨부할 파일이 있습니다.</translation>
+    </message>
+    <message>
+        <source>Do not show this again</source>
+        <translation>다시 표시 안 함</translation>
+    </message>
+    <message>
+        <source>Open It Again</source>
+        <translation>다시 열기</translation>
+    </message>
+    <message>
+        <source>Leave It Closed</source>
+        <translation>열지 않기</translation>
+    </message>
+    <message>
+        <source>Open Report Folder</source>
+        <translation>보고 폴더 열기</translation>
+    </message>
+    <message>
+        <source>Report an Issue...</source>
+        <translation>이슈 올리기...</translation>
+    </message>
+    <message>
+        <source>Cannot open the browser; the issue link was copied to the clipboard</source>
+        <translation>브라우저를 열 수 없어 이슈 링크를 클립보드에 복사했습니다</translation>
+    </message>
     <message numerus="yes">
         <source>Rendering %1 has not finished for %n second(s). The document may contain hostile content.
 If you force quit, unsaved changes are lost.</source>
@@ -1086,6 +1152,20 @@ If you force quit, unsaved changes are lost.</source>
     <message>
         <source>Print the document</source>
         <translation>문서를 인쇄한다</translation>
+    </message>
+    <message>
+        <source>Open &amp;Report Folder</source>
+        <translation>보고 폴더 열기(&amp;R)</translation>
+    </message>
+    <message>
+        <source>OnPdf %1 — PDF viewer and editor based on PDFium
+Apache License 2.0
+
+PDFium %2 · Qt %3</source>
+        <translation>OnPdf %1 — PDFium 기반 PDF 뷰어·편집기
+Apache License 2.0
+
+PDFium %2 · Qt %3</translation>
     </message>
     <message>
         <source>Print</source>
@@ -1284,6 +1364,18 @@ Other pages, search, editing and saving work as usual.</source>
     <message>
         <source>Only PDF files can be opened</source>
         <translation>PDF 파일만 열 수 있습니다</translation>
+    </message>
+    <message>
+        <source>opening</source>
+        <translation>여는 중에</translation>
+    </message>
+    <message>
+        <source>viewing</source>
+        <translation>보는 중에</translation>
+    </message>
+    <message>
+        <source>being force-quit while rendering</source>
+        <translation>렌더링 중 강제 종료되어</translation>
     </message>
 </context>
 <context>
@@ -1521,6 +1613,10 @@ Other pages, search, editing and saving work as usual.</source>
     <message>
         <source>Warn when rendering has not finished for:</source>
         <translation>렌더링이 다음 시간 동안 끝나지 않으면 경고:</translation>
+    </message>
+    <message>
+        <source>Tell me if OnPdf did not exit normally last time</source>
+        <translation>지난번 OnPdf 가 정상 종료되지 않았으면 알립니다</translation>
     </message>
     <message>
         <source>Advanced</source>

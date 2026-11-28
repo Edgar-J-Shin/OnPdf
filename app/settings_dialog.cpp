@@ -108,6 +108,9 @@ SettingsDialog::SettingsDialog(Settings& settings, QWidget* parent)
   stall_seconds_->setSingleStep(10);
   stall_seconds_->setSuffix(tr(" s"));
   advanced_form->addRow(tr("Warn when rendering has not finished for:"), stall_seconds_);
+  crash_notice_ = new QCheckBox(tr("Tell me if OnPdf did not exit normally last time"), advanced);
+  crash_notice_->setObjectName(QStringLiteral("settings_crash_notice"));
+  advanced_form->addRow(QString(), crash_notice_);
   tabs->addTab(advanced, tr("Advanced"));
 
   auto* buttons =
@@ -171,6 +174,7 @@ void SettingsDialog::load() {
   cache_mb_->setValue(settings_.cache_mb());
   hazard_notice_->setChecked(settings_.hazard_notice());
   stall_seconds_->setValue(settings_.stall_seconds());
+  crash_notice_->setChecked(settings_.crash_notice());
 }
 
 void SettingsDialog::load_defaults() {
@@ -186,6 +190,7 @@ void SettingsDialog::load_defaults() {
   cache_mb_->setValue(Settings::kDefaultCacheMb);
   hazard_notice_->setChecked(true);
   stall_seconds_->setValue(Settings::kDefaultStallSeconds);
+  crash_notice_->setChecked(true);
 }
 
 void SettingsDialog::apply() {
@@ -202,6 +207,7 @@ void SettingsDialog::apply() {
   settings_.set_cache_mb(cache_mb_->value());
   settings_.set_hazard_notice(hazard_notice_->isChecked());
   settings_.set_stall_seconds(stall_seconds_->value());
+  settings_.set_crash_notice(crash_notice_->isChecked());
   settings_.sync();
   if (settings_.language() != before) emit language_changed();
 }

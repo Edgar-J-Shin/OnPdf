@@ -9,6 +9,7 @@
 
 #include "onpdf/core/engine/annotation.h"
 
+#include "crash_report.h"
 #include <QByteArray>
 #include <QObject>
 #include <QString>
@@ -71,6 +72,15 @@ class Settings : public QObject {
   void set_hazard_notice(bool on);
   [[nodiscard]] int stall_seconds() const;  // 10~600
   void set_stall_seconds(int seconds);
+  [[nodiscard]] bool crash_notice() const;  // 비정상 종료 안내 (#131)
+  void set_crash_notice(bool on);
+
+  // ---- 세션 표식 (#131): 상태라 changed 를 내지 않고 reset_preferences 도 건드리지 않는다 ----
+  [[nodiscard]] SessionMarker session_marker() const;  // 없으면 valid() == false
+  void set_session_marker(const SessionMarker& marker);
+  void set_session_stage(const QString& stage);
+  void set_session_last_action(const QString& action);
+  void clear_session_marker();
 
   // ---- 창 상태 ----
   [[nodiscard]] QByteArray window_geometry() const;

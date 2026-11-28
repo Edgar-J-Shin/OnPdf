@@ -24,6 +24,8 @@ add_library(onpdf_app_lib STATIC
   structure_job.h structure_job.cpp
   font_catalog_loader.h font_catalog_loader.cpp
   palette.h
+  crash_handler.h crash_handler.cpp
+  crash_report.h crash_report.cpp
   settings.h settings.cpp
   settings_dialog.h settings_dialog.cpp
   main_window.h main_window.cpp
@@ -31,6 +33,15 @@ add_library(onpdf_app_lib STATIC
   i18n.h i18n.cpp
 )
 target_include_directories(onpdf_app_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+# 버전 문자열 (#131 충돌 보고·정보 창): PDFium 판은 third_party/pdfium-version.txt 의 첫 줄
+file(STRINGS "${CMAKE_SOURCE_DIR}/third_party/pdfium-version.txt" ONPDF_PDFIUM_VERSION LIMIT_COUNT 1)
+string(STRIP "${ONPDF_PDFIUM_VERSION}" ONPDF_PDFIUM_VERSION)
+target_compile_definitions(onpdf_app_lib PUBLIC
+  ONPDF_VERSION="${PROJECT_VERSION}"
+  ONPDF_PDFIUM_VERSION="${ONPDF_PDFIUM_VERSION}")
+if(WIN32)
+  target_link_libraries(onpdf_app_lib PRIVATE dbghelp)  # MiniDumpWriteDump (#131)
+endif()
 target_link_libraries(onpdf_app_lib PUBLIC onpdf::core onpdf::edit Qt6::Core Qt6::Gui Qt6::Widgets Qt6::PrintSupport)
 onpdf_set_warnings(onpdf_app_lib)
 
@@ -77,7 +88,6 @@ if(EXISTS "${_onpdf_qt_translations}/qtbase_ko.qm")
 else()
   message(WARNING "qtbase_ko.qm not found in ${_onpdf_qt_translations}: Qt standard dialogs stay English in Korean UI")
 endif()
-target_compile_definitions(onpdf_app PRIVATE ONPDF_VERSION="${PROJECT_VERSION}")
 onpdf_set_warnings(onpdf_app)
 onpdf_set_runtime_rpath(onpdf_app)
 

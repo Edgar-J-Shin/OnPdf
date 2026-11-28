@@ -1,6 +1,7 @@
 #include "settings.h"
 
 #include <QColor>
+#include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
 #include <QSettings>
@@ -30,6 +31,12 @@ constexpr const char* kKeyAuthor = "edit/author";
 constexpr const char* kKeyCacheMb = "advanced/cache_mb";
 constexpr const char* kKeyHazardNotice = "advanced/hazard_notice";
 constexpr const char* kKeyStallSeconds = "advanced/stall_seconds";
+constexpr const char* kKeyCrashNotice = "advanced/crash_notice";
+constexpr const char* kKeySessionPath = "session/path";
+constexpr const char* kKeySessionStage = "session/stage";
+constexpr const char* kKeySessionSince = "session/since";
+constexpr const char* kKeySessionAction = "session/last_action";
+constexpr const char* kKeySessionVersion = "session/version";
 constexpr const char* kKeyGeometry = "window/geometry";
 constexpr const char* kKeySplitter = "window/splitter";
 constexpr const char* kKeySidebarVisible = "window/sidebar_visible";
@@ -284,6 +291,54 @@ int Settings::stall_seconds() const {
 
 void Settings::set_stall_seconds(int seconds) {
   write(kKeyStallSeconds, std::clamp(seconds, kMinStallSeconds, kMaxStallSeconds));
+}
+
+bool Settings::crash_notice() const {
+  return read_bool(kKeyCrashNotice, true);
+}
+
+void Settings::set_crash_notice(bool on) {
+  write(kKeyCrashNotice, on);
+}
+
+// ---------------------------------------------------------------- 세션 표식 (#131)
+
+SessionMarker Settings::session_marker() const {
+  SessionMarker m;
+  m.path = read_string(kKeySessionPath, QString());
+  m.stage = read_string(kKeySessionStage, QString());
+  m.since = QDateTime::fromString(read_string(kKeySessionSince, QString()), Qt::ISODate);
+  m.last_action = read_string(kKeySessionAction, QString());
+  m.version = read_string(kKeySessionVersion, QString());
+  return m;
+}
+
+void Settings::set_session_marker(const SessionMarker& marker) {
+  store_->setValue(QLatin1String(kKeySessionPath), marker.path);
+  store_->setValue(QLatin1String(kKeySessionStage), marker.stage);
+  store_->setValue(
+      QLatin1String(kKeySessionSince),
+      (marker.since.isValid() ? marker.since : QDateTime::currentDateTime()).toString(Qt::ISODate));
+  store_->setValue(QLatin1String(kKeySessionAction), marker.last_action);
+  store_->setValue(QLatin1String(kKeySessionVersion), marker.version);
+  store_->sync();  // 크래시 직전까지 남아야 한다
+}
+
+void Settings::set_session_stage(const QString& stage) {
+  store_->setValue(QLatin1String(kKeySessionStage), stage);
+  store_->sync();
+}
+
+void Settings::set_session_last_action(const QString& action) {
+  if (store_->value(QLatin1String(kKeySessionAction)).toString() == action) return;
+  store_->setValue(QLatin1String(kKeySessionAction), action);
+}
+
+void Settings::clear_session_marker() {
+  store_->beginGroup(QStringLiteral("session"));
+  store_->remove(QString());
+  store_->endGroup();
+  store_->sync();
 }
 
 // ---------------------------------------------------------------- 창 상태

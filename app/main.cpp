@@ -12,6 +12,8 @@
 #include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/platform/path.h"
 
+#include "crash_handler.h"
+#include "crash_report.h"
 #include "file_open_filter.h"
 #include "i18n.h"
 #include "main_window.h"
@@ -92,6 +94,19 @@ int main(int argc, char** argv) {
 
   onpdf::app::UiDispatcher dispatcher;
 
+  // 충돌 보고 (#131): 워커(크래시가 날 수 있는 스레드)보다 먼저 설치. 점검·스크린샷 모드는 사용자
+  // 폴더를 더럽히지 않게 임시 보고 폴더
+  const bool check_mode = parser.isSet(screenshot) || parser.isSet(self_test);
+  if (check_mode) {
+    onpdf::app::set_report_dir_override(
+        QDir::temp().filePath(QStringLiteral("onpdf-check-reports")));
+  }
+  {
+    const auto dir = onpdf::path_from_utf8(onpdf::app::report_dir().absolutePath().toStdString());
+    onpdf::app::crash::install({dir, ONPDF_VERSION, onpdf::app::pdfium_version().toStdString()});
+    onpdf::app::crash::prune_reports(dir, 5);
+  }
+
   onpdf::engine::PdfiumWorker::Options options;
   options.use_system_fonts = true;
   onpdf::engine::PdfiumWorker worker(options);
@@ -128,8 +143,10 @@ int main(int argc, char** argv) {
   }
   onpdf::app::FileOpenFilter file_open(window);
   app.installEventFilter(&file_open);
+  // 지난 실행이 비정상 종료였으면 먼저 안내 (#131). 점검·스크린샷 모드는 건너뛴다
+  const bool open_cli = check_mode || window.maybe_show_crash_notice(files.value(0));
   window.show();
-  if (!files.isEmpty()) window.open_file(files.first());
+  if (open_cli && !files.isEmpty()) window.open_file(files.first());
 
   const int code = app.exec();
   if (parser.isSet(self_test) && code == 0) {
