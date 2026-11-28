@@ -11,6 +11,12 @@
 #include <vector>
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX  // windows.h 의 min/max 매크로가 std::max 를 깨뜨린다
+#endif
 #include <windows.h>
 // windows.h 뒤
 #include <dbghelp.h>
