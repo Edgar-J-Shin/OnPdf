@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <thread>
+#include <utility>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -363,10 +364,20 @@ ChildProcess::ChildProcess(ChildProcess&& other) noexcept
 
 ChildProcess& ChildProcess::operator=(ChildProcess&& other) noexcept {
   if (this != &other) {
-    this->~ChildProcess();
-    new (this) ChildProcess(std::move(other));
+    ChildProcess taken(std::move(other));
+    swap(taken);  // taken 이 소멸하며 이전 자식을 kill + 거둔다
   }
   return *this;
+}
+
+void ChildProcess::swap(ChildProcess& other) noexcept {
+  std::swap(pid_, other.pid_);
+  std::swap(exit_code_, other.exit_code_);
+  std::swap(reaped_, other.reaped_);
+#ifdef _WIN32
+  std::swap(process_, other.process_);
+  std::swap(job_, other.job_);
+#endif
 }
 
 #ifdef _WIN32

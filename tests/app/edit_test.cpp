@@ -42,27 +42,8 @@ using onpdf::test::answer_input_dialog;
 using onpdf::test::answer_message_box;
 using onpdf::test::read_bytes;
 using onpdf::test::ScopedTempDir;
+using onpdf::test::spin_until;
 using onpdf::test::testdata;
-
-template <class Pred>
-// 느린 CI 러너(Windows)에서 줄 수정·대화상자 테스트가 10초를 넘긴 적이 있다 (#105) → print_test
-// 보다 넉넉히
-bool spin_until(Pred pred, int timeout_ms = 30000) {
-  QEventLoop loop;
-  QTimer poll;
-  bool timed_out = false;
-  QObject::connect(&poll, &QTimer::timeout, &loop, [&] {
-    if (pred()) loop.quit();
-  });
-  poll.start(5);
-  QTimer::singleShot(timeout_ms, &loop, [&] {
-    timed_out = true;
-    loop.quit();
-  });
-  if (pred()) return true;
-  loop.exec();
-  return !timed_out;
-}
 
 class EditTest : public ::testing::Test {
  protected:
