@@ -51,6 +51,7 @@ struct RenderProcessImpl {
   std::uint64_t pending_generation = 0;     // begin_resync 가 올린다
   std::uint64_t applied_generation = 0;     // Replace 가 자식에 적용되면
   bool stopping = false;
+  std::atomic<bool> stop_requested{false};  // 소멸자가 켠다 — 응답 대기를 짧게 끊는다
   RenderProcess::EventCallback on_event;
   RenderProcess::Stats stats;
   std::unordered_set<int> refused_pages;
@@ -228,8 +229,18 @@ struct RenderProcessImpl {
       return to_child.write_all(p, n);
     };
     if (!proto::write_frame(write, proto::Frame{id, std::move(m)})) return std::nullopt;
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
     for (;;) {
-      const auto wait = from_child.wait_readable(timeout);
+      // 100ms 조각으로 기다려 소멸(앱 종료) 요청에 바로 응한다 — 자식이 렌더 중이어도 예산까지
+      // 기다리지 않는다 (호출자가 kill 한다)
+      platform::Pipe::Wait wait = platform::Pipe::Wait::kTimeout;
+      while (wait == platform::Pipe::Wait::kTimeout) {
+        if (stop_requested.load(std::memory_order_relaxed)) return std::nullopt;
+        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now());
+        if (left.count() <= 0) return std::nullopt;
+        wait = from_child.wait_readable(std::min(left, std::chrono::milliseconds(100)));
+      }
       if (wait != platform::Pipe::Wait::kReadable) return std::nullopt;
       const proto::ReadFn read = [this](void* p, std::size_t n) {
         return from_child.read_exact(p, n);
@@ -291,7 +302,6 @@ struct RenderProcessImpl {
         if (source) {
           source->bytes = std::move(e.bytes);
           source->generation = e.generation;
-          source->from_memory = source->from_memory;  // 경로 소스는 Open + Replace 로 복원된다
         }
         if (ensure_child() && source && !source->bytes.empty()) {
           if (!send_bytes(proto::Replace{e.generation, {}, 0}, source->bytes, source->password,
@@ -454,6 +464,7 @@ RenderProcess::RenderProcess(Options options)
 }
 
 RenderProcess::~RenderProcess() {
+  impl_->stop_requested.store(true, std::memory_order_relaxed);
   {
     std::lock_guard lock(impl_->mutex);
     impl_->stopping = true;
