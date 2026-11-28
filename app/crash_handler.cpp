@@ -1,6 +1,7 @@
 #include "crash_handler.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstring>
 #include <ctime>
@@ -30,6 +31,7 @@ constexpr std::size_t kActionCap = 64;
 constexpr std::size_t kRecordCap = 512;
 
 bool g_installed = false;
+std::atomic<bool> g_handling{false};    // 핸들러 재진입 차단 (핸들러 안의 크래시·재발)
 char g_report_dir_utf8[kPathCap] = {};  // 끝에 구분자 없음
 char g_version[kVersionCap] = {};
 char g_pdfium[kVersionCap] = {};
@@ -84,6 +86,7 @@ std::size_t build_file_name(char* out, std::size_t cap, long long epoch, const c
 #ifdef _WIN32
 
 LONG WINAPI unhandled_exception_filter(EXCEPTION_POINTERS* ep) {
+  if (g_handling.exchange(true)) return EXCEPTION_CONTINUE_SEARCH;  // 필터 안의 예외는 기본 처리로
   const long long epoch = static_cast<long long>(std::time(nullptr));
   // 1) 기록 파일
   char name[kPathCap + 64];
@@ -135,7 +138,16 @@ LONG WINAPI unhandled_exception_filter(EXCEPTION_POINTERS* ep) {
 
 #else
 
+constexpr int kSignals[] = {SIGSEGV, SIGBUS, SIGABRT, SIGTRAP, SIGFPE, SIGILL};
+
 void signal_handler(int sig, siginfo_t*, void*) {
+  // 먼저 모든 크래시 신호를 기본 처리로 되돌린다 — 핸들러 안에서 또 죽거나 raise 가 다시 들어와도
+  // 재진입하지 않는다 (SA_RESETHAND 는 그 신호 하나만 되돌린다)
+  for (int s : kSignals) ::signal(s, SIG_DFL);
+  if (g_handling.exchange(true)) {
+    ::raise(sig);
+    return;
+  }
   const long long epoch = static_cast<long long>(std::time(nullptr));
   char name[kPathCap + 64];
   build_file_name(name, sizeof name, epoch, ".txt");
@@ -193,7 +205,7 @@ bool install(const InstallInfo& info) {
   sa.sa_sigaction = signal_handler;
   sigemptyset(&sa.sa_mask);
   sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESETHAND | SA_NODEFER;
-  for (int sig : {SIGSEGV, SIGBUS, SIGABRT, SIGTRAP, SIGFPE, SIGILL}) sigaction(sig, &sa, nullptr);
+  for (int sig : kSignals) sigaction(sig, &sa, nullptr);
 #endif
   g_installed = true;
   return true;
