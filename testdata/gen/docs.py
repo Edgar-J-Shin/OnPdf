@@ -979,6 +979,8 @@ def make_text_lines_type3() -> bytes:
     # 한글 CID 서브셋 글꼴 (korean-embedded 와 같은 조립)
     text = "한글 텍스트 줄"
     hexs, used = _cid_text(meta, text)
+    # 행렬 배율 줄 (#141): `1 Tf` + `Tm 18` — 유효 크기 18. 같은 글리프 집합이라 used 는 그대로
+    hexs_scaled, _ = _cid_text(meta, "줄 텍스트")
     ttf = FONT_TTF.read_bytes()
     font_file = w.stream(b"/Length1 %d" % len(ttf), ttf)
     gid_width = {v["gid"]: v["width"] for v in meta["glyphs"].values()}
@@ -1009,6 +1011,7 @@ def make_text_lines_type3() -> bytes:
         "BT /T3 24 Tf 72 690 Td (ABAB) Tj ET",
         f"BT /F0 18 Tf 72 640 Td {hexs} Tj ET",
         "BT /F1 12 Tf 3 Tr 72 600 Td (Invisible OCR layer text) Tj ET",
+        f"BT /F0 1 Tf 0 Tr 18 0 0 18 72 560 Tm {hexs_scaled} Tj ET",  # 앞 줄의 3 Tr 은 ET 뒤에도 남는다
     ), compress=False)
     p = g.page(w, pages, g.LETTER, c, b"<< /Font << /F1 %d 0 R /T3 %d 0 R /F0 %d 0 R >> >>" % (helv, t3, type0))
     g.pages_tree(w, pages, [p])

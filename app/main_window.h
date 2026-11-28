@@ -325,10 +325,14 @@ class MainWindow : public QMainWindow {
   // 문서를 열 때 시작 배율. set_document 가 zoom_changed 를 내 "마지막 값" 을 덮어쓰므로 값은 그
   // 전에 읽어 넘긴다
   void apply_start_zoom(StartZoom start, ZoomKind last_kind, double last_zoom);
-  void restore_window_state();             // 생성자 끝: 창 크기·분할·사이드바
-  void save_window_state();                // closeEvent 가 accept 하기 직전
-  void rebuild_recent_menu();              // 파일 > 최근 파일 (aboutToShow)
-  void sync_text_size_combo();             // text_size_ 를 콤보에 비춘다
+  void restore_window_state();       // 생성자 끝: 창 크기·분할·사이드바
+  void save_window_state();          // closeEvent 가 accept 하기 직전
+  void rebuild_recent_menu();        // 파일 > 최근 파일 (aboutToShow)
+  void sync_text_size_combo();       // text_size_ 를 콤보에 비춘다
+  void show_text_size(double size);  // 목록에 없으면 입력칸에 정확한 값 (#141)
+  [[nodiscard]] static std::optional<double> parse_text_size(QString text);
+  static constexpr double kMinTextSize = 1.0;
+  static constexpr double kMaxTextSize = 500.0;
   void set_action(const QString& action);  // 세션 표식 last_action + 핸들러 버퍼 (#131)
   void ensure_render_process();            // 열기 직전: 설정대로 자식 준비/해제 (#137)
   void on_render_process_restarted(int page, const QString& reason);

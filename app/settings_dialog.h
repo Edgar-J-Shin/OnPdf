@@ -10,6 +10,7 @@
 class QCheckBox;
 class QComboBox;
 class QLineEdit;
+class QDoubleSpinBox;
 class QSpinBox;
 
 namespace onpdf::app {
@@ -39,7 +40,7 @@ class SettingsDialog : public QDialog {
   QComboBox* border_width_ = nullptr;
   QComboBox* opacity_ = nullptr;
   QComboBox* annotation_color_ = nullptr;
-  QComboBox* text_size_ = nullptr;
+  QDoubleSpinBox* text_size_ = nullptr;
   QComboBox* text_color_ = nullptr;
   QLineEdit* author_ = nullptr;
   QSpinBox* cache_mb_ = nullptr;

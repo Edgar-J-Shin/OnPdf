@@ -180,7 +180,9 @@ TEST_F(SettingsTest, RoundTripAndClamp) {
   s.set_border_width(3.0);
   EXPECT_EQ(s.border_width(), 2.0);
   s.set_text_size(1000);
-  EXPECT_EQ(s.text_size(), 72);
+  EXPECT_EQ(s.text_size(), Settings::kMaxTextSize);  // clamp (#141: 직접 입력, snap 없음)
+  s.set_text_size(10.5);
+  EXPECT_EQ(s.text_size(), 10.5);
   s.reset_preferences();
   EXPECT_EQ(s.border_width(), Settings::kDefaultBorderWidth);
   EXPECT_EQ(s.language(), LanguageChoice::kSystem);
