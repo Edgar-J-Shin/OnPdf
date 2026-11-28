@@ -157,6 +157,14 @@ if(ONPDF_BUILD_SPIKES)
   onpdf_set_warnings(onpdf_spike_m3_regen)
   onpdf_set_runtime_rpath(onpdf_spike_m3_regen)
 
+  # Spike (#135): 렌더 프로세스 격리 — 자식 프로세스 + 공유 메모리 타일 왕복, 크래시·멈춤 복구 (POSIX 만)
+  if(NOT WIN32)
+    add_executable(onpdf_spike_process_isolation spike/process_isolation_spike.cpp)
+    target_link_libraries(onpdf_spike_process_isolation PRIVATE pdfium)
+    onpdf_set_warnings(onpdf_spike_process_isolation)
+    onpdf_set_runtime_rpath(onpdf_spike_process_isolation)
+  endif()
+
   # Spike (#59): 미참조 폰트 정리(qpdf 재작성)·OTF/TTC 서브셋 임베딩 — core+edit, qpdf 헤더 직접
   add_executable(onpdf_spike_font_cleanup spike/font_cleanup_spike.cpp)
   target_include_directories(onpdf_spike_font_cleanup PRIVATE ${_spike_qpdf_inc})
