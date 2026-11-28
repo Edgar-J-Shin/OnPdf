@@ -1591,6 +1591,10 @@ Other pages, search, editing and saving work as usual.</source>
         <translation>주석 색:</translation>
     </message>
     <message>
+        <source> pt</source>
+        <translation> pt</translation>
+    </message>
+    <message>
         <source>Text size:</source>
         <translation>텍스트 크기:</translation>
     </message>

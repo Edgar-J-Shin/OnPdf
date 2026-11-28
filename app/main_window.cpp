@@ -40,6 +40,7 @@
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
+#include <QDoubleValidator>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QEventLoop>
@@ -993,10 +994,26 @@ void MainWindow::build_annotation_ui() {
   text_size_combo_->setToolTip(tr("Text size"));
   for (int pt : {8, 10, 12, 14, 18, 24, 36, 48, 72})
     text_size_combo_->addItem(tr("%1 pt").arg(pt), pt);
+  // 직접 입력 (#141): 목록에 없는 크기(10.5pt 등)도 넣을 수 있다. 입력은 "12.5" 또는 "12.5 pt"
+  text_size_combo_->setEditable(true);
+  text_size_combo_->setInsertPolicy(QComboBox::NoInsert);
+  auto* size_validator = new QDoubleValidator(kMinTextSize, kMaxTextSize, 2, text_size_combo_);
+  size_validator->setNotation(QDoubleValidator::StandardNotation);
+  text_size_combo_->setValidator(nullptr);  // "pt" 접미가 붙은 표시 문자열도 허용 — 파싱 때 검사
+  (void)size_validator;
+  text_size_combo_->setMinimumContentsLength(6);
   text_size_combo_->setCurrentIndex(5);  // 24pt
   connect(text_size_combo_, &QComboBox::currentIndexChanged, this, [this](int index) {
     if (index < 0 || syncing_text_size_) return;
     set_text_size(text_size_combo_->itemData(index).toDouble());
+  });
+  connect(text_size_combo_->lineEdit(), &QLineEdit::editingFinished, this, [this] {
+    if (syncing_text_size_) return;
+    if (const auto typed = parse_text_size(text_size_combo_->currentText())) {
+      set_text_size(*typed);
+    } else {
+      update_property_buttons();  // 못 읽으면 현재 값으로 되돌린다
+    }
   });
   annotation_toolbar_->addWidget(text_size_combo_);
   update_property_buttons();
@@ -1038,11 +1055,7 @@ void MainWindow::update_property_buttons() {
     const auto selected = view_->selected_text_box();
     const auto line = view_->selected_line();
     const double shown = line ? line->info.font_size : selected ? selected->font_size : text_size_;
-    const int index = text_size_combo_->findData(static_cast<int>(std::lround(shown)));
-    if (index >= 0 && index != text_size_combo_->currentIndex()) {
-      QScopedValueRollback<bool> guard(syncing_text_size_, true);
-      text_size_combo_->setCurrentIndex(index);
-    }
+    show_text_size(shown);
   }
   if (width_button_ == nullptr || opacity_button_ == nullptr) return;
   // 선택이 있으면 그 주석의 값, 없으면 새 도형·펜의 기본값
@@ -1299,7 +1312,7 @@ void MainWindow::set_text_size(double size) {
     return;
   }
   text_size_ = size;
-  settings_->set_text_size(static_cast<int>(std::lround(size)));  // (#129)
+  settings_->set_text_size(size);  // (#129)
   sync_text_size_combo();
 }
 
@@ -2984,11 +2997,39 @@ void MainWindow::apply_settings() {
 
 void MainWindow::sync_text_size_combo() {
   if (text_size_combo_ == nullptr) return;
-  const int index = text_size_combo_->findData(static_cast<int>(std::lround(text_size_)));
-  if (index >= 0 && index != text_size_combo_->currentIndex()) {
-    QScopedValueRollback<bool> guard(syncing_text_size_, true);
-    text_size_combo_->setCurrentIndex(index);
+  show_text_size(text_size_);
+}
+
+// 콤보에 크기를 비춘다 (#141): 목록에 있으면 그 항목, 없으면 입력칸에 정확한 값("10.5 pt")
+void MainWindow::show_text_size(double size) {
+  if (text_size_combo_ == nullptr) return;
+  QScopedValueRollback<bool> guard(syncing_text_size_, true);
+  int index = -1;
+  for (int i = 0; i < text_size_combo_->count(); ++i) {
+    if (std::abs(text_size_combo_->itemData(i).toDouble() - size) < 0.05) {
+      index = i;
+      break;
+    }
   }
+  if (index >= 0) {
+    if (index != text_size_combo_->currentIndex()) text_size_combo_->setCurrentIndex(index);
+    text_size_combo_->setEditText(text_size_combo_->itemText(index));
+    return;
+  }
+  text_size_combo_->setCurrentIndex(-1);
+  text_size_combo_->setEditText(tr("%1 pt").arg(QString::number(size, 'g', 4)));
+}
+
+std::optional<double> MainWindow::parse_text_size(QString text) {
+  text = text.trimmed();
+  if (text.endsWith(QStringLiteral("pt"), Qt::CaseInsensitive)) text.chop(2);
+  text = text.trimmed();
+  text.replace(QLatin1Char(','), QLatin1Char('.'));  // 로캘 소수점
+  bool ok = false;
+  const double value = text.toDouble(&ok);
+  if (!ok || !std::isfinite(value) || value < kMinTextSize || value > kMaxTextSize)
+    return std::nullopt;
+  return value;
 }
 
 void MainWindow::apply_start_zoom(StartZoom start, ZoomKind last_kind, double last_zoom) {

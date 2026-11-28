@@ -1248,7 +1248,13 @@ Result<std::vector<TextObjectInfo>> PdfiumDocument::text_objects(int page_index)
                     static_cast<std::uint8_t>(b), static_cast<std::uint8_t>(a)};
     }
     FS_MATRIX m{};
-    if (FPDFPageObj_GetMatrix(obj, &m)) info.baseline_origin = space.to_pt(m.e, m.f);
+    if (FPDFPageObj_GetMatrix(obj, &m)) {
+      info.baseline_origin = space.to_pt(m.e, m.f);
+      // 유효 크기 (#141): ofont 상자는 원본 행렬을 복사하므로 `Tf` 크기에 세로 배율을 곱해야 화면
+      // 크기다 (text_lines 의 eff_size 와 같은 규칙). 예: `/F1 1 Tf` + `Tm 12 0 0 12` → 12
+      const double vy = std::hypot(static_cast<double>(m.c), static_cast<double>(m.d));
+      if (vy > 0.0) info.font_size *= vy;
+    }
     float left = 0, bottom = 0, right = 0, top = 0;
     if (FPDFPageObj_GetBounds(obj, &left, &bottom, &right, &top))
       info.bbox = space.to_rect(left, right, bottom, top);

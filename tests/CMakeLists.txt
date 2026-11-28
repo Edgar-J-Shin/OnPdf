@@ -122,7 +122,9 @@ if(ONPDF_BUILD_APP)
     app/render_process_test.cpp
   )
   target_link_libraries(onpdf_app_tests PRIVATE onpdf_app_lib)
-  set_tests_properties(onpdf_app_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+  # 느린 Windows 러너에서 70~120초 걸린다(0.7.1 에서 120초 초과로 실패) → 상한 300초
+  set_tests_properties(onpdf_app_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+                                                  TIMEOUT 300)
   # 번역 누락 검사 (#8): 소스의 tr() 와 app/i18n/*.ts 가 맞는지, 한국어 번역이 다 찼는지
   find_package(Python3 COMPONENTS Interpreter)
   if(Python3_Interpreter_FOUND)

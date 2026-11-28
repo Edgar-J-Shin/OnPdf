@@ -16,6 +16,7 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QElapsedTimer>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QPlainTextEdit>
 #include <QStatusBar>
@@ -365,6 +366,83 @@ TEST_F(TextLineToolTest, PermissionGatesLineEditing) {
     ASSERT_TRUE(wait_idle());
     EXPECT_FALSE(window_.edit_controller()->can_undo());
   }
+}
+
+// #141: 행렬 배율 줄(`1 Tf` + `Tm 18`)의 유효 크기는 18 이고 ofont 재수정 뒤 상자 크기도 유효
+// 크기로 보고된다. 수정한 줄(OnPdf 상자)은 텍스트 도구에서 다시 고르고 두 번 클릭으로 재수정, 선택
+// 도구에서는 상자 안 드래그로 글자를 고를 수 있다
+TEST_F(TextLineToolTest, ScaledLineKeepsEffectiveSizeAndStaysSelectable) {
+  open_copy("text-lines-type3.pdf");
+  ASSERT_TRUE(wait_lines(0));
+  ASSERT_TRUE(spin_until([&] { return view()->text_index(0) != nullptr; }));
+  const engine::TextLineInfo* scaled = line_containing(0, QStringLiteral("줄 텍스트"));
+  ASSERT_NE(scaled, nullptr);
+  const engine::TextLineInfo info = *scaled;
+  EXPECT_NEAR(info.font_size, 18.0, 0.05) << "1 Tf × Tm 18 = 유효 18pt";
+  window_.tool_action(AnnotationTool::kText)->trigger();
+  click(center_of(0, info));
+  ASSERT_TRUE(view()->selected_line().has_value());
+  EXPECT_EQ(window_.text_size_combo()->currentData().toInt(), 18);
+  // 크기 36 → ofont 재수정: 상자 크기는 유효 크기(36)로 보고된다 (이전: Tf 값 2)
+  QStringList messages;
+  QObject::connect(window_.statusBar(), &QStatusBar::messageChanged, &window_,
+                   [&messages](const QString& m) { messages << m; });
+  window_.set_text_size(36);
+  ASSERT_TRUE(spin_until([&] {
+    return idle() && view()->text_objects(0) && view()->text_objects(0)->size() == 1;
+  })) << "editable="
+      << info.editable << " reason=" << info.reason << " font=" << info.font_name
+      << " status: " << messages.join(QStringLiteral(" | ")).toStdString();
+  const engine::TextObjectInfo box = (*view()->text_objects(0))[0];
+  EXPECT_TRUE(box.original_font);
+  EXPECT_NEAR(box.font_size, 36.0, 0.05);
+  ASSERT_TRUE(spin_until([&] { return view()->selected_text_box().has_value(); }));
+  EXPECT_EQ(view()->tool(), AnnotationTool::kSelect);
+  EXPECT_EQ(window_.text_size_combo()->currentData().toInt(), 36) << "콤보도 유효 크기";
+  // 목록에 없는 크기를 직접 입력: 콤보 입력칸 → 10.5pt
+  window_.text_size_combo()->lineEdit()->setText(QStringLiteral("10.5 pt"));
+  emit window_.text_size_combo()->lineEdit()->editingFinished();
+  ASSERT_TRUE(spin_until([&] {
+    return idle() && view()->text_objects(0) && view()->text_objects(0)->size() == 1 &&
+           std::abs((*view()->text_objects(0))[0].font_size - 10.5) < 0.05;
+  }));
+  ASSERT_TRUE(spin_until([&] { return view()->selected_text_box().has_value(); }));
+  EXPECT_TRUE(window_.text_size_combo()->currentText().contains(QStringLiteral("10.5")));
+  // 선택 도구: 빈 곳을 눌러 선택을 풀고, 상자 안을 드래그하면 글자가 선택된다 (이동이 아니다)
+  const onpdf::Rect bbox = view()->selected_text_box()->bbox;
+  click(view()->page_point_to_viewport(0, {bbox.x + bbox.w + 150, bbox.y + bbox.h / 2}));
+  EXPECT_FALSE(view()->selected_text_box().has_value());
+  const QPointF from = view()->page_point_to_viewport(0, {bbox.x + 1, bbox.y + bbox.h / 2});
+  const QPointF to = view()->page_point_to_viewport(0, {bbox.x + bbox.w - 1, bbox.y + bbox.h / 2});
+  send_mouse(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+  send_mouse(QEvent::MouseMove, (from + to) / 2, Qt::NoButton, Qt::LeftButton);
+  send_mouse(QEvent::MouseMove, to, Qt::NoButton, Qt::LeftButton);
+  send_mouse(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
+  EXPECT_TRUE(view()->selected_text_box().has_value()) << "클릭은 상자를 고른다";
+  bool truncated = false;
+  EXPECT_TRUE(view()->selected_text(&truncated).contains(QStringLiteral("텍스트")))
+      << "드래그는 글자를 고른다";
+  EXPECT_TRUE(wait_idle());
+  EXPECT_NEAR(view()->selected_text_box()->bbox.x, bbox.x, 0.5) << "이동하지 않았다";
+  // 텍스트 도구: 수정한 상자를 클릭하면 상자가 선택되고 두 번 클릭은 재수정 요청
+  window_.tool_action(AnnotationTool::kText)->trigger();
+  int edit_requests = 0;
+  QObject::connect(
+      view(), &DocumentView::text_edit_requested, &window_,
+      [&edit_requests](int, const DocumentView::SelectedTextBox&) { ++edit_requests; });
+  click(view()->page_point_to_viewport(0, {bbox.x + bbox.w / 2, bbox.y + bbox.h / 2}));
+  EXPECT_TRUE(view()->selected_text_box().has_value()) << "텍스트 도구도 OnPdf 상자를 고른다";
+  EXPECT_FALSE(view()->selected_line().has_value());
+  QApplication::processEvents();
+  // 두 번 클릭이 여는 수정 창(모달)은 바로 닫는다 — 요청 신호가 났는지만 본다
+  when_dialog("text_input", [](QWidget* w) { static_cast<AnnotationDialog*>(w)->reject(); });
+  const QPointF center =
+      view()->page_point_to_viewport(0, {bbox.x + bbox.w / 2, bbox.y + bbox.h / 2});
+  send_mouse(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton);
+  send_mouse(QEvent::MouseButtonRelease, center, Qt::LeftButton, Qt::NoButton);
+  send_mouse(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton);
+  send_mouse(QEvent::MouseButtonRelease, center, Qt::LeftButton, Qt::NoButton);
+  EXPECT_GE(edit_requests, 1) << "같은 상자 두 번 클릭 = 재수정";
 }
 
 }  // namespace

@@ -244,12 +244,13 @@ void Settings::set_annotation_color(engine::Color color) {
   write(kKeyAnnotationColor, color_to_string(color));
 }
 
-int Settings::text_size() const {
-  return snap(read_int(kKeyTextSize, kDefaultTextSize), {8, 10, 12, 14, 18, 24, 36, 48, 72});
+double Settings::text_size() const {
+  return std::clamp(read_double(kKeyTextSize, kDefaultTextSize), kMinTextSize, kMaxTextSize);
 }
 
-void Settings::set_text_size(int size) {
-  write(kKeyTextSize, snap(size, {8, 10, 12, 14, 18, 24, 36, 48, 72}));
+void Settings::set_text_size(double size) {
+  if (!std::isfinite(size)) return;
+  write(kKeyTextSize, std::clamp(size, kMinTextSize, kMaxTextSize));
 }
 
 engine::Color Settings::text_color() const {

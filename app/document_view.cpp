@@ -1331,6 +1331,17 @@ void DocumentView::on_text_lines(int page, int generation,
   update_page(page);
 }
 
+void DocumentView::select_text_box_internal(int page, const SelectedTextBox& box) {
+  reselect_text_page_ = -1;  // 늦게 올 재선택 결과가 새 선택을 흔들지 않게 (리뷰 I3)
+  reselect_text_box_.clear();
+  const int previous_page = selected_text_ ? selected_text_->page : -1;
+  selected_text_ = box;
+  clear_selection();
+  if (previous_page >= 0 && previous_page != page) update_page(previous_page);
+  update_page(page);
+  emit text_box_selected(true, *selected_text_);
+}
+
 void DocumentView::clear_text_box_selection() {
   const bool pending = reselect_text_page_ >= 0;
   reselect_text_page_ = -1;
@@ -2051,6 +2062,19 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
   if (tool_ == AnnotationTool::kText) {
     if (auto hit = page_point_at(event->position())) {
       const auto [page, pt] = *hit;
+      // 수정해서 OnPdf 상자가 된 줄 (#141): 텍스트 도구에서도 클릭 = 상자 선택, 두 번 클릭 = 재수정
+      if (auto box = text_editable_ ? text_box_at(page, pt) : std::nullopt;
+          box && box->kind == engine::ObjectKind::kText) {
+        const bool same =
+            selected_text_ && selected_text_->page == page && selected_text_->box == box->box;
+        if (!same) {
+          clear_line_selection();
+          select_text_box_internal(page, *box);
+        } else if (click_count_ == 2) {
+          emit text_edit_requested(page, *selected_text_);
+        }
+        return;
+      }
       // 기존 줄 (#65): 클릭 = 선택, 같은 줄 두 번 클릭 = 수정. 빈 곳 클릭 = 새 텍스트
       if (const engine::TextLineInfo* line = text_editable_ ? text_line_at(page, pt) : nullptr) {
         const bool same =
@@ -2171,20 +2195,22 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
       }
       if (auto box = text_box_at(page, pt)) {
         clear_line_selection();
-        reselect_text_page_ = -1;  // 늦게 올 재선택 결과가 새 선택을 흔들지 않게 (리뷰 I3)
-        reselect_text_box_.clear();
-        const int previous_page = selected_text_ ? selected_text_->page : -1;
-        selected_text_ = box;
-        clear_selection();
-        if (previous_page >= 0 && previous_page != page) update_page(previous_page);
-        update_page(page);
-        emit text_box_selected(true, *selected_text_);
-        drag_ = Drag::kNone;
-        return;
+        select_text_box_internal(page, *box);
+        // 선택되지 않았던 상자의 드래그는 이동이 아니라 글자 선택이다 (#141): 아래 글자 선택 경로로
+        // 이어진다 (이미 선택된 상자 안의 드래그만 이동). 두 번 클릭은 글자 선택 뒤에도 편집이 아닌
+        // 단어 선택 — 편집은 선택된 상자에서 두 번 클릭
+        if (box->kind != engine::ObjectKind::kText) {
+          drag_ = Drag::kNone;
+          return;
+        }
+      } else {
+        if (selected_text_) clear_text_box_selection();
+        clear_line_selection();
       }
+    } else {
+      if (selected_text_) clear_text_box_selection();
+      clear_line_selection();
     }
-    if (selected_text_) clear_text_box_selection();
-    clear_line_selection();
   }
   if (auto hit = page_point_at(event->position())) {
     const auto [page, pt] = *hit;
