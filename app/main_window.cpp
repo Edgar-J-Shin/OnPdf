@@ -1,6 +1,7 @@
 #include "main_window.h"
 
 #include "onpdf/core/engine/qpdf_tools.h"
+#include "onpdf/core/engine/render_process.h"
 #include "onpdf/core/engine/save.h"
 #include "onpdf/core/page_ranges.h"
 #include "onpdf/core/platform/font_dirs.h"
@@ -202,6 +203,10 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(&session_, &DocumentSession::opened, this, &MainWindow::on_opened);
   connect(&session_, &DocumentSession::password_required, this, &MainWindow::on_password_required);
   connect(&session_, &DocumentSession::open_failed, this, &MainWindow::on_open_failed);
+  connect(&session_, &DocumentSession::render_process_restarted, this,
+          &MainWindow::on_render_process_restarted);  // (#137)
+  connect(&session_, &DocumentSession::render_process_unavailable, this,
+          &MainWindow::on_render_process_unavailable);
   connect(view_, &DocumentView::current_page_changed, this, &MainWindow::on_current_page_changed);
   connect(view_, &DocumentView::current_page_changed, this,
           [this](int page) { set_action(QStringLiteral("render p.%1").arg(page + 1)); });  // (#131)
@@ -428,6 +433,7 @@ void MainWindow::continue_open(const QString& path) {
   settings_->set_session_marker(marker);
   last_action_ = marker.last_action;
   crash::set_last_action("open");
+  ensure_render_process();  // (#137)
   session_.open(path);
 }
 
@@ -2862,6 +2868,15 @@ void MainWindow::on_first_view_rendered() {
       fail_screenshot(path);
       return;
     }
+    // --self-test: 렌더가 자식 프로세스에서 왔는지 (#137). 자식을 못 띄워 워커로 돌아갔으면 코드 4
+    if (screenshot_requires_render_process_) {
+      const auto process = session_.render_process();
+      if (!process || process->stats().rendered == 0) {
+        std::fprintf(stderr, "self-test: the render child process did not render the page\n");
+        QApplication::exit(4);
+        return;
+      }
+    }
     QApplication::exit(0);
   });
 }
@@ -3179,6 +3194,60 @@ bool MainWindow::maybe_show_crash_notice(const QString& cli_file) {
     QTimer::singleShot(0, this, [this, path] { open_file(path); });
   }
   return !same_as_cli;  // 같은 파일: "다시 열기" 면 이미 예약했고, "열지 않기" 면 열지 않는다
+}
+
+// ---------------------------------------------------------------- 렌더 자식 프로세스 (#137)
+
+namespace {
+bool& default_render_child_fonts_flag() {
+  static bool flag = true;
+  return flag;
+}
+}  // namespace
+
+void MainWindow::set_default_render_child_system_fonts(bool on) {
+  default_render_child_fonts_flag() = on;
+}
+
+bool MainWindow::default_render_child_system_fonts() {
+  return default_render_child_fonts_flag();
+}
+
+void MainWindow::ensure_render_process() {
+  if (!settings_->render_process()) {
+    session_.set_render_process(nullptr);  // 워커 렌더 (다음 문서부터)
+    render_process_timeout_applied_ = -1;
+    return;
+  }
+  const int timeout = settings_->render_timeout_seconds();
+  const auto existing = session_.render_process();
+  if (existing && !existing->unavailable() && render_process_timeout_applied_ == timeout) return;
+  engine::RenderProcess::Options options;
+  options.exe =
+      render_child_exe_.empty()
+          ? onpdf::path_from_utf8(QCoreApplication::applicationFilePath().toUtf8().toStdString())
+          : render_child_exe_;
+  options.use_system_fonts = render_child_system_fonts_;
+  options.timeout = std::chrono::seconds(timeout);
+  options.report_dir = onpdf::path_from_utf8(report_dir().absolutePath().toUtf8().toStdString());
+  session_.set_render_process(std::make_shared<engine::RenderProcess>(std::move(options)));
+  render_process_timeout_applied_ = timeout;
+}
+
+void MainWindow::on_render_process_restarted(int page, const QString& reason) {
+  const QString why = reason == QLatin1String("timeout")   ? tr("it took too long")
+                      : reason == QLatin1String("crashed") ? tr("it crashed")
+                                                           : reason;
+  show_transient(
+      page >= 0 ? tr("The render process was restarted because %1 (page %2)").arg(why).arg(page + 1)
+                : tr("The render process was restarted because %1").arg(why));
+}
+
+void MainWindow::on_render_process_unavailable(const QString& reason) {
+  show_transient(
+      tr("The separate render process could not be started (%1); rendering in the main process")
+          .arg(reason));
+  settings_->set_render_process(false);  // 사용자가 다시 켤 때까지
 }
 
 // ---------------------------------------------------------------- 워커 멈춤 감시 (#121)

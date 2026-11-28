@@ -90,6 +90,7 @@ void PrintPreviewView::bump_generation() {
   cache_.clear();
   failed_.clear();
   refused_.clear();
+  retried_.clear();
   cancel_all();
 }
 
@@ -214,6 +215,12 @@ void PrintPreviewView::on_rendered(int page, int generation, std::uint64_t seria
   if (it == pending_.end() || it->second.serial != serial) return;
   pending_.erase(it);
   if (!result) {
+    // 렌더 자식이 죽거나 멈춰 결과를 잃었다 (#137): 재시작 뒤 한 번 다시 요청한다
+    if (result.error().code == ErrorCode::kRenderProcessLost && !retried_.contains(page)) {
+      retried_.insert(page);
+      schedule_request();
+      return;
+    }
     if (result.error().code != ErrorCode::kCancelled) failed_.insert(page);  // 빈 용지로 둔다
     if (result.error().code == ErrorCode::kRenderRefused) {                  // 안내를 그린다 (#121)
       refused_.insert(page);
@@ -272,7 +279,7 @@ void PrintPreviewView::paintEvent(QPaintEvent* event) {
     } else if (refused_.contains(page)) {  // 렌더 거부 쪽 (#121)
       painter.setPen(QColor(128, 128, 128));
       painter.drawText(target, Qt::AlignCenter | Qt::TextWordWrap,
-                       tr("This page cannot be displayed (hazardous pattern)"));
+                       tr("This page cannot be displayed"));
     }
     // 인쇄 가능 영역 밖으로 넘치는 부분(실제 크기에서 잘림)은 회색으로 덮는다
     QRegion outside(target.toAlignedRect());

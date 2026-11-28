@@ -22,8 +22,9 @@ enum class ErrorCode {
   kFolderNotWritable,  // 대상 폴더에 새 파일(임시 파일)을 만들 수 없다 — 다른 폴더에 저장해야 한다
   kPermissionDenied,   // 문서 권한이 그 동작을 허용하지 않는다 (예: 추출 금지 문서를 삽입 소스로)
   kJobFailed,          // 구조 작업(qpdf 병합·분할·검사)이 오류로 끝났다. message 에 qpdf 의 설명
-  kUnsupported,  // 엔진이 할 수 없는 동작 (예: 라디오 그룹 선택 해제 — PDFium 공개 API 에 없음)
+  kUnsupported,    // 엔진이 할 수 없는 동작 (예: 라디오 그룹 선택 해제 — PDFium 공개 API 에 없음)
   kRenderRefused,  // 렌더 위험(#121)이 있는 쪽이라 PDFium 을 부르지 않고 거절했다. message 에 사유
+  kRenderProcessLost,  // 렌더 자식 프로세스(#137)가 죽거나 시간을 넘겨 결과를 잃었다 — 재시도 가능
 };
 
 struct Error {
@@ -76,6 +77,8 @@ inline const char* to_string(ErrorCode code) noexcept {
       return "not supported";
     case ErrorCode::kRenderRefused:
       return "render refused";
+    case ErrorCode::kRenderProcessLost:
+      return "render process lost";
   }
   return "unknown";
 }

@@ -274,6 +274,7 @@ void ThumbnailPanel::set_document(const engine::DocumentHandle& handle, UiDispat
   cache_.clear();
   failed_.clear();
   refused_.clear();
+  retried_.clear();
   current_page_ = -1;
   update_thumb_width(true);
   {
@@ -291,6 +292,7 @@ void ThumbnailPanel::clear_document() {
   cache_.clear();
   failed_.clear();
   refused_.clear();
+  retried_.clear();
   current_page_ = -1;
   const QScopedValueRollback guard(syncing_, true);
   model_->reset_rows(0);
@@ -344,6 +346,7 @@ void ThumbnailPanel::reset_pages(int current_page) {
   cache_.clear();
   failed_.clear();
   refused_.clear();
+  retried_.clear();
   const int scroll = list_->verticalScrollBar()->value();
   {
     const QScopedValueRollback guard(syncing_, true);
@@ -443,6 +446,7 @@ void ThumbnailPanel::update_thumb_width(bool force) {
   ++generation_;
   failed_.clear();
   refused_.clear();
+  retried_.clear();
   model_->relayout();
   schedule_request();
 }
@@ -461,6 +465,7 @@ bool ThumbnailPanel::event(QEvent* event) {
     ++generation_;
     failed_.clear();
     refused_.clear();
+    retried_.clear();
     schedule_request();
   }
   return QWidget::event(event);
@@ -548,6 +553,12 @@ void ThumbnailPanel::on_rendered(int page, int generation, std::uint64_t serial,
   if (it == pending_.end() || it->second.serial != serial) return;  // 취소 후 재요청된 쪽
   pending_.erase(it);
   if (!result) {
+    // 렌더 자식이 죽거나 멈춰 결과를 잃었다 (#137): 재시작 뒤 한 번 다시 요청한다
+    if (result.error().code == ErrorCode::kRenderProcessLost && !retried_.contains(page)) {
+      retried_.insert(page);
+      schedule_request();
+      return;
+    }
     if (result.error().code != ErrorCode::kCancelled) failed_.insert(page);  // 다시 시도하지 않는다
     if (result.error().code == ErrorCode::kRenderRefused) {                  // 안내를 그린다 (#121)
       refused_.insert(page);

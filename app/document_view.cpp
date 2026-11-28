@@ -566,7 +566,7 @@ void DocumentView::paint_page(QPainter& painter, int page, const QRectF& page_lo
     font.setPointSizeF(12.0);
     painter.setFont(font);
     painter.drawText(page_logical.adjusted(24, 24, -24, -24), Qt::AlignCenter | Qt::TextWordWrap,
-                     tr("This page cannot be displayed (hazardous pattern)"));
+                     tr("This page cannot be displayed"));
     painter.restore();
     return;
   }

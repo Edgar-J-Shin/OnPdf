@@ -81,30 +81,36 @@ void PrintJob::request_more() {
       ready_[step] = Slot{};  // 배치 불가 → 빈 장으로 기록
       continue;
     }
-    const int dpi =
-        view::choose_print_dpi(printer_.resolution(), request_.high_quality, placement->target);
-    engine::RenderOptions options;
-    options.scale = static_cast<float>(placement->scale * dpi / 72.0);
-    options.rotation = placement->rotation;
-    options.printing = true;
-    options.grayscale = request_.grayscale;
     placements_[step] = *placement;
-
-    const std::uint64_t serial = ++next_serial_;
-    UiDispatcher* dispatcher = &dispatcher_;
-    QPointer<PrintJob> self(this);
-    engine::TaskHandle task = handle_.render_page(
-        page, options, engine::Priority::kNormal,
-        // 워커 스레드: 메인으로 넘기기만
-        [dispatcher, self, step, serial](onpdf::Result<onpdf::Bitmap> result) {
-          auto shared = std::make_shared<onpdf::Result<onpdf::Bitmap>>(std::move(result));
-          dispatcher->post_to(self, [step, serial, shared](PrintJob* job) {
-            job->on_rendered(step, serial, std::move(*shared));
-          });
-        });
-    pending_[step] = Pending{std::move(task), serial};
-    max_in_flight_ = std::max(max_in_flight_, static_cast<int>(pending_.size() + ready_.size()));
+    request_step(step);
   }
+}
+
+void PrintJob::request_step(std::size_t step) {
+  const int page = request_.steps[step].page;
+  const view::Placement& placement = placements_[step];
+  const int dpi =
+      view::choose_print_dpi(printer_.resolution(), request_.high_quality, placement.target);
+  engine::RenderOptions options;
+  options.scale = static_cast<float>(placement.scale * dpi / 72.0);
+  options.rotation = placement.rotation;
+  options.printing = true;
+  options.grayscale = request_.grayscale;
+
+  const std::uint64_t serial = ++next_serial_;
+  UiDispatcher* dispatcher = &dispatcher_;
+  QPointer<PrintJob> self(this);
+  engine::TaskHandle task = handle_.render_page(
+      page, options, engine::Priority::kNormal,
+      // 워커 스레드: 메인으로 넘기기만
+      [dispatcher, self, step, serial](onpdf::Result<onpdf::Bitmap> result) {
+        auto shared = std::make_shared<onpdf::Result<onpdf::Bitmap>>(std::move(result));
+        dispatcher->post_to(self, [step, serial, shared](PrintJob* job) {
+          job->on_rendered(step, serial, std::move(*shared));
+        });
+      });
+  pending_[step] = Pending{std::move(task), serial};
+  max_in_flight_ = std::max(max_in_flight_, static_cast<int>(pending_.size() + ready_.size()));
 }
 
 void PrintJob::on_rendered(std::size_t step, std::uint64_t serial,
@@ -120,6 +126,13 @@ void PrintJob::on_rendered(std::size_t step, std::uint64_t serial,
   auto it = pending_.find(step);
   if (it == pending_.end() || it->second.serial != serial) return;
   pending_.erase(it);
+  // 렌더 자식이 죽거나 멈춰 결과를 잃었다 (#137): 재시작 뒤 한 번 다시 요청한다 (배치는 그대로)
+  if (!result && result.error().code == ErrorCode::kRenderProcessLost &&
+      !retried_steps_.contains(step)) {
+    retried_steps_.insert(step);
+    request_step(step);
+    return;
+  }
   Slot slot;
   slot.placement = placements_[step];
   placements_.erase(step);

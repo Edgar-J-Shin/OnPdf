@@ -10,6 +10,7 @@
 
 #include "onpdf/core/engine/pdfium_worker.h"
 #include "onpdf/core/engine/qpdf_tools.h"
+#include "onpdf/core/engine/render_child.h"
 #include "onpdf/core/platform/path.h"
 
 #include "crash_handler.h"
@@ -26,9 +27,20 @@
 #include <QLocale>
 #include <QString>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <optional>
 
 int main(int argc, char** argv) {
+  // 렌더 자식 프로세스 (#137): QApplication·설정·GUI 를 건드리지 않고 core 만으로 돈다. 부모가
+  // ONPDF_REPORT_DIR 을 주면 자식도 크래시 기록을 남긴다 (render-child 접두)
+  if (argc >= 2 && std::strcmp(argv[1], "--render-child") == 0) {
+    if (const char* dir = std::getenv("ONPDF_REPORT_DIR"); dir != nullptr && *dir != '\0') {
+      onpdf::app::crash::install(
+          {onpdf::path_from_utf8(dir), ONPDF_VERSION, onpdf::app::pdfium_version().toStdString()});
+    }
+    return onpdf::engine::run_render_child(argc, argv);
+  }
   QApplication app(argc, argv);
   QApplication::setApplicationName(QStringLiteral("OnPdf"));
   QApplication::setApplicationVersion(QStringLiteral(ONPDF_VERSION));
@@ -137,6 +149,7 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "self-test: bundled font not found next to the executable\n");
       return 2;
     }
+    window.require_render_process_for_screenshot();  // 자식 경로까지 점검 (#137, 코드 4)
     window.screenshot_after_render(QDir::temp().filePath(QStringLiteral("onpdf-self-test.png")));
   } else if (parser.isSet(screenshot)) {
     window.screenshot_after_render(parser.value(screenshot));

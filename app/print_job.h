@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class QPrinter;
@@ -73,9 +74,10 @@ class PrintJob : public QObject {
     view::Placement placement;
   };
 
-  void pump();          // request_more + drain 반복
-  void request_more();  // 자리(kMaxInFlight)만큼 렌더 요청
-  void drain();         // 다음 순번부터 준비된 장을 그린다
+  void pump();                          // request_more + drain 반복
+  void request_more();                  // 자리(kMaxInFlight)만큼 렌더 요청
+  void request_step(std::size_t step);  // 한 장 렌더 요청 (placements_[step] 이 있어야 한다)
+  void drain();                         // 다음 순번부터 준비된 장을 그린다
   void on_rendered(std::size_t step, std::uint64_t serial, onpdf::Result<onpdf::Bitmap> result);
   void finish(Outcome outcome);
   void emit_finished_later(Outcome outcome);
@@ -95,6 +97,7 @@ class PrintJob : public QObject {
   std::unordered_map<std::size_t, Pending> pending_;
   std::map<std::size_t, Slot> ready_;
   std::unordered_map<std::size_t, view::Placement> placements_;
+  std::unordered_set<std::size_t> retried_steps_;  // 렌더 자식 유실 뒤 1회 재요청 (#137)
   int total_sheets_ = 0;
   int printed_sheets_ = 0;
   int max_in_flight_ = 0;

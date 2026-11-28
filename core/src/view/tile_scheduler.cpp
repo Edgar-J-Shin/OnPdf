@@ -88,8 +88,32 @@ struct TileScheduler::State {
   double render_ms_total = 0.0;
   int timed_samples = 0;  // avg_render_ms 표본 수 (현재 요청의 결과만)
   std::uint64_t next_id = 0;
+  std::weak_ptr<State> weak_self;  // 콜백 보호용 (생성자가 채운다)
 
   State(TileSource& s, TileCache& c, SchedulerOptions o) : source(s), cache(c), options(o) {}
+
+  // 마지막 needed 가운데 캐시·요청 중·실패에 없는 타일을 요청한다. 보이는 타일 먼저(같은 우선순위
+  // 안에서 FIFO). update 와 Lost 복구(#137)가 쓴다
+  void request_missing() {
+    if (layout == nullptr) return;
+    for (const auto& n : needed) {
+      if (cache.contains(n.key) || in_flight.contains(n.key) || failed.contains(n.key)) continue;
+      TileRequest req{n.key, layout->page_size_pt(n.key.page)};
+      const std::uint64_t id = ++next_id;
+      InFlight f{{}, n.priority, std::chrono::steady_clock::now(), id};
+      // 동기 소스는 request() 안에서 바로 콜백을 부르므로, 먼저 in_flight 에 넣는다
+      in_flight.emplace(n.key, std::move(f));
+      ++stats.requested;
+      std::weak_ptr<State> weak = weak_self;
+      engine::TaskHandle handle =
+          source.request(req, n.priority, [weak, id](const TileKey& key, Result<Bitmap> r) {
+            if (auto st = weak.lock()) st->on_done(key, id, std::move(r));
+          });
+      auto again = in_flight.find(n.key);
+      if (again != in_flight.end() && again->second.id == id)
+        again->second.handle = std::move(handle);
+    }
+  }
 
   void cancel_all() {
     for (auto& [key, f] : in_flight) {
@@ -120,6 +144,13 @@ struct TileScheduler::State {
     in_flight.erase(it);
     if (!result) {
       if (result.error().code == ErrorCode::kCancelled) return;
+      if (result.error().code == ErrorCode::kRenderProcessLost) {
+        // 렌더 자식이 죽거나 멈춰 결과를 잃었다 (#137): 실패 집합에 넣지 않고 아직 필요한 타일을
+        // 바로 다시 요청한다 (뷰포트가 바뀌지 않아도 재시작 뒤 채워지게)
+        request_missing();
+        if (on_tile) on_tile(key);
+        return;
+      }
       ++stats.failed;
       failed.insert(key);
       if (on_tile) on_tile(key);
@@ -135,7 +166,9 @@ struct TileScheduler::State {
 };
 
 TileScheduler::TileScheduler(TileSource& source, TileCache& cache, SchedulerOptions options)
-    : state_(std::make_shared<State>(source, cache, options)) {}
+    : state_(std::make_shared<State>(source, cache, options)) {
+  state_->weak_self = state_;
+}
 
 TileScheduler::~TileScheduler() {
   state_->cancel_all();
@@ -175,25 +208,8 @@ void TileScheduler::update(const Rect& viewport_doc) {
     it = s.in_flight.erase(it);
   }
 
-  // 캐시에도 없고 요청 중도 아닌 타일 요청. 보이는 타일 먼저 넣는다(같은 우선순위 안에서 FIFO)
-  std::weak_ptr<State> weak = state_;
-  for (const auto& n : s.needed) {
-    if (s.cache.contains(n.key) || s.in_flight.contains(n.key) || s.failed.contains(n.key))
-      continue;
-    TileRequest req{n.key, s.layout->page_size_pt(n.key.page)};
-    const std::uint64_t id = ++s.next_id;
-    State::InFlight f{{}, n.priority, std::chrono::steady_clock::now(), id};
-    // 동기 소스는 request() 안에서 바로 콜백을 부르므로, 먼저 in_flight 에 넣는다
-    s.in_flight.emplace(n.key, std::move(f));
-    ++s.stats.requested;
-    engine::TaskHandle handle =
-        s.source.request(req, n.priority, [weak, id](const TileKey& key, Result<Bitmap> r) {
-          if (auto st = weak.lock()) st->on_done(key, id, std::move(r));
-        });
-    auto again = s.in_flight.find(n.key);
-    if (again != s.in_flight.end() && again->second.id == id)
-      again->second.handle = std::move(handle);
-  }
+  // 캐시에도 없고 요청 중도 아닌 타일 요청
+  s.request_missing();
 }
 
 int TileScheduler::pending_visible() const noexcept {
