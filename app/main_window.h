@@ -181,6 +181,19 @@ class MainWindow : public QMainWindow {
   // false)
   bool maybe_show_crash_notice(const QString& cli_file);
   void open_report_folder();
+  // 렌더 자식 프로세스 (#137). 다음 문서를 열 때 설정에 따라 만들거나 뗀다. 테스트·점검용 훅
+  void set_render_child_exe(std::filesystem::path exe) { render_child_exe_ = std::move(exe); }
+  void set_render_child_system_fonts(bool on) { render_child_system_fonts_ = on; }
+  // 테스트 진입점이 한 번 끈다 (워커도 내장 글꼴만 쓰므로 자식도 같게)
+  static void set_default_render_child_system_fonts(bool on);
+  // --self-test: 설정과 무관하게 자식 경로를 켜고 첫 쪽이 자식에서 왔는지 확인한다 (코드 4)
+  void require_render_process_for_screenshot() {
+    screenshot_requires_render_process_ = true;
+    render_process_forced_ = true;
+  }
+  [[nodiscard]] std::shared_ptr<engine::RenderProcess> render_process() const {
+    return session_.render_process();
+  }
   [[nodiscard]] QMenu* recent_menu() const noexcept { return recent_menu_; }
 
  protected:
@@ -317,6 +330,9 @@ class MainWindow : public QMainWindow {
   void rebuild_recent_menu();              // 파일 > 최근 파일 (aboutToShow)
   void sync_text_size_combo();             // text_size_ 를 콤보에 비춘다
   void set_action(const QString& action);  // 세션 표식 last_action + 핸들러 버퍼 (#131)
+  void ensure_render_process();            // 열기 직전: 설정대로 자식 준비/해제 (#137)
+  void on_render_process_restarted(int page, const QString& reason);
+  void on_render_process_unavailable(const QString& reason);
   [[nodiscard]] QString start_dir(DirKind kind, const QString& preferred = {}) const;
   void remember_dir(DirKind kind, const QString& file_or_dir);
   void set_document_status(const QString& text);  // 문서 정보 (지속)
@@ -344,8 +360,14 @@ class MainWindow : public QMainWindow {
   QAction* sidebar_action_ = nullptr;
   QMenu* recent_menu_ = nullptr;  // 최근 파일 (#129)
   QAction* preferences_action_ = nullptr;
-  bool settings_write_warned_ = false;  // "설정을 저장할 수 없습니다" 는 한 번만
-  QString last_action_;                 // (#131)
+  bool settings_write_warned_ = false;      // "설정을 저장할 수 없습니다" 는 한 번만
+  QString last_action_;                     // (#131)
+  std::filesystem::path render_child_exe_;  // 비어 있으면 applicationFilePath (#137)
+  bool render_child_system_fonts_ = default_render_child_system_fonts();  // 테스트는 false
+  static bool default_render_child_system_fonts();
+  bool screenshot_requires_render_process_ = false;  // --self-test: 자식이 그렸는지 확인 (코드 4)
+  bool render_process_forced_ = false;               // 설정이 꺼져 있어도 자식 사용 (점검 모드)
+  int render_process_timeout_applied_ = -1;          // 설정이 바뀌면 다음 문서부터 새 자식
   QAction* print_action_ = nullptr;
   QAction* save_action_ = nullptr;
   QAction* save_as_action_ = nullptr;

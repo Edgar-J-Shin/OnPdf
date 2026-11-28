@@ -33,6 +33,7 @@ namespace onpdf::engine {
 class PdfiumDocument;
 class PdfiumLibrary;
 struct PdfiumWorkerImpl;
+struct RenderProcessImpl;  // (#137)
 
 enum class Priority { kLow = 0, kNormal = 1, kHigh = 2 };
 
@@ -70,6 +71,7 @@ class TaskHandle {
 
  private:
   friend struct PdfiumWorkerImpl;
+  friend struct RenderProcessImpl;  // 렌더 자식 프로세스 큐도 같은 취소 핸들을 쓴다 (#137)
   explicit TaskHandle(std::shared_ptr<std::atomic<bool>> flag) : cancelled_(std::move(flag)) {}
   std::shared_ptr<std::atomic<bool>> cancelled_;
 };

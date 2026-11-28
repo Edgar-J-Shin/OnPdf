@@ -55,6 +55,11 @@ void DocumentSession::open(const QString& path, const QString& password) {
             s->handle_ = std::move(*r);
             s->path_ = path;
             s->password_ = password;
+            if (s->render_process_) {  // 렌더는 자식 프로세스로 (#137)
+              s->handle_.attach_render_process(s->render_process_,
+                                               onpdf::path_from_utf8(path.toUtf8().toStdString()),
+                                               password.toStdString());
+            }
             emit s->opened(path, s->handle_.info().page_count);
             return;
           }
@@ -115,6 +120,30 @@ void DocumentSession::close() {
   handle_ = engine::DocumentHandle{};
   path_.clear();
   password_.clear();
+}
+
+void DocumentSession::set_render_process(std::shared_ptr<engine::RenderProcess> process) {
+  render_process_ = std::move(process);
+  if (!render_process_) return;
+  UiDispatcher* dispatcher = &dispatcher_;
+  QPointer<DocumentSession> self(this);
+  // 클라이언트 스레드에서 온다 → 메인으로
+  render_process_->set_on_event([dispatcher, self](const engine::RenderProcess::Event& event) {
+    const engine::RenderProcess::Event copy = event;
+    dispatcher->post_to(self, [copy](DocumentSession* s) {
+      const QString reason = QString::fromStdString(copy.reason);
+      switch (copy.kind) {
+        case engine::RenderProcess::Event::Kind::kRestarted:
+          emit s->render_process_restarted(copy.page, reason);
+          break;
+        case engine::RenderProcess::Event::Kind::kRefused:
+          break;  // 쪽 거부는 타일 결과(kRenderRefused)로 뷰에 전달된다
+        case engine::RenderProcess::Event::Kind::kSpawnFailed:
+          emit s->render_process_unavailable(reason);
+          break;
+      }
+    });
+  });
 }
 
 }  // namespace onpdf::app

@@ -45,8 +45,8 @@
 <context>
     <name>onpdf::app::DocumentView</name>
     <message>
-        <source>This page cannot be displayed (hazardous pattern)</source>
-        <translation>이 쪽은 표시할 수 없습니다 (위험한 패턴)</translation>
+        <source>This page cannot be displayed</source>
+        <translation>이 쪽은 표시할 수 없습니다</translation>
     </message>
     <message>
         <source>Page %1</source>
@@ -1137,6 +1137,26 @@ If you know its permissions (owner) password, you can unlock printing.</source>
         <source>Cannot open the browser; the issue link was copied to the clipboard</source>
         <translation>브라우저를 열 수 없어 이슈 링크를 클립보드에 복사했습니다</translation>
     </message>
+    <message>
+        <source>it took too long</source>
+        <translation>너무 오래 걸려</translation>
+    </message>
+    <message>
+        <source>it crashed</source>
+        <translation>비정상 종료되어</translation>
+    </message>
+    <message>
+        <source>The render process was restarted because %1 (page %2)</source>
+        <translation>렌더 프로세스가 %1 다시 시작되었습니다 (%2쪽)</translation>
+    </message>
+    <message>
+        <source>The render process was restarted because %1</source>
+        <translation>렌더 프로세스가 %1 다시 시작되었습니다</translation>
+    </message>
+    <message>
+        <source>The separate render process could not be started (%1); rendering in the main process</source>
+        <translation>별도 렌더 프로세스를 시작할 수 없어(%1) 같은 프로세스에서 그립니다</translation>
+    </message>
     <message numerus="yes">
         <source>Rendering %1 has not finished for %n second(s). The document may contain hostile content.
 If you force quit, unsaved changes are lost.</source>
@@ -1437,8 +1457,8 @@ Other pages, search, editing and saving work as usual.</source>
 <context>
     <name>onpdf::app::PrintPreviewView</name>
     <message>
-        <source>This page cannot be displayed (hazardous pattern)</source>
-        <translation>이 쪽은 표시할 수 없습니다 (위험한 패턴)</translation>
+        <source>This page cannot be displayed</source>
+        <translation>이 쪽은 표시할 수 없습니다</translation>
     </message>
 </context>
 <context>
@@ -1613,6 +1633,14 @@ Other pages, search, editing and saving work as usual.</source>
     <message>
         <source>Tell me if OnPdf did not exit normally last time</source>
         <translation>지난번 OnPdf 가 정상 종료되지 않았으면 알립니다</translation>
+    </message>
+    <message>
+        <source>Render pages in a separate process (recovers from PDF crashes; applies to the next document)</source>
+        <translation>쪽을 별도 프로세스에서 그립니다 (PDF 크래시에서 복구; 다음 문서부터 적용)</translation>
+    </message>
+    <message>
+        <source>Give up rendering a page after:</source>
+        <translation>한 쪽 렌더링 포기 시간:</translation>
     </message>
     <message>
         <source>Advanced</source>

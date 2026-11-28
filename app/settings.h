@@ -74,6 +74,10 @@ class Settings : public QObject {
   void set_stall_seconds(int seconds);
   [[nodiscard]] bool crash_notice() const;  // 비정상 종료 안내 (#131)
   void set_crash_notice(bool on);
+  [[nodiscard]] bool render_process() const;  // 렌더를 별도 프로세스에서 (#137, 기본 끔)
+  void set_render_process(bool on);
+  [[nodiscard]] int render_timeout_seconds() const;  // 렌더 한 건 예산 5~120 (#137)
+  void set_render_timeout_seconds(int seconds);
 
   // ---- 세션 표식 (#131): 상태라 changed 를 내지 않고 reset_preferences 도 건드리지 않는다 ----
   [[nodiscard]] SessionMarker session_marker() const;  // 없으면 valid() == false
@@ -111,6 +115,9 @@ class Settings : public QObject {
   static constexpr int kMaxCacheMb = 2048;
   static constexpr int kMinStallSeconds = 10;
   static constexpr int kMaxStallSeconds = 600;
+  static constexpr int kDefaultRenderTimeoutSeconds = 20;
+  static constexpr int kMinRenderTimeoutSeconds = 5;
+  static constexpr int kMaxRenderTimeoutSeconds = 120;
   static constexpr engine::Color kDefaultAnnotationColor{255, 255, 0, 255};
   static constexpr engine::Color kDefaultTextColor{0, 0, 0, 255};
 

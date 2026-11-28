@@ -64,7 +64,8 @@ target_compile_definitions(onpdf_unit_tests PRIVATE ONPDF_TEST_GLOBAL_PDFIUM=1)
 target_link_libraries(onpdf_unit_tests PRIVATE onpdf::edit)
 target_include_directories(onpdf_unit_tests PRIVATE ${CMAKE_SOURCE_DIR}/core/src/engine)  # cff_charset·fnv 내부 헤더 (#73)
 
-onpdf_add_test(onpdf_render_tests
+onpdf_add_test(onpdf_render_tests NO_GTEST_MAIN
+  render/render_test_main.cpp
   render/render_regression_test.cpp
   render/tile_stitch_test.cpp
 )
@@ -91,6 +92,11 @@ onpdf_add_test(onpdf_worker_tests
   unit/document_handle_test.cpp
 )
 
+# 렌더 자식 프로세스 (#137): 자식 실행 파일은 이 테스트 바이너리 자신 (main 이 --render-child 분기)
+onpdf_add_test(onpdf_render_process_tests NO_GTEST_MAIN
+  unit/render_process_test.cpp
+)
+
 # Qt app 로직 테스트 (위젯 없음, offscreen 플랫폼). ONPDF_BUILD_APP=ON 일 때만.
 if(ONPDF_BUILD_APP)
   onpdf_add_test(onpdf_app_tests NO_GTEST_MAIN
@@ -113,6 +119,7 @@ if(ONPDF_BUILD_APP)
     app/stall_test.cpp
     app/settings_test.cpp
     app/crash_report_test.cpp
+    app/render_process_test.cpp
   )
   target_link_libraries(onpdf_app_tests PRIVATE onpdf_app_lib)
   set_tests_properties(onpdf_app_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
@@ -156,6 +163,14 @@ if(ONPDF_BUILD_SPIKES)
   target_link_libraries(onpdf_spike_m3_regen PRIVATE onpdf::core)
   onpdf_set_warnings(onpdf_spike_m3_regen)
   onpdf_set_runtime_rpath(onpdf_spike_m3_regen)
+
+  # Spike (#135): 렌더 프로세스 격리 — 자식 프로세스 + 공유 메모리 타일 왕복, 크래시·멈춤 복구 (POSIX 만)
+  if(NOT WIN32)
+    add_executable(onpdf_spike_process_isolation spike/process_isolation_spike.cpp)
+    target_link_libraries(onpdf_spike_process_isolation PRIVATE pdfium)
+    onpdf_set_warnings(onpdf_spike_process_isolation)
+    onpdf_set_runtime_rpath(onpdf_spike_process_isolation)
+  endif()
 
   # Spike (#59): 미참조 폰트 정리(qpdf 재작성)·OTF/TTC 서브셋 임베딩 — core+edit, qpdf 헤더 직접
   add_executable(onpdf_spike_font_cleanup spike/font_cleanup_spike.cpp)

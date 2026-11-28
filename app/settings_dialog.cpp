@@ -111,6 +111,17 @@ SettingsDialog::SettingsDialog(Settings& settings, QWidget* parent)
   crash_notice_ = new QCheckBox(tr("Tell me if OnPdf did not exit normally last time"), advanced);
   crash_notice_->setObjectName(QStringLiteral("settings_crash_notice"));
   advanced_form->addRow(QString(), crash_notice_);
+  render_process_ = new QCheckBox(tr("Render pages in a separate process (recovers from PDF "
+                                     "crashes; applies to the next document)"),
+                                  advanced);
+  render_process_->setObjectName(QStringLiteral("settings_render_process"));
+  advanced_form->addRow(QString(), render_process_);
+  render_timeout_ = new QSpinBox(advanced);
+  render_timeout_->setObjectName(QStringLiteral("settings_render_timeout"));
+  render_timeout_->setRange(Settings::kMinRenderTimeoutSeconds, Settings::kMaxRenderTimeoutSeconds);
+  render_timeout_->setSingleStep(5);
+  render_timeout_->setSuffix(tr(" s"));
+  advanced_form->addRow(tr("Give up rendering a page after:"), render_timeout_);
   tabs->addTab(advanced, tr("Advanced"));
 
   auto* buttons =
@@ -175,6 +186,8 @@ void SettingsDialog::load() {
   hazard_notice_->setChecked(settings_.hazard_notice());
   stall_seconds_->setValue(settings_.stall_seconds());
   crash_notice_->setChecked(settings_.crash_notice());
+  render_process_->setChecked(settings_.render_process());
+  render_timeout_->setValue(settings_.render_timeout_seconds());
 }
 
 void SettingsDialog::load_defaults() {
@@ -191,6 +204,8 @@ void SettingsDialog::load_defaults() {
   hazard_notice_->setChecked(true);
   stall_seconds_->setValue(Settings::kDefaultStallSeconds);
   crash_notice_->setChecked(true);
+  render_process_->setChecked(false);
+  render_timeout_->setValue(Settings::kDefaultRenderTimeoutSeconds);
 }
 
 void SettingsDialog::apply() {
@@ -208,6 +223,8 @@ void SettingsDialog::apply() {
   settings_.set_hazard_notice(hazard_notice_->isChecked());
   settings_.set_stall_seconds(stall_seconds_->value());
   settings_.set_crash_notice(crash_notice_->isChecked());
+  settings_.set_render_process(render_process_->isChecked());
+  settings_.set_render_timeout_seconds(render_timeout_->value());
   settings_.sync();
   if (settings_.language() != before) emit language_changed();
 }

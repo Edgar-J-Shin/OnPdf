@@ -32,6 +32,8 @@ constexpr const char* kKeyCacheMb = "advanced/cache_mb";
 constexpr const char* kKeyHazardNotice = "advanced/hazard_notice";
 constexpr const char* kKeyStallSeconds = "advanced/stall_seconds";
 constexpr const char* kKeyCrashNotice = "advanced/crash_notice";
+constexpr const char* kKeyRenderProcess = "advanced/render_process";
+constexpr const char* kKeyRenderTimeout = "advanced/render_timeout_seconds";
 constexpr const char* kKeySessionPath = "session/path";
 constexpr const char* kKeySessionStage = "session/stage";
 constexpr const char* kKeySessionSince = "session/since";
@@ -291,6 +293,23 @@ int Settings::stall_seconds() const {
 
 void Settings::set_stall_seconds(int seconds) {
   write(kKeyStallSeconds, std::clamp(seconds, kMinStallSeconds, kMaxStallSeconds));
+}
+
+bool Settings::render_process() const {
+  return read_bool(kKeyRenderProcess, false);  // 기본 끔 (2026-11-28 결정) — 설정 > 고급에서 켠다
+}
+
+void Settings::set_render_process(bool on) {
+  write(kKeyRenderProcess, on);
+}
+
+int Settings::render_timeout_seconds() const {
+  return std::clamp(read_int(kKeyRenderTimeout, kDefaultRenderTimeoutSeconds),
+                    kMinRenderTimeoutSeconds, kMaxRenderTimeoutSeconds);
+}
+
+void Settings::set_render_timeout_seconds(int seconds) {
+  write(kKeyRenderTimeout, std::clamp(seconds, kMinRenderTimeoutSeconds, kMaxRenderTimeoutSeconds));
 }
 
 bool Settings::crash_notice() const {

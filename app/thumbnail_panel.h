@@ -114,6 +114,7 @@ class ThumbnailPanel : public QWidget {
   QCache<int, Entry> cache_;
   std::unordered_map<int, Pending> pending_;
   std::unordered_set<int> failed_;
+  std::unordered_set<int> retried_;  // 렌더 자식 유실 뒤 1회 재요청한 쪽 (#137)
   std::unordered_set<int> refused_;  // 렌더 거부 쪽 (#121), failed_ 와 같이 비운다
   int generation_ = 0;
   std::uint64_t next_serial_ = 0;

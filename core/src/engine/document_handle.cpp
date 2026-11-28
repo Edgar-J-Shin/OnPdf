@@ -1,6 +1,7 @@
 #include "onpdf/core/engine/document_handle.h"
 
 #include "onpdf/core/engine/pdfium_document.h"
+#include "onpdf/core/engine/render_process.h"
 
 #include "pdfium_worker_impl.h"
 #include <algorithm>
@@ -16,6 +17,9 @@ struct DocumentHandle::State {
   DocumentId id = 0;
   DocumentInfo info;
   std::atomic<bool> closed{false};
+  // 렌더 자식 프로세스 (#137)
+  std::shared_ptr<RenderProcess> render;
+  std::atomic<bool> render_fallback{false};
 
   // 워커에 해제를 맡긴다.
   //  - 워커가 멈췄으면 post 가 cancelled=true 로 inline 호출하고, 워커 쪽 documents 는 이미
@@ -23,6 +27,7 @@ struct DocumentHandle::State {
   //  - 워커가 소멸했으면 lock 이 실패하므로 아무것도 하지 않는다.
   void request_close() noexcept {
     if (closed.exchange(true)) return;
+    if (render) render->close();  // 자식의 문서도 닫는다 (큐에 넣기만)
     std::shared_ptr<PdfiumWorkerImpl> w = worker.lock();
     if (!w) return;
     const DocumentId doc_id = id;
@@ -229,6 +234,8 @@ std::future<Result<T>> DocumentHandleAccess::to_future(
 TaskHandle DocumentHandle::render_page(int page_index, const RenderOptions& options,
                                        Priority priority,
                                        std::function<void(Result<Bitmap>)> on_done) const {
+  if (uses_render_process())
+    return state_->render->render_page(page_index, options, priority, std::move(on_done));
   RenderOptions opts = options;
   return DocumentHandleAccess::post_document_task<Bitmap>(
       *this, priority, TaskKind::kRender, page_index,
@@ -247,6 +254,9 @@ std::future<Result<Bitmap>> DocumentHandle::render_page(int page_index,
 TaskHandle DocumentHandle::render_region(int page_index, const RenderOptions& options,
                                          const Rect& region_px, Priority priority,
                                          std::function<void(Result<Bitmap>)> on_done) const {
+  if (uses_render_process())
+    return state_->render->render_region(page_index, options, region_px, priority,
+                                         std::move(on_done));
   RenderOptions opts = options;
   return DocumentHandleAccess::post_document_task<Bitmap>(
       *this, priority, TaskKind::kRender, page_index,
@@ -442,13 +452,50 @@ void DocumentHandle::apply_change(const ChangeSet& change) {
   if (change.structural) {  // 쪽 수·순서가 바뀌었다: 전체를 새 값으로
     info.page_sizes = change.all_sizes;
     info.page_count = static_cast<int>(change.all_sizes.size());
-    return;
-  }
-  for (const auto& [page, size] : change.new_sizes) {
-    if (page >= 0 && static_cast<std::size_t>(page) < info.page_sizes.size()) {
-      info.page_sizes[static_cast<std::size_t>(page)] = size;
+  } else {
+    for (const auto& [page, size] : change.new_sizes) {
+      if (page >= 0 && static_cast<std::size_t>(page) < info.page_sizes.size()) {
+        info.page_sizes[static_cast<std::size_t>(page)] = size;
+      }
     }
   }
+  // 렌더 자식 재동기화 (#137): 세대를 먼저 올려 이후 타일 요청을 보류시키고, 워커가 현재 바이트를
+  // 만들면 자식에 넘긴다. 바이트를 못 만들면 워커 렌더로 돌아간다
+  if (!uses_render_process()) return;
+  const std::uint64_t generation = state_->render->begin_resync();
+  std::weak_ptr<State> weak = state_;
+  DocumentHandleAccess::post_document_task<std::vector<std::uint8_t>>(
+      *this, Priority::kHigh, TaskKind::kQuery, -1,
+      [](PdfiumDocument& doc) { return doc.save_to_memory(); },
+      std::function<void(Result<std::vector<std::uint8_t>>)>(
+          [weak, generation](Result<std::vector<std::uint8_t>> bytes) {
+            auto state = weak.lock();
+            if (!state || !state->render) return;
+            if (bytes) {
+              state->render->replace(generation, std::move(*bytes));
+            } else {
+              state->render_fallback.store(true);
+              state->render->replace(generation, {});  // 보류를 풀기만 (이후 요청은 워커로)
+            }
+          }));
+}
+
+void DocumentHandle::attach_render_process(std::shared_ptr<RenderProcess> process,
+                                           std::filesystem::path path, std::string password) {
+  if (!state_ || !process) return;
+  state_->render = std::move(process);
+  state_->render_fallback.store(state_->render->unavailable());
+  state_->render->open(std::move(path), std::move(password));
+}
+
+bool DocumentHandle::uses_render_process() const noexcept {
+  if (!state_ || !state_->render || state_->closed.load(std::memory_order_relaxed)) return false;
+  if (state_->render_fallback.load()) return false;
+  if (state_->render->unavailable()) {
+    state_->render_fallback.store(true);
+    return false;
+  }
+  return true;
 }
 
 void DocumentHandle::close() noexcept {
