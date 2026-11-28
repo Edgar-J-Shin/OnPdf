@@ -3,7 +3,7 @@
   "version-string": "0.8.1",
   "description": "PDFium based PDF viewer and editor",
   "license": "Apache-2.0",
-  "builtin-baseline": "fe8e78fac7df2793f9848ed0d27aa59d9c035998",
+  "builtin-baseline": "ba33ef1a2fb3c6519e819cd767bb8fd1677f1323",
   "dependencies": [
     "stb",
     "qpdf",
