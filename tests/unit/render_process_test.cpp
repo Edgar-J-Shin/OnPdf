@@ -155,8 +155,8 @@ RenderProcess::Options options_for(std::chrono::milliseconds timeout = 20000ms) 
 
 class RenderProcessTest : public ::testing::Test {
  protected:
-  void SetUp() override { unsetenv("ONPDF_RENDER_CHILD_FAULT"); }
-  void TearDown() override { unsetenv("ONPDF_RENDER_CHILD_FAULT"); }
+  void SetUp() override { onpdf::test::unset_env("ONPDF_RENDER_CHILD_FAULT"); }
+  void TearDown() override { onpdf::test::unset_env("ONPDF_RENDER_CHILD_FAULT"); }
   std::vector<RenderProcess::Event> events(RenderProcess& rp) {
     std::lock_guard lock(mutex_);
     (void)rp;
@@ -257,7 +257,7 @@ TEST_F(RenderProcessTest, ReplaceGenerationGatesRenders) {
 }
 
 TEST_F(RenderProcessTest, CrashRestartsAndRefusesAfterTwoFailures) {
-  setenv("ONPDF_RENDER_CHILD_FAULT", "crash:1", 1);  // 2쪽(인덱스 1)에서 죽는다
+  onpdf::test::set_env("ONPDF_RENDER_CHILD_FAULT", "crash:1");  // 2쪽(인덱스 1)에서 죽는다
   RenderProcess rp(options_for());
   capture(rp);
   rp.open(testdata("simple.pdf"), "");
@@ -288,7 +288,7 @@ TEST_F(RenderProcessTest, CrashRestartsAndRefusesAfterTwoFailures) {
 }
 
 TEST_F(RenderProcessTest, HangIsKilledAfterTimeout) {
-  setenv("ONPDF_RENDER_CHILD_FAULT", "hang:0", 1);
+  onpdf::test::set_env("ONPDF_RENDER_CHILD_FAULT", "hang:0");
   RenderProcess rp(options_for(700ms));
   capture(rp);
   rp.open(testdata("simple.pdf"), "");

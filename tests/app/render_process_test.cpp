@@ -62,11 +62,11 @@ class RenderProcessAppTest : public ::testing::Test {
   RenderProcessAppTest() : worker_(options()) {
     Settings().reset_all();
     Settings().set_render_process(true);  // 기본은 끔 — 이 테스트들은 켠다
-    unsetenv("ONPDF_RENDER_CHILD_FAULT");
+    onpdf::test::unset_env("ONPDF_RENDER_CHILD_FAULT");
   }
   ~RenderProcessAppTest() override {
     window_.reset();
-    unsetenv("ONPDF_RENDER_CHILD_FAULT");
+    onpdf::test::unset_env("ONPDF_RENDER_CHILD_FAULT");
     Settings().reset_all();
   }
   static engine::PdfiumWorker::Options options() {
@@ -159,7 +159,7 @@ TEST_F(RenderProcessAppTest, EditedPageRendersNewContent) {
 }
 
 TEST_F(RenderProcessAppTest, CrashOnOnePageRefusesOnlyThatPage) {
-  setenv("ONPDF_RENDER_CHILD_FAULT", "crash:1", 1);  // 2쪽에서 죽는다
+  onpdf::test::set_env("ONPDF_RENDER_CHILD_FAULT", "crash:1");  // 2쪽에서 죽는다
   MainWindow& w = make_window();
   capture_status();
   ASSERT_TRUE(open("simple.pdf"));
@@ -181,7 +181,7 @@ TEST_F(RenderProcessAppTest, CrashOnOnePageRefusesOnlyThatPage) {
 }
 
 TEST_F(RenderProcessAppTest, HangIsCutByTimeout) {
-  setenv("ONPDF_RENDER_CHILD_FAULT", "hang:0", 1);
+  onpdf::test::set_env("ONPDF_RENDER_CHILD_FAULT", "hang:0");
   Settings().set_render_timeout_seconds(5);  // 하한
   make_window();
   const auto t0 = std::chrono::steady_clock::now();
