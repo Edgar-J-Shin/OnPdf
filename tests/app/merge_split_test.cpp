@@ -26,26 +26,9 @@ namespace {
 using onpdf::test::answer_input_dialog;
 using onpdf::test::answer_message_box;
 using onpdf::test::ScopedTempDir;
+using onpdf::test::spin_until;
 using onpdf::test::testdata;
 using onpdf::test::when_dialog;
-
-template <class Pred>
-bool spin_until(Pred pred, int timeout_ms = 15000) {
-  QEventLoop loop;
-  QTimer poll;
-  bool timed_out = false;
-  QObject::connect(&poll, &QTimer::timeout, &loop, [&] {
-    if (pred()) loop.quit();
-  });
-  poll.start(5);
-  QTimer::singleShot(timeout_ms, &loop, [&] {
-    timed_out = true;
-    loop.quit();
-  });
-  if (pred()) return true;
-  loop.exec();
-  return !timed_out;
-}
 
 QString q(const std::filesystem::path& p) {
   return QString::fromStdString(onpdf::path_to_utf8(p));

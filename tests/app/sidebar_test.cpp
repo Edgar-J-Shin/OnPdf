@@ -2,6 +2,7 @@
 #include "onpdf/core/platform/path.h"
 
 #include "../test_support.h"
+#include "dialog_helpers.h"
 #include "document_view.h"
 #include "main_window.h"
 #include "outline_panel.h"
@@ -33,25 +34,8 @@
 namespace onpdf::app {
 namespace {
 
+using onpdf::test::spin_until;
 using onpdf::test::testdata;
-
-template <class Pred>
-bool spin_until(Pred pred, int timeout_ms = 10000) {
-  QEventLoop loop;
-  QTimer poll;
-  bool timed_out = false;
-  QObject::connect(&poll, &QTimer::timeout, &loop, [&] {
-    if (pred()) loop.quit();
-  });
-  poll.start(5);
-  QTimer::singleShot(timeout_ms, &loop, [&] {
-    timed_out = true;
-    loop.quit();
-  });
-  if (pred()) return true;
-  loop.exec();
-  return !timed_out;
-}
 
 void settle(int ms) {
   QEventLoop loop;

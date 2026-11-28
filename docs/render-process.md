@@ -30,7 +30,7 @@ onpdf_app (부모)                                  onpdf_app --render-child <in
 
 | 상황 | 감지 | 처리 |
 |---|---|---|
-| 자식 크래시 | 응답 파이프 EOF | 진행 중 요청 `kRenderProcessLost("crashed")`, 쪽 실패 +1, 재시작(마지막 `Open`·`Replace` 재전송), 이벤트 `restarted` → 상태 표시줄 |
+| 자식 크래시 | 응답 파이프 EOF | 진행 중 요청 `kRenderProcessLost("crashed")`, 쪽 실패 +1, 재시작(마지막 `Open`·`Replace` 재전송 — 교체 바이트는 클라이언트가 소유한 공유 메모리 세그먼트로만 보관하고 같은 이름을 다시 보낸다, 사본 없음 #153), 이벤트 `restarted` → 상태 표시줄 |
 | 렌더 멈춤 | 예산 초과(설정 "한 쪽 렌더링 포기 시간", 기본 20초) | `kill` → 위와 같음(`"timeout"`) |
 | 같은 쪽 2회 실패 | `page_failures` | 그 쪽은 `kRenderRefused` 로 즉시 거절 → #121 의 안내·썸네일 "표시 불가"·도구 차단 재사용 |
 | 자식 띄우기 3회 연속 실패 | spawn/Open 실패 | `unavailable` → `DocumentHandle` 이 워커 렌더로 폴백, 설정 자동 끔 + 안내 |

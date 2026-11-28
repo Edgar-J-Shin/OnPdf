@@ -4,6 +4,7 @@
 #include "onpdf/core/engine/render_types.h"
 
 #include "../test_support.h"
+#include "dialog_helpers.h"
 #include "qt_image.h"
 #include "ui_dispatcher.h"
 #include <QEventLoop>
@@ -18,28 +19,12 @@ namespace onpdf::app {
 namespace {
 
 using onpdf::test::expect_bitmap_matches_png;
+using onpdf::test::pump_events;
+using onpdf::test::spin_until;
 using onpdf::test::testdata;
 
 QString testdata_q(const char* name) {
   return QString::fromStdString(onpdf::path_to_utf8(testdata(name)));
-}
-
-// 이벤트 루프를 돌리며 predicate 가 참이 될 때까지 기다린다. 시간 초과면 false.
-template <class Pred>
-bool spin_until(Pred pred, int timeout_ms = 5000) {
-  QEventLoop loop;
-  QTimer poll;
-  bool timed_out = false;
-  QObject::connect(&poll, &QTimer::timeout, &loop, [&] {
-    if (pred()) loop.quit();
-  });
-  poll.start(5);
-  QTimer::singleShot(timeout_ms, &loop, [&] {
-    timed_out = true;
-    loop.quit();
-  });
-  loop.exec();
-  return !timed_out;
 }
 
 class DocumentSessionTest : public ::testing::Test {
@@ -146,7 +131,7 @@ TEST_F(DocumentSessionTest, NewRenderCancelsPrevious) {
   session_.render_page(1, 0.5f, 1.0);  // 첫 요청은 취소되거나, 완료돼도 세대 불일치로 무시
   ASSERT_TRUE(spin_until([&] { return !rendered_.empty(); }));
   // 잠깐 더 돌려 늦은 결과가 없는지 확인
-  spin_until([] { return false; }, 200);
+  pump_events(200);
   ASSERT_EQ(rendered_.size(), 1u);
   EXPECT_EQ(rendered_[0].page, 1);
   EXPECT_TRUE(render_failed_.empty());
@@ -156,7 +141,7 @@ TEST_F(DocumentSessionTest, StaleOpenIgnored) {
   session_.open(testdata_q("simple.pdf"));
   session_.open(testdata_q("does-not-exist.pdf"));
   ASSERT_TRUE(spin_until([&] { return !failed_.empty(); }));
-  spin_until([] { return false; }, 200);
+  pump_events(200);
   EXPECT_TRUE(opened_.empty());  // 첫 요청 결과는 무시
   EXPECT_FALSE(session_.has_document());
 }
@@ -166,7 +151,7 @@ TEST_F(DocumentSessionTest, CloseThenRenderEmitsNothing) {
   session_.close();
   EXPECT_FALSE(session_.has_document());
   session_.render_page(0, 1.0f, 1.0);
-  spin_until([] { return false; }, 200);
+  pump_events(200);
   EXPECT_TRUE(rendered_.empty());
   EXPECT_TRUE(render_failed_.empty());
 }
@@ -185,7 +170,7 @@ TEST(UiDispatcher, DropsCallbackAfterReceiverDeleted) {
   bool called = false;
   dispatcher.post_to(receiver, [&](QObject*) { called = true; });
   delete receiver;
-  spin_until([] { return false; }, 100);
+  pump_events(100);
   EXPECT_FALSE(called);
 
   QObject alive;

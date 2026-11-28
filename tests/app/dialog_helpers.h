@@ -1,6 +1,6 @@
 #pragma once
 
-// 앱 테스트 공용: 모달 대화상자를 objectName 으로 찾아 자동으로 답한다 (#112).
+// 앱 테스트 공용: 이벤트 루프 대기(spin_until·pump_events)와 모달 대화상자 자동 응답 (#112·#151).
 // QApplication::activeModalWidget() 은 "활성" 모달만 돌려줘, 앞 모달이 닫힌 직후 새 모달의 창
 // 활성화가 늦으면 (Windows offscreen 에서 간헐적으로) null 이 되어 폴링이 영영 맞지 않았다 — 보이는
 // 최상위 창을 직접 훑는다. 대기가 시간 초과하면 describe_open_windows() 로 무엇이 떠 있었는지
@@ -9,11 +9,13 @@
 #include <QAbstractButton>
 #include <QApplication>
 #include <QDialog>
+#include <QEventLoop>
 #include <QInputDialog>
 #include <QMessageBox>
 #include <QString>
 #include <QTimer>
 #include <QWidget>
+#include <cstdio>
 
 namespace onpdf::test {
 
@@ -102,6 +104,39 @@ inline QString describe_open_windows() {
   out += QStringLiteral("| activeModalWidget=%1")
              .arg(active != nullptr ? active->objectName() : QStringLiteral("null"));
   return out;
+}
+
+// 이벤트 루프를 돌리며 pred 가 참이 될 때까지 기다린다. 시간 초과면 false 를 돌려주고 열린 창
+// 목록을 stderr 에 남긴다 (#112·#145 — 어느 대화상자가 떠 있었는지). 상한 기본 30초: 느린 Windows
+// 러너에서 줄 수정·대화상자 테스트가 10초를 넘긴 적이 있다 (#105). 예전엔 17개 파일에 복사돼 있었다
+// (#151)
+template <class Pred>
+bool spin_until(Pred pred, int timeout_ms = 30000) {
+  if (pred()) return true;
+  QEventLoop loop;
+  QTimer poll;
+  bool timed_out = false;
+  QObject::connect(&poll, &QTimer::timeout, &loop, [&] {
+    if (pred()) loop.quit();
+  });
+  poll.start(5);
+  QTimer::singleShot(timeout_ms, &loop, [&] {
+    timed_out = true;
+    loop.quit();
+  });
+  loop.exec();
+  if (timed_out) {
+    std::fprintf(stderr, "[spin_until] timed out after %d ms; open windows: %s\n", timeout_ms,
+                 describe_open_windows().toUtf8().constData());
+  }
+  return !timed_out;
+}
+
+// 이벤트를 돌리며 ms 만큼 기다린다 — 어떤 일이 "일어나지 않음" 을 확인할 때 (시간 초과 진단 없음)
+inline void pump_events(int ms) {
+  QEventLoop loop;
+  QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+  loop.exec();
 }
 
 }  // namespace onpdf::test

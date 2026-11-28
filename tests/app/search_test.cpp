@@ -2,6 +2,7 @@
 #include "onpdf/core/platform/path.h"
 
 #include "../test_support.h"
+#include "dialog_helpers.h"
 #include "document_view.h"
 #include "main_window.h"
 #include "search_bar.h"
@@ -19,25 +20,9 @@
 namespace onpdf::app {
 namespace {
 
+using onpdf::test::pump_events;
+using onpdf::test::spin_until;
 using onpdf::test::testdata;
-
-template <class Pred>
-bool spin_until(Pred pred, int timeout_ms = 10000) {
-  QEventLoop loop;
-  QTimer poll;
-  bool timed_out = false;
-  QObject::connect(&poll, &QTimer::timeout, &loop, [&] {
-    if (pred()) loop.quit();
-  });
-  poll.start(5);
-  QTimer::singleShot(timeout_ms, &loop, [&] {
-    timed_out = true;
-    loop.quit();
-  });
-  if (pred()) return true;
-  loop.exec();
-  return !timed_out;
-}
 
 void press(QWidget* w, int key, Qt::KeyboardModifiers mods = Qt::NoModifier) {
   QKeyEvent down(QEvent::KeyPress, key, mods);
@@ -236,7 +221,7 @@ TEST_F(SearchFlowTest, EscapeDuringDebounceDoesNotSearch) {
   window_.open_find();
   window_.search_bar()->line_edit()->setText(QStringLiteral("page"));
   press(window_.search_bar()->line_edit(), Qt::Key_Escape);  // 디바운스 중 닫기 (리뷰 W2)
-  spin_until([] { return false; }, SearchBar::kDebounceMs * 2);
+  pump_events(SearchBar::kDebounceMs * 2);
   EXPECT_FALSE(s().active());
   EXPECT_FALSE(window_.search_bar()->isVisible());
 }

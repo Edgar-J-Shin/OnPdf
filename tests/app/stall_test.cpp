@@ -37,25 +37,8 @@ namespace {
 using namespace std::chrono_literals;
 using onpdf::test::find_any_dialog;
 using onpdf::test::find_dialog;
+using onpdf::test::spin_until;
 using onpdf::test::testdata;
-
-template <class Pred>
-bool spin_until(Pred pred, int timeout_ms = 30000) {
-  QEventLoop loop;
-  QTimer poll;
-  bool timed_out = false;
-  QObject::connect(&poll, &QTimer::timeout, &loop, [&] {
-    if (pred()) loop.quit();
-  });
-  poll.start(5);
-  QTimer::singleShot(timeout_ms, &loop, [&] {
-    timed_out = true;
-    loop.quit();
-  });
-  if (pred()) return true;
-  loop.exec();
-  return !timed_out;
-}
 
 // 워커를 막는 작업 (종류 지정). 소멸자가 풀어 워커가 hang 하지 않는다
 class Block {

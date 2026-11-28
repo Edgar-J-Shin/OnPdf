@@ -4,6 +4,7 @@
 #include "onpdf/core/platform/path.h"
 
 #include "../test_support.h"
+#include "dialog_helpers.h"
 #include "document_session.h"
 #include "ui_dispatcher.h"
 #include <QApplication>
@@ -21,24 +22,9 @@
 namespace onpdf::app {
 namespace {
 
+using onpdf::test::pump_events;
+using onpdf::test::spin_until;
 using onpdf::test::testdata;
-
-template <class Pred>
-bool spin_until(Pred pred, int timeout_ms = 10000) {
-  QEventLoop loop;
-  QTimer poll;
-  bool timed_out = false;
-  QObject::connect(&poll, &QTimer::timeout, &loop, [&] {
-    if (pred()) loop.quit();
-  });
-  poll.start(5);
-  QTimer::singleShot(timeout_ms, &loop, [&] {
-    timed_out = true;
-    loop.quit();
-  });
-  loop.exec();
-  return !timed_out;
-}
 
 class DocumentViewTest : public ::testing::Test {
  protected:
@@ -231,7 +217,7 @@ TEST_F(DocumentViewTest, StaleTextIndexIgnoredAfterReplace) {
   QObject::connect(&view_, &DocumentView::text_index_ready, &view_,
                    [&](int p) { ready_pages.push_back(p); });
   ASSERT_TRUE(wait_text(0));
-  spin_until([] { return false; }, 150);
+  pump_events(150);
   EXPECT_EQ(view_.text_index(0)->char_count(), 0);
   // scanned.pdf 는 3쪽: 0~2 는 가시 ±1 프리페치로 정당하게 인덱싱될 수 있다. 그 밖(이전 문서
   // 범위)은 절대 없어야 한다
@@ -436,7 +422,7 @@ TEST_F(DocumentViewTest, SelectionChangeRepaintsOnlySelectionArea) {
   // 늦게 오는 타일·미리보기가 스파이 중에 전체를 다시 그리지 않게 렌더가 가라앉을 때까지 기다린다
   // (Windows CI 에서 간헐 실패)
   ASSERT_TRUE(spin_until([&] { return view_.pending_visible_tiles() == 0; }));
-  spin_until([] { return false; }, 300);
+  pump_events(300);
 
   struct PaintSpy : QObject {
     QRect bounds;

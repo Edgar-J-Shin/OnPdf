@@ -130,6 +130,7 @@ class ChildProcess {
   ChildProcess(const ChildProcess&) = delete;
   ChildProcess& operator=(const ChildProcess&) = delete;
   ~ChildProcess();  // 살아 있으면 kill + 거둔다
+  void swap(ChildProcess& other) noexcept;
 
   [[nodiscard]] bool valid() const noexcept { return pid_ != 0; }
   [[nodiscard]] long long pid() const noexcept { return pid_; }
