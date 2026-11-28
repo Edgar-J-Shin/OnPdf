@@ -80,6 +80,10 @@
         <translation>열기(&amp;O)...</translation>
     </message>
     <message>
+        <source>Open &amp;Recent</source>
+        <translation>최근 파일 열기(&amp;R)</translation>
+    </message>
+    <message>
         <source>Open a PDF file</source>
         <translation>PDF 파일을 연다</translation>
     </message>
@@ -160,6 +164,10 @@
         <translation>이전 찾기(&amp;P)</translation>
     </message>
     <message>
+        <source>&amp;Preferences...</source>
+        <translation>설정(&amp;P)...</translation>
+    </message>
+    <message>
         <source>&amp;Page</source>
         <translation>쪽(&amp;P)</translation>
     </message>
@@ -226,12 +234,6 @@
     <message>
         <source>About OnPdf</source>
         <translation>OnPdf 정보</translation>
-    </message>
-    <message>
-        <source>OnPdf %1 — PDF viewer and editor based on PDFium
-Apache License 2.0</source>
-        <translation>OnPdf %1 — PDFium 기반 PDF 뷰어·편집기
-Apache License 2.0</translation>
     </message>
     <message>
         <source>Not opened because a print job is running</source>
@@ -1047,6 +1049,94 @@ If you know its permissions (owner) password, you can unlock printing.</source>
         <source>This document does not allow printing</source>
         <translation>이 문서는 인쇄가 허용되지 않습니다</translation>
     </message>
+    <message>
+        <source>Settings cannot be saved</source>
+        <translation>설정을 저장할 수 없습니다</translation>
+    </message>
+    <message>
+        <source>(none)</source>
+        <translation>(없음)</translation>
+    </message>
+    <message>
+        <source>&amp;Clear List</source>
+        <translation>목록 비우기(&amp;C)</translation>
+    </message>
+    <message>
+        <source>Language</source>
+        <translation>언어</translation>
+    </message>
+    <message>
+        <source>The language will change the next time OnPdf starts.</source>
+        <translation>언어는 OnPdf 를 다음에 실행할 때부터 바뀝니다.</translation>
+    </message>
+    <message>
+        <source>Cannot create the report folder: %1</source>
+        <translation>보고 폴더를 만들 수 없습니다: %1</translation>
+    </message>
+    <message>
+        <source>Cannot open the folder: %1</source>
+        <translation>폴더를 열 수 없습니다: %1</translation>
+    </message>
+    <message>
+        <source>OnPdf did not exit normally last time (%1)</source>
+        <translation>지난번 OnPdf 가 정상 종료되지 않았습니다 (%1)</translation>
+    </message>
+    <message>
+        <source>Last time, OnPdf quit unexpectedly while %1 &apos;%2&apos; (%3).</source>
+        <translation>지난번 OnPdf 가 &apos;%2&apos; 파일을 %1 예기치 않게 종료되었습니다 (%3).</translation>
+    </message>
+    <message>
+        <source>Signal: %1</source>
+        <translation>신호: %1</translation>
+    </message>
+    <message>
+        <source>That was version %1.</source>
+        <translation>그때 버전은 %1 이었습니다.</translation>
+    </message>
+    <message>
+        <source>Last action: %1</source>
+        <translation>마지막 동작: %1</translation>
+    </message>
+    <message>
+        <source>Report folder: %1</source>
+        <translation>보고 폴더: %1</translation>
+    </message>
+    <message>
+        <source>OnPdf %1 · PDFium %2 · Qt %3</source>
+        <translation>OnPdf %1 · PDFium %2 · Qt %3</translation>
+    </message>
+    <message>
+        <source>OnPdf did not exit normally</source>
+        <translation>OnPdf 가 정상 종료되지 않았습니다</translation>
+    </message>
+    <message>
+        <source>The file may contain content PDFium cannot handle. You can open it again or leave it closed. The report folder holds what you can attach to a bug report.</source>
+        <translation>그 파일에 PDFium 이 처리하지 못하는 내용이 있을 수 있습니다. 다시 열거나 열지 않은 채 둘 수 있습니다. 보고 폴더에 버그 보고에 첨부할 파일이 있습니다.</translation>
+    </message>
+    <message>
+        <source>Do not show this again</source>
+        <translation>다시 표시 안 함</translation>
+    </message>
+    <message>
+        <source>Open It Again</source>
+        <translation>다시 열기</translation>
+    </message>
+    <message>
+        <source>Leave It Closed</source>
+        <translation>열지 않기</translation>
+    </message>
+    <message>
+        <source>Open Report Folder</source>
+        <translation>보고 폴더 열기</translation>
+    </message>
+    <message>
+        <source>Report an Issue...</source>
+        <translation>이슈 올리기...</translation>
+    </message>
+    <message>
+        <source>Cannot open the browser; the issue link was copied to the clipboard</source>
+        <translation>브라우저를 열 수 없어 이슈 링크를 클립보드에 복사했습니다</translation>
+    </message>
     <message numerus="yes">
         <source>Rendering %1 has not finished for %n second(s). The document may contain hostile content.
 If you force quit, unsaved changes are lost.</source>
@@ -1058,6 +1148,20 @@ If you force quit, unsaved changes are lost.</source>
     <message>
         <source>Print the document</source>
         <translation>문서를 인쇄한다</translation>
+    </message>
+    <message>
+        <source>Open &amp;Report Folder</source>
+        <translation>보고 폴더 열기(&amp;R)</translation>
+    </message>
+    <message>
+        <source>OnPdf %1 — PDF viewer and editor based on PDFium
+Apache License 2.0
+
+PDFium %2 · Qt %3</source>
+        <translation>OnPdf %1 — PDFium 기반 PDF 뷰어·편집기
+Apache License 2.0
+
+PDFium %2 · Qt %3</translation>
     </message>
     <message>
         <source>Print</source>
@@ -1231,6 +1335,12 @@ If you force quit, unsaved changes are lost.</source>
         <source>Page %1 cannot be displayed, so annotations, text and images cannot be added</source>
         <translation>%1쪽은 표시할 수 없어 주석·텍스트·이미지를 넣을 수 없습니다</translation>
     </message>
+    <message numerus="yes">
+        <source>%n page(s) cannot be displayed (hazardous pattern)</source>
+        <translation>
+            <numerusform>%n쪽을 표시할 수 없습니다 (위험한 패턴)</numerusform>
+        </translation>
+    </message>
     <message>
         <source>Pages that cannot be displayed</source>
         <translation>표시할 수 없는 쪽</translation>
@@ -1250,6 +1360,18 @@ Other pages, search, editing and saving work as usual.</source>
     <message>
         <source>Only PDF files can be opened</source>
         <translation>PDF 파일만 열 수 있습니다</translation>
+    </message>
+    <message>
+        <source>opening</source>
+        <translation>여는 중에</translation>
+    </message>
+    <message>
+        <source>viewing</source>
+        <translation>보는 중에</translation>
+    </message>
+    <message>
+        <source>being force-quit while rendering</source>
+        <translation>렌더링 중 강제 종료되어</translation>
     </message>
 </context>
 <context>
@@ -1372,6 +1494,137 @@ Other pages, search, editing and saving work as usual.</source>
     <message>
         <source>+ (too many)</source>
         <translation>+ (너무 많음)</translation>
+    </message>
+</context>
+<context>
+    <name>onpdf::app::SettingsDialog</name>
+    <message>
+        <source>Preferences</source>
+        <translation>설정</translation>
+    </message>
+    <message>
+        <source>System default</source>
+        <translation>시스템 기본값</translation>
+    </message>
+    <message>
+        <source>Language:</source>
+        <translation>언어:</translation>
+    </message>
+    <message>
+        <source>Fit width</source>
+        <translation>폭 맞춤</translation>
+    </message>
+    <message>
+        <source>Fit page</source>
+        <translation>쪽 맞춤</translation>
+    </message>
+    <message>
+        <source>Actual size</source>
+        <translation>실제 크기</translation>
+    </message>
+    <message>
+        <source>Last used</source>
+        <translation>마지막 값</translation>
+    </message>
+    <message>
+        <source>Zoom when opening:</source>
+        <translation>열 때 배율:</translation>
+    </message>
+    <message>
+        <source>Show</source>
+        <translation>보임</translation>
+    </message>
+    <message>
+        <source>Hide</source>
+        <translation>숨김</translation>
+    </message>
+    <message>
+        <source>Remember</source>
+        <translation>마지막 상태 기억</translation>
+    </message>
+    <message>
+        <source>Sidebar at startup:</source>
+        <translation>시작 때 사이드바:</translation>
+    </message>
+    <message>
+        <source>General</source>
+        <translation>일반</translation>
+    </message>
+    <message>
+        <source>%1 pt</source>
+        <translation>%1 pt</translation>
+    </message>
+    <message>
+        <source>Line width (shapes and pen):</source>
+        <translation>선 두께 (도형·펜):</translation>
+    </message>
+    <message>
+        <source>%1%</source>
+        <translation>%1%</translation>
+    </message>
+    <message>
+        <source>Opacity:</source>
+        <translation>불투명도:</translation>
+    </message>
+    <message>
+        <source>Annotation color:</source>
+        <translation>주석 색:</translation>
+    </message>
+    <message>
+        <source>Text size:</source>
+        <translation>텍스트 크기:</translation>
+    </message>
+    <message>
+        <source>Text color:</source>
+        <translation>텍스트 색:</translation>
+    </message>
+    <message>
+        <source>Written into new annotations (leave empty to omit)</source>
+        <translation>새 주석에 기록합니다 (비워 두면 쓰지 않음)</translation>
+    </message>
+    <message>
+        <source>Author name:</source>
+        <translation>작성자 이름:</translation>
+    </message>
+    <message>
+        <source>Editing</source>
+        <translation>편집</translation>
+    </message>
+    <message>
+        <source> MB</source>
+        <translation> MB</translation>
+    </message>
+    <message>
+        <source>Page cache limit:</source>
+        <translation>쪽 캐시 상한:</translation>
+    </message>
+    <message>
+        <source>Show a notice when a document has pages that cannot be displayed safely</source>
+        <translation>안전하게 표시할 수 없는 쪽이 있는 문서를 열면 안내 창을 띄웁니다</translation>
+    </message>
+    <message>
+        <source> s</source>
+        <translation>초</translation>
+    </message>
+    <message>
+        <source>Warn when rendering has not finished for:</source>
+        <translation>렌더링이 다음 시간 동안 끝나지 않으면 경고:</translation>
+    </message>
+    <message>
+        <source>Tell me if OnPdf did not exit normally last time</source>
+        <translation>지난번 OnPdf 가 정상 종료되지 않았으면 알립니다</translation>
+    </message>
+    <message>
+        <source>Advanced</source>
+        <translation>고급</translation>
+    </message>
+    <message>
+        <source>Black</source>
+        <translation>검정</translation>
+    </message>
+    <message>
+        <source>Custom (%1)</source>
+        <translation>직접 지정 (%1)</translation>
     </message>
 </context>
 <context>

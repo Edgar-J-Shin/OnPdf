@@ -12,9 +12,12 @@
 #include "onpdf/core/engine/qpdf_tools.h"
 #include "onpdf/core/platform/path.h"
 
+#include "crash_handler.h"
+#include "crash_report.h"
 #include "file_open_filter.h"
 #include "i18n.h"
 #include "main_window.h"
+#include "settings.h"
 #include "ui_dispatcher.h"
 #include <QApplication>
 #include <QCommandLineOption>
@@ -29,9 +32,12 @@ int main(int argc, char** argv) {
   QApplication app(argc, argv);
   QApplication::setApplicationName(QStringLiteral("OnPdf"));
   QApplication::setApplicationVersion(QStringLiteral(ONPDF_VERSION));
+  // 설정 저장소(QSettings, #129)의 위치를 정한다 — 언어 결정보다 먼저
+  QApplication::setOrganizationName(QStringLiteral("OnPdf"));
+  QApplication::setOrganizationDomain(QStringLiteral("onpdf.app"));
 
-  // UI 언어 (#8): --lang → ONPDF_LANG → 시스템 선호 언어(ko 외에는 영어). 파서의 도움말 문구도
-  // 번역되도록 파서보다 먼저 argv 를 훑는다
+  // UI 언어 (#8): --lang → ONPDF_LANG → 설정(#129) → 시스템 선호 언어(ko 외에는 영어). 파서의
+  // 도움말 문구도 번역되도록 파서보다 먼저 argv 를 훑는다
   std::optional<onpdf::app::Language> forced;
   const QStringList args = QCoreApplication::arguments();
   for (qsizetype i = 0; i < args.size(); ++i) {
@@ -48,6 +54,18 @@ int main(int argc, char** argv) {
   }
   if (!forced && qEnvironmentVariableIsSet("ONPDF_LANG"))
     forced = onpdf::app::parse_language(qEnvironmentVariable("ONPDF_LANG"));
+  if (!forced) {
+    switch (onpdf::app::Settings().language()) {
+      case onpdf::app::LanguageChoice::kKorean:
+        forced = onpdf::app::Language::kKorean;
+        break;
+      case onpdf::app::LanguageChoice::kEnglish:
+        forced = onpdf::app::Language::kEnglish;
+        break;
+      case onpdf::app::LanguageChoice::kSystem:
+        break;
+    }
+  }
   (void)onpdf::app::set_language(
       app, forced.value_or(onpdf::app::language_from_locale(QLocale::system().uiLanguages())));
 
@@ -75,6 +93,19 @@ int main(int argc, char** argv) {
   parser.process(app);
 
   onpdf::app::UiDispatcher dispatcher;
+
+  // 충돌 보고 (#131): 워커(크래시가 날 수 있는 스레드)보다 먼저 설치. 점검·스크린샷 모드는 사용자
+  // 폴더를 더럽히지 않게 임시 보고 폴더
+  const bool check_mode = parser.isSet(screenshot) || parser.isSet(self_test);
+  if (check_mode) {
+    onpdf::app::set_report_dir_override(
+        QDir::temp().filePath(QStringLiteral("onpdf-check-reports")));
+  }
+  {
+    const auto dir = onpdf::path_from_utf8(onpdf::app::report_dir().absolutePath().toStdString());
+    onpdf::app::crash::install({dir, ONPDF_VERSION, onpdf::app::pdfium_version().toStdString()});
+    onpdf::app::crash::prune_reports(dir, 5);
+  }
 
   onpdf::engine::PdfiumWorker::Options options;
   options.use_system_fonts = true;
@@ -112,8 +143,10 @@ int main(int argc, char** argv) {
   }
   onpdf::app::FileOpenFilter file_open(window);
   app.installEventFilter(&file_open);
+  // 지난 실행이 비정상 종료였으면 먼저 안내 (#131). 점검·스크린샷 모드는 건너뛴다
+  const bool open_cli = check_mode || window.maybe_show_crash_notice(files.value(0));
   window.show();
-  if (!files.isEmpty()) window.open_file(files.first());
+  if (open_cli && !files.isEmpty()) window.open_file(files.first());
 
   const int code = app.exec();
   if (parser.isSet(self_test) && code == 0) {

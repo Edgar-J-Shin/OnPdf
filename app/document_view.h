@@ -203,6 +203,9 @@ class DocumentView : public QAbstractScrollArea {
   [[nodiscard]] std::optional<std::pair<int, onpdf::Point>> reading_position() const;
 
   [[nodiscard]] view::TileCache::Stats cache_stats() const { return cache_.stats(); }
+  // 타일 캐시 상한 (#129 설정 "고급"). 줄이면 바로 밀어낸다
+  void set_cache_limit(std::size_t bytes) { cache_.set_max_bytes(bytes); }
+  [[nodiscard]] std::size_t cache_limit() const noexcept { return cache_.max_bytes(); }
   [[nodiscard]] std::vector<view::TileKey> cache_keys() const { return cache_.keys(); }
   // 렌더가 거부된 쪽(kRenderRefused, #121)과 사유 — 쪽 자리에 안내를 그리고 다시 요청하지 않는다
   [[nodiscard]] const std::map<int, QString>& refused_pages() const { return refused_; }

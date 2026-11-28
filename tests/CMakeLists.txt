@@ -111,6 +111,8 @@ if(ONPDF_BUILD_APP)
     app/image_tool_test.cpp
     app/form_tool_test.cpp
     app/stall_test.cpp
+    app/settings_test.cpp
+    app/crash_report_test.cpp
   )
   target_link_libraries(onpdf_app_tests PRIVATE onpdf_app_lib)
   set_tests_properties(onpdf_app_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

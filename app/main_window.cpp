@@ -17,20 +17,26 @@
 #include "onpdf/edit/text_line_commands.h"
 
 #include "annotation_dialog.h"
+#include "crash_handler.h"
+#include "crash_report.h"
 #include "document_view.h"
 #include "form_field_editor.h"
 #include "image_import.h"
 #include "outline_panel.h"
+#include "palette.h"
 #include "print_preview_dialog.h"
 #include "search_bar.h"
+#include "settings_dialog.h"
 #include "thumbnail_panel.h"
 #include <QAbstractButton>
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QCheckBox>
 #include <QClipboard>
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
 #include <QDragEnterEvent>
@@ -42,6 +48,7 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLocale>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -76,6 +83,7 @@ namespace onpdf::app {
 
 MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, QWidget* parent)
     : QMainWindow(parent),
+      settings_(std::make_unique<Settings>()),
       dispatcher_(dispatcher),
       worker_(worker),
       session_(worker, dispatcher, this),
@@ -181,6 +189,7 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(view_, &DocumentView::annotation_delete_requested, this,
           [this](int, const QString&) { delete_selected_annotation(); });
   connect(edit_, &EditController::state_changed, this, [this] {
+    if (edit_->busy()) set_action(QStringLiteral("edit"));  // (#131)
     update_edit_actions();
     update_title();
     announce_line_edit();
@@ -194,6 +203,8 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
   connect(&session_, &DocumentSession::password_required, this, &MainWindow::on_password_required);
   connect(&session_, &DocumentSession::open_failed, this, &MainWindow::on_open_failed);
   connect(view_, &DocumentView::current_page_changed, this, &MainWindow::on_current_page_changed);
+  connect(view_, &DocumentView::current_page_changed, this,
+          [this](int page) { set_action(QStringLiteral("render p.%1").arg(page + 1)); });  // (#131)
   connect(view_, &DocumentView::zoom_changed, this, &MainWindow::on_zoom_changed);
   connect(view_, &DocumentView::first_view_rendered, this, &MainWindow::on_first_view_rendered);
   // 타일이 도착할 때마다 캐시·렌더 통계를 갱신하되 1초에 한 번으로 묶는다
@@ -247,7 +258,10 @@ MainWindow::MainWindow(engine::PdfiumWorker& worker, UiDispatcher& dispatcher, Q
     if (view_->has_document() && view_->current_page() != value - 1) view_->go_to_page(value - 1);
   });
 
-  resize(900, 1000);
+  // 설정 (#129): 편집 기본값·캐시·멈춤 초를 반영하고 창 상태를 복원한다. 그 뒤의 변경은 changed 로
+  apply_settings();
+  restore_window_state();
+  connect(settings_.get(), &Settings::changed, this, &MainWindow::apply_settings);
   load_bundled_text_font();  // 모든 위젯·액션이 만들어진 뒤 (update_edit_actions 를 부른다)
 }
 
@@ -260,6 +274,10 @@ void MainWindow::build_menus() {
   QMenu* file = menuBar()->addMenu(tr("&File"));
   QAction* open =
       file->addAction(tr("&Open..."), QKeySequence::Open, this, &MainWindow::on_open_action);
+  recent_menu_ = file->addMenu(tr("Open &Recent"));  // (#129)
+  recent_menu_->setObjectName(QStringLiteral("recent_menu"));
+  connect(recent_menu_, &QMenu::aboutToShow, this, &MainWindow::rebuild_recent_menu);
+  rebuild_recent_menu();
   open->setStatusTip(tr("Open a PDF file"));
   save_action_ = file->addAction(tr("&Save"), QKeySequence::Save, this, &MainWindow::on_save);
   save_as_action_ =
@@ -308,6 +326,13 @@ void MainWindow::build_menus() {
       edit->addAction(tr("Find &Next"), QKeySequence::FindNext, this, &MainWindow::on_find_next);
   find_previous_action_ = edit->addAction(tr("Find &Previous"), QKeySequence::FindPrevious, this,
                                           &MainWindow::on_find_previous);
+  edit->addSeparator();
+  preferences_action_ = edit->addAction(tr("&Preferences..."), QKeySequence::Preferences, this,
+                                        &MainWindow::open_preferences);  // (#129)
+  preferences_action_->setObjectName(QStringLiteral("preferences"));
+  preferences_action_->setMenuRole(QAction::PreferencesRole);  // macOS 는 앱 메뉴 ⌘,
+  if (preferences_action_->shortcut().isEmpty())  // Windows·Linux 에는 표준 키가 없다 → Ctrl+,
+    preferences_action_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Comma));
 
   QMenu* page = menuBar()->addMenu(tr("&Page"));
   rotate_cw_action_ = page->addAction(tr("Rotate &Right"), QKeySequence(Qt::CTRL | Qt::Key_R), this,
@@ -343,16 +368,22 @@ void MainWindow::build_menus() {
   sidebar_action_ =
       view->addAction(tr("&Sidebar"), QKeySequence(Qt::Key_F4), this, [this](bool checked) {
         sidebar_->setVisible(checked);
+        settings_->set_sidebar_visible(checked);  // (#129)
         if (checked) update_outline_highlight();
       });
   sidebar_action_->setCheckable(true);
   sidebar_action_->setChecked(true);
 
   QMenu* help = menuBar()->addMenu(tr("&Help"));
+  QAction* report_folder = help->addAction(tr("Open &Report Folder"), this,
+                                           &MainWindow::open_report_folder);  // (#131)
+  report_folder->setObjectName(QStringLiteral("open_report_folder"));
   help->addAction(tr("&About OnPdf"), this, [this] {
     QMessageBox::about(this, tr("About OnPdf"),
-                       tr("OnPdf %1 — PDF viewer and editor based on PDFium\nApache License 2.0")
-                           .arg(QApplication::applicationVersion()));
+                       tr("OnPdf %1 — PDF viewer and editor based on PDFium\nApache License 2.0\n\n"
+                          "PDFium %2 · Qt %3")
+                           .arg(QApplication::applicationVersion(), pdfium_version(),
+                                QString::fromLatin1(qVersion())));
   });
 }
 
@@ -387,11 +418,21 @@ void MainWindow::continue_open(const QString& path) {
   }
   show_transient(tr("Opening: %1").arg(QFileInfo(path).fileName()));
   print_unlock_.reset();
+  // 세션 표식 (#131): 여는 중에 죽으면 다음 실행이 어떤 파일이었는지 안다
+  SessionMarker marker;
+  marker.path = QFileInfo(path).absoluteFilePath();
+  marker.stage = QStringLiteral("opening");
+  marker.since = QDateTime::currentDateTime();
+  marker.last_action = QStringLiteral("open");
+  marker.version = app_version();
+  settings_->set_session_marker(marker);
+  last_action_ = marker.last_action;
+  crash::set_last_action("open");
   session_.open(path);
 }
 
 void MainWindow::on_open_action() {
-  const QString path = QFileDialog::getOpenFileName(this, tr("Open PDF"), QString(),
+  const QString path = QFileDialog::getOpenFileName(this, tr("Open PDF"), start_dir(DirKind::kOpen),
                                                     tr("PDF documents (*.pdf);;All files (*)"));
   if (!path.isEmpty()) open_file(path);
 }
@@ -407,6 +448,7 @@ void MainWindow::on_opened(const QString& path, int page_count) {
   }
   if (page_count <= 0) {
     print_unlock_.reset();
+    settings_->clear_session_marker();  // (#131)
     if (!screenshot_path_.isEmpty()) {
       fail_screenshot(QStringLiteral("no pages"));
       return;
@@ -430,8 +472,16 @@ void MainWindow::on_opened(const QString& path, int page_count) {
   page_spin_->setRange(1, page_count);
   page_spin_->setEnabled(true);
   page_total_label_->setText(tr("/ %1").arg(page_count));
+  const StartZoom start_zoom = settings_->start_zoom();  // set_document 전에 읽는다 (#129)
+  const ZoomKind last_kind = settings_->last_zoom_kind();
+  const double last_zoom = settings_->last_zoom();
   view_->set_document(session_.handle(), dispatcher_);
+  apply_start_zoom(start_zoom, last_kind, last_zoom);
   view_->setFocus();
+  settings_->add_recent(path);
+  remember_dir(DirKind::kOpen, path);
+  settings_->set_session_stage(QStringLiteral("viewing"));  // (#131)
+  set_action(QStringLiteral("view"));
   discard_print_job();
   print_prefs_applied_ = false;
   update_print_action();
@@ -710,10 +760,12 @@ void MainWindow::move_selection(int delta) {
 
 void MainWindow::on_insert_pages_action() {
   if (!insert_pages_action_->isEnabled() || !view_->has_document()) return;
-  const QString path = QFileDialog::getOpenFileName(this, tr("PDF to Insert Pages From"),
-                                                    QFileInfo(session_.path()).absolutePath(),
-                                                    tr("PDF documents (*.pdf)"));
+  const QString path = QFileDialog::getOpenFileName(
+      this, tr("PDF to Insert Pages From"),
+      start_dir(DirKind::kInsert, QFileInfo(session_.path()).absolutePath()),
+      tr("PDF documents (*.pdf)"));
   if (path.isEmpty()) return;
+  remember_dir(DirKind::kInsert, path);
   insert_pages_from(path, std::max(0, view_->current_page()) + 1);  // 현재 쪽 뒤
 }
 
@@ -795,21 +847,6 @@ void MainWindow::on_edit_failed(onpdf::ErrorCode code, const QString& message) {
 // ---------------------------------------------------------------- 주석
 
 namespace {
-
-constexpr engine::Color kPalette[] = {
-    {255, 255, 0, 255},   {0, 200, 0, 255}, {0, 150, 255, 255},
-    {255, 105, 180, 255}, {255, 0, 0, 255}, {255, 140, 0, 255},
-};
-// 번역 문맥은 사용하는 곳(MainWindow::tr)과 같아야 한다 — QT_TR_NOOP 는 이 익명 이름공간을 문맥으로
-// 잡는다
-const char* const kPaletteNames[] = {
-    QT_TRANSLATE_NOOP("onpdf::app::MainWindow", "Yellow"),
-    QT_TRANSLATE_NOOP("onpdf::app::MainWindow", "Green"),
-    QT_TRANSLATE_NOOP("onpdf::app::MainWindow", "Blue"),
-    QT_TRANSLATE_NOOP("onpdf::app::MainWindow", "Pink"),
-    QT_TRANSLATE_NOOP("onpdf::app::MainWindow", "Red"),
-    QT_TRANSLATE_NOOP("onpdf::app::MainWindow", "Orange"),
-};
 
 QIcon color_icon(engine::Color c) {
   QPixmap pm(16, 16);
@@ -901,7 +938,7 @@ void MainWindow::build_annotation_ui() {
   color_button_->setPopupMode(QToolButton::InstantPopup);
   auto* palette = new QMenu(color_button_);
   QMenu* color_menu = menu->addMenu(tr("&Color"));
-  for (int i = 0; i < 6; ++i) {
+  for (int i = 0; i < kPaletteSize; ++i) {
     const engine::Color c = kPalette[i];
     for (QMenu* m : {palette, color_menu}) {
       QAction* a = m->addAction(color_icon(c), tr(kPaletteNames[i]));
@@ -1029,6 +1066,7 @@ void MainWindow::set_annotation_border_width(double width) {
     return;
   }
   shape_border_width_ = width;
+  settings_->set_border_width(width);  // (#129) — changed → apply_settings 는 같은 값이라 no-op
   update_property_buttons();
 }
 
@@ -1042,12 +1080,13 @@ void MainWindow::set_annotation_opacity(std::uint8_t alpha) {
     return;
   }
   shape_alpha_ = alpha;
+  settings_->set_opacity_percent((alpha * 100 + 127) / 255);  // (#129)
   update_property_buttons();
 }
 
 std::string MainWindow::annotation_author() const {
-  // OS 로그인 이름은 개인 정보라 파일에 쓰지 않는다. 작성자 설정 화면(M5)이 생기면 그 값을 쓴다
-  return {};
+  // OS 로그인 이름은 개인 정보라 파일에 쓰지 않는다. 설정의 작성자 이름(#129, 기본 빈 값)만 쓴다
+  return settings_->author().toStdString();
 }
 
 void MainWindow::set_annotation_color(engine::Color color) {
@@ -1091,7 +1130,9 @@ void MainWindow::set_annotation_color(engine::Color color) {
     return;
   }
   annotation_color_ = color;
-  text_color_ = color;  // 새 텍스트도 같은 색 (기본값만 다르다: 텍스트는 검정)
+  text_color_ = color;                     // 새 텍스트도 같은 색 (기본값만 다르다: 텍스트는 검정)
+  settings_->set_annotation_color(color);  // (#129)
+  settings_->set_text_color(color);
   update_color_icon();
 }
 
@@ -1252,12 +1293,8 @@ void MainWindow::set_text_size(double size) {
     return;
   }
   text_size_ = size;
-  if (text_size_combo_ == nullptr) return;
-  const int index = text_size_combo_->findData(static_cast<int>(size));
-  if (index >= 0) {
-    QScopedValueRollback<bool> guard(syncing_text_size_, true);
-    text_size_combo_->setCurrentIndex(index);
-  }
+  settings_->set_text_size(static_cast<int>(std::lround(size)));  // (#129)
+  sync_text_size_combo();
 }
 
 void MainWindow::on_text_requested(int page, onpdf::Point pt) {
@@ -1354,8 +1391,10 @@ void MainWindow::on_text_delete_requested(int, const QString&) {
 void MainWindow::on_image_requested(int page, onpdf::Point pt) {
   if (!content_edits_allowed_) return;
   const QString path = QFileDialog::getOpenFileName(
-      this, tr("Insert Image"), QFileInfo(session_.path()).absolutePath(), image_file_filter());
+      this, tr("Insert Image"),
+      start_dir(DirKind::kImage, QFileInfo(session_.path()).absolutePath()), image_file_filter());
   if (path.isEmpty()) return;
+  remember_dir(DirKind::kImage, path);
   add_image_file(path, page, pt, false);
 }
 
@@ -1930,12 +1969,14 @@ void MainWindow::show_structure_progress(const QString& title) {
 
 void MainWindow::on_merge_action() {
   if (!merge_action_->isEnabled()) return;
-  const QString start_dir =
-      session_.has_document() ? QFileInfo(session_.path()).absolutePath() : QDir::homePath();
+  const QString merge_dir =
+      start_dir(DirKind::kMerge,
+                session_.has_document() ? QFileInfo(session_.path()).absolutePath() : QString());
   const QStringList files =
       QFileDialog::getOpenFileNames(this, tr("PDFs to merge (combined in the order chosen)"),
-                                    start_dir, tr("PDF documents (*.pdf)"));
+                                    merge_dir, tr("PDF documents (*.pdf)"));
   if (files.isEmpty()) return;
+  remember_dir(DirKind::kMerge, files.first());
   // 파일은 작업 스레드에서 읽는다 (큰 파일을 메인에서 열면 UI 가 멈춘다). 암호가 필요하면 결과로
   // 돌아와 묻고 다시 시도한다
   std::vector<engine::StructureInput> inputs;
@@ -2018,9 +2059,11 @@ void MainWindow::prompt_split() {
   dialog.setIntRange(1, std::max(1, count));
   dialog.setIntValue(1);
   if (dialog.exec() != QDialog::Accepted) return;
-  const QString dir = QFileDialog::getExistingDirectory(this, tr("Folder for the split files"),
-                                                        QFileInfo(session_.path()).absolutePath());
+  const QString dir = QFileDialog::getExistingDirectory(
+      this, tr("Folder for the split files"),
+      start_dir(DirKind::kSplit, QFileInfo(session_.path()).absolutePath()));
   if (dir.isEmpty()) return;
+  remember_dir(DirKind::kSplit, dir);
   split_document(dialog.intValue(), dir);
 }
 
@@ -2172,14 +2215,22 @@ void MainWindow::on_thumbnail_context_menu(const QPoint& global_pos,
   const int after = pages.back() + 1;
   QAction* ins_before =
       menu.addAction(tr("Insert Pages from File (Before)..."), this, [this, before] {
-        const QString path = QFileDialog::getOpenFileName(this, tr("PDF to Insert Pages From"),
-                                                          QString(), tr("PDF documents (*.pdf)"));
-        if (!path.isEmpty()) insert_pages_from(path, before);
+        const QString path = QFileDialog::getOpenFileName(
+            this, tr("PDF to Insert Pages From"),
+            start_dir(DirKind::kInsert, QFileInfo(session_.path()).absolutePath()),
+            tr("PDF documents (*.pdf)"));
+        if (path.isEmpty()) return;
+        remember_dir(DirKind::kInsert, path);
+        insert_pages_from(path, before);
       });
   QAction* ins_after = menu.addAction(tr("Insert Pages from File (After)..."), this, [this, after] {
-    const QString path = QFileDialog::getOpenFileName(this, tr("PDF to Insert Pages From"),
-                                                      QString(), tr("PDF documents (*.pdf)"));
-    if (!path.isEmpty()) insert_pages_from(path, after);
+    const QString path = QFileDialog::getOpenFileName(
+        this, tr("PDF to Insert Pages From"),
+        start_dir(DirKind::kInsert, QFileInfo(session_.path()).absolutePath()),
+        tr("PDF documents (*.pdf)"));
+    if (path.isEmpty()) return;
+    remember_dir(DirKind::kInsert, path);
+    insert_pages_from(path, after);
   });
   for (QAction* action : {del, cw, ccw, ins_before, ins_after}) action->setEnabled(enabled);
   menu.exec(global_pos);
@@ -2246,8 +2297,9 @@ bool MainWindow::save_to(const QString& path) {
 
 bool MainWindow::start_save(const QString& path, std::function<void()> then) {
   if (!session_.has_document() || path.isEmpty()) return false;
-  settle_form_edits();             // 입력 중인 칸까지 저장한다 (#51)
-  if (saving_ || edit_->busy()) {  // 몇 ms 의 창이지만 조용히 멈추지 않는다 (리뷰 I1)
+  set_action(QStringLiteral("save"));  // (#131)
+  settle_form_edits();                 // 입력 중인 칸까지 저장한다 (#51)
+  if (saving_ || edit_->busy()) {      // 몇 ms 의 창이지만 조용히 멈추지 않는다 (리뷰 I1)
     show_transient(tr("Cannot save right now. Try again in a moment"));
     return false;
   }
@@ -2291,7 +2343,9 @@ bool MainWindow::start_save(const QString& path, std::function<void()> then) {
             return;
           }
           window->session_.set_path(path);
-          window->edit_->mark_saved();  // state_changed → 제목·동작 갱신
+          window->edit_->mark_saved();          // state_changed → 제목·동작 갱신
+          window->settings_->add_recent(path);  // (#129)
+          window->remember_dir(DirKind::kSave, path);
           window->show_transient(
               (*shared)->incremental
                   ? MainWindow::tr("Saved (incrementally, to keep the signature)")
@@ -2344,6 +2398,8 @@ void MainWindow::closeEvent(QCloseEvent* event) {
       event->ignore();
       return;
     }
+    save_window_state();                // 실제로 닫히는 유일한 경로 (#129)
+    settings_->clear_session_marker();  // 정상 종료 (#131)
     event->accept();
     return;
   }
@@ -2777,12 +2833,14 @@ void MainWindow::on_password_required(const QString& path) {
                             QLineEdit::Password, QString(), &ok);
   if (!ok) {
     show_transient(tr("Cancel Opening"));
+    settings_->clear_session_marker();  // (#131)
     return;
   }
   session_.open(path, password);
 }
 
 void MainWindow::on_open_failed(const QString& path, const QString& message) {
+  settings_->clear_session_marker();  // (#131)
   print_unlock_.reset();
   if (!screenshot_path_.isEmpty()) {
     fail_screenshot(message);
@@ -2861,7 +2919,266 @@ void MainWindow::on_current_page_changed(int page) {
 }
 
 void MainWindow::on_zoom_changed(double) {
+  if (view_->has_document()) {  // "마지막 값" 시작 배율용 (#129)
+    const ZoomMode mode = view_->zoom_mode();
+    settings_->set_last_zoom(mode == ZoomMode::kFitPage  ? ZoomKind::kFitPage
+                             : mode == ZoomMode::kCustom ? ZoomKind::kCustom
+                                                         : ZoomKind::kFitWidth,
+                             view_->zoom());
+  }
   refresh_status();
+}
+
+// ---------------------------------------------------------------- 설정 (#129)
+
+void MainWindow::apply_settings() {
+  if (!settings_->writable() && !settings_write_warned_) {
+    settings_write_warned_ = true;
+    show_transient(tr("Settings cannot be saved"));
+  }
+  // 편집 기본값 — 값이 같으면 건드리지 않는다 (툴바 setter 가 설정에 쓴 뒤 돌아오는 changed)
+  bool properties_changed = false;
+  if (const double w = settings_->border_width(); w != shape_border_width_) {
+    shape_border_width_ = w;
+    properties_changed = true;
+  }
+  if (const std::uint8_t a = settings_->opacity_alpha(); a != shape_alpha_) {
+    shape_alpha_ = a;
+    properties_changed = true;
+  }
+  if (const engine::Color c = settings_->annotation_color(); c != annotation_color_) {
+    annotation_color_ = c;
+    if (color_button_ != nullptr) update_color_icon();
+  }
+  text_color_ = settings_->text_color();
+  if (const double size = settings_->text_size(); size != text_size_) {
+    text_size_ = size;
+    properties_changed = true;
+  }
+  if (properties_changed) {
+    sync_text_size_combo();
+    update_property_buttons();
+  }
+  if (const int seconds = settings_->stall_seconds(); seconds != applied_stall_seconds_) {
+    applied_stall_seconds_ = seconds;
+    stall_threshold_ = std::chrono::seconds(seconds);
+  }
+  if (view_ != nullptr)
+    view_->set_cache_limit(static_cast<std::size_t>(settings_->cache_mb()) << 20);
+}
+
+void MainWindow::sync_text_size_combo() {
+  if (text_size_combo_ == nullptr) return;
+  const int index = text_size_combo_->findData(static_cast<int>(std::lround(text_size_)));
+  if (index >= 0 && index != text_size_combo_->currentIndex()) {
+    QScopedValueRollback<bool> guard(syncing_text_size_, true);
+    text_size_combo_->setCurrentIndex(index);
+  }
+}
+
+void MainWindow::apply_start_zoom(StartZoom start, ZoomKind last_kind, double last_zoom) {
+  switch (start) {
+    case StartZoom::kFitWidth:
+      view_->set_zoom_mode(ZoomMode::kFitWidth);
+      break;
+    case StartZoom::kFitPage:
+      view_->set_zoom_mode(ZoomMode::kFitPage);
+      break;
+    case StartZoom::kActualSize:
+      view_->set_zoom(1.0);
+      break;
+    case StartZoom::kLast:
+      switch (last_kind) {
+        case ZoomKind::kFitWidth:
+          view_->set_zoom_mode(ZoomMode::kFitWidth);
+          break;
+        case ZoomKind::kFitPage:
+          view_->set_zoom_mode(ZoomMode::kFitPage);
+          break;
+        case ZoomKind::kCustom:
+          view_->set_zoom(last_zoom);
+          break;
+      }
+      break;
+  }
+}
+
+void MainWindow::restore_window_state() {
+  const QByteArray geometry = settings_->window_geometry();
+  if (geometry.isEmpty() || !restoreGeometry(geometry)) resize(900, 1000);
+  const QByteArray splitter = settings_->splitter_state();
+  if (!splitter.isEmpty()) splitter_->restoreState(splitter);
+  bool visible = true;
+  switch (settings_->sidebar_start()) {
+    case SidebarStart::kVisible:
+      visible = true;
+      break;
+    case SidebarStart::kHidden:
+      visible = false;
+      break;
+    case SidebarStart::kLast:
+      visible = settings_->sidebar_visible();
+      break;
+  }
+  if (sidebar_action_ != nullptr) sidebar_action_->setChecked(visible);  // 액션을 트리거하지 않는다
+  sidebar_->setVisible(visible);
+}
+
+void MainWindow::save_window_state() {
+  settings_->set_window_geometry(saveGeometry());
+  settings_->set_splitter_state(splitter_->saveState());
+  settings_->sync();
+}
+
+void MainWindow::rebuild_recent_menu() {
+  if (recent_menu_ == nullptr) return;
+  recent_menu_->clear();
+  const QStringList files = settings_->recent_files();
+  for (const QString& path : files) {
+    QAction* action = recent_menu_->addAction(QFileInfo(path).fileName());
+    action->setToolTip(path);
+    action->setData(path);
+    connect(action, &QAction::triggered, this, [this, path] { open_file(path); });
+  }
+  if (files.isEmpty()) {
+    QAction* none = recent_menu_->addAction(tr("(none)"));
+    none->setEnabled(false);
+  }
+  recent_menu_->addSeparator();
+  QAction* clear = recent_menu_->addAction(tr("&Clear List"), this, [this] {
+    settings_->clear_recent();
+    rebuild_recent_menu();
+  });
+  clear->setObjectName(QStringLiteral("recent_clear"));
+  clear->setEnabled(!files.isEmpty());
+}
+
+QString MainWindow::start_dir(DirKind kind, const QString& preferred) const {
+  if (!preferred.isEmpty() && QFileInfo(preferred).isDir()) return preferred;
+  const QString last = settings_->last_dir(kind);
+  return last.isEmpty() ? QDir::homePath() : last;
+}
+
+void MainWindow::remember_dir(DirKind kind, const QString& file_or_dir) {
+  if (file_or_dir.isEmpty()) return;
+  const QFileInfo info(file_or_dir);
+  settings_->set_last_dir(kind, info.isDir() ? info.absoluteFilePath() : info.absolutePath());
+}
+
+void MainWindow::open_preferences() {
+  SettingsDialog dialog(*settings_, this);
+  connect(&dialog, &SettingsDialog::language_changed, this, [this] {
+    auto* box = new QMessageBox(QMessageBox::Information, tr("Language"),
+                                tr("The language will change the next time OnPdf starts."),
+                                QMessageBox::Ok, this);
+    box->setObjectName(QStringLiteral("language_restart_notice"));
+    box->setWindowModality(Qt::NonModal);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    box->show();
+  });
+  dialog.exec();
+}
+
+// ---------------------------------------------------------------- 충돌 보고 (#131)
+
+void MainWindow::set_action(const QString& action) {
+  if (action == last_action_) return;
+  last_action_ = action;
+  settings_->set_session_last_action(action);
+  crash::set_last_action(action.toUtf8().constData());
+}
+
+void MainWindow::open_report_folder() {
+  QDir dir = report_dir();
+  if (!dir.exists() && !dir.mkpath(QStringLiteral("."))) {
+    show_transient(tr("Cannot create the report folder: %1").arg(dir.absolutePath()));
+    return;
+  }
+  if (!QDesktopServices::openUrl(QUrl::fromLocalFile(dir.absolutePath()))) {
+    show_transient(tr("Cannot open the folder: %1").arg(dir.absolutePath()));
+  }
+}
+
+bool MainWindow::maybe_show_crash_notice(const QString& cli_file) {
+  const SessionMarker marker = settings_->session_marker();
+  if (!marker.valid()) {
+    if (!marker.stage.isEmpty() || !marker.path.isEmpty()) settings_->clear_session_marker();
+    return true;
+  }
+  settings_->clear_session_marker();  // 안내는 한 번만
+  const QString file_name = QFileInfo(marker.path).fileName();
+  const bool same_as_cli =
+      !cli_file.isEmpty() && QFileInfo(cli_file).absoluteFilePath() == marker.path;
+  if (!settings_->crash_notice()) {
+    show_transient(tr("OnPdf did not exit normally last time (%1)").arg(file_name));
+    return true;
+  }
+  const std::optional<CrashRecord> record = latest_record_since(report_dir(), marker.since);
+  const QString when = QLocale().toString(marker.since, QLocale::ShortFormat);
+  QString text = tr("Last time, OnPdf quit unexpectedly while %1 '%2' (%3).")
+                     .arg(stage_text(marker.stage), file_name, when);
+  if (record) text += QLatin1Char('\n') + tr("Signal: %1").arg(record->signal_text);
+  if (!marker.version.isEmpty() && marker.version != app_version())
+    text += QLatin1Char('\n') + tr("That was version %1.").arg(marker.version);
+
+  QString details =
+      tr("Last action: %1")
+          .arg(record && !record->last_action.isEmpty() ? record->last_action : marker.last_action);
+  details += QLatin1Char('\n') + tr("Report folder: %1").arg(report_dir().absolutePath());
+  details += QLatin1Char('\n') +
+             tr("OnPdf %1 · PDFium %2 · Qt %3")
+                 .arg(app_version(), pdfium_version(), QString::fromLatin1(qVersion()));
+
+  const bool can_reopen = !marker.path.isEmpty() && QFileInfo::exists(marker.path);
+  bool open_again = false;
+  bool dont_show = false;
+  for (;;) {  // ActionRole 버튼은 상자를 닫으므로 폴더·URL 을 연 뒤 다시 띄운다
+    QMessageBox box(QMessageBox::Warning, tr("OnPdf did not exit normally"), text,
+                    QMessageBox::NoButton, this);
+    box.setObjectName(QStringLiteral("crash_notice"));
+    box.setInformativeText(
+        tr("The file may contain content PDFium cannot handle. You can open it again or leave "
+           "it closed. The report folder holds what you can attach to a bug report."));
+    box.setDetailedText(details);
+    auto* check = new QCheckBox(tr("Do not show this again"), &box);
+    check->setObjectName(QStringLiteral("crash_notice_dont_show"));
+    check->setChecked(dont_show);
+    box.setCheckBox(check);
+    QPushButton* reopen =
+        can_reopen ? box.addButton(tr("Open It Again"), QMessageBox::AcceptRole) : nullptr;
+    if (reopen != nullptr) reopen->setObjectName(QStringLiteral("crash_notice_open"));
+    QPushButton* leave = box.addButton(tr("Leave It Closed"), QMessageBox::RejectRole);
+    leave->setObjectName(QStringLiteral("crash_notice_leave"));
+    QPushButton* folder = box.addButton(tr("Open Report Folder"), QMessageBox::ActionRole);
+    folder->setObjectName(QStringLiteral("crash_notice_folder"));
+    QPushButton* issue = box.addButton(tr("Report an Issue..."), QMessageBox::ActionRole);
+    issue->setObjectName(QStringLiteral("crash_notice_issue"));
+    box.setDefaultButton(leave);
+    box.setEscapeButton(leave);
+    box.exec();
+    dont_show = check->isChecked();
+    QAbstractButton* clicked = box.clickedButton();
+    if (clicked == folder) {
+      open_report_folder();
+      continue;
+    }
+    if (clicked == issue) {
+      const QUrl url = issue_url(marker, record);
+      if (!QDesktopServices::openUrl(url)) {
+        QApplication::clipboard()->setText(url.toString());
+        show_transient(tr("Cannot open the browser; the issue link was copied to the clipboard"));
+      }
+      continue;
+    }
+    open_again = reopen != nullptr && clicked == reopen;
+    break;
+  }
+  if (dont_show) settings_->set_crash_notice(false);
+  if (open_again) {
+    const QString path = marker.path;
+    QTimer::singleShot(0, this, [this, path] { open_file(path); });
+  }
+  return !same_as_cli;  // 같은 파일: "다시 열기" 면 이미 예약했고, "열지 않기" 면 열지 않는다
 }
 
 // ---------------------------------------------------------------- 워커 멈춤 감시 (#121)
@@ -2915,7 +3232,12 @@ void MainWindow::show_stall_warning() {
   QPushButton* quit = box->addButton(tr("Force quit"), QMessageBox::DestructiveRole);
   box->addButton(tr("Keep waiting"), QMessageBox::RejectRole);
   connect(box, &QMessageBox::buttonClicked, this, [this, quit](QAbstractButton* clicked) {
-    if (clicked == quit) force_exit_(3);  // 워커가 join 되지 않으므로 소멸자 없이 끝낸다
+    if (clicked != quit) return;
+    // 다음 실행이 "강제 종료" 로 안내하게 표식을 남긴다 (#131). 핸들러는 _Exit 를 거치지 않는다
+    if (const auto running = worker_.running_task(); running && running->page >= 0)
+      settings_->set_session_last_action(QStringLiteral("render p.%1").arg(running->page + 1));
+    settings_->set_session_stage(QStringLiteral("forced-quit"));
+    force_exit_(3);  // 워커가 join 되지 않으므로 소멸자 없이 끝낸다
   });
   stall_box_ = box;
   box->show();
@@ -2933,6 +3255,11 @@ void MainWindow::on_tool_blocked(int page) {
 void MainWindow::show_hazard_notice() {
   const auto& hazards = session_.handle().info().hazards;
   if (hazards.empty()) return;
+  if (!settings_->hazard_notice()) {  // 설정에서 껐으면 상태 표시줄 한 줄만 (#129)
+    show_transient(tr("%n page(s) cannot be displayed (hazardous pattern)", nullptr,
+                      static_cast<int>(hazards.size())));
+    return;
+  }
   QStringList pages;
   for (const auto& h : hazards) pages << QString::number(h.page + 1);
   auto* box = new QMessageBox(
