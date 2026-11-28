@@ -98,7 +98,7 @@ jobs:
           arch: x64
       - uses: jurplel/install-qt-action@v4
         with:
-          version: "6.9.*"
+          version: "6.11.*"
           cache: true
       # ci.yml 과 같은 vcpkg 바이너리 캐시 (키가 같아 CI 가 만든 캐시를 재사용한다)
       - uses: actions/cache@v4
@@ -372,7 +372,8 @@ jobs:
       matrix:
         include:
           # 둘 다 arm64 러너(#108, 스파이크 #107): arm64 는 네이티브, x64 는 교차 빌드 + Rosetta self-test.
-          # Qt 는 공식 6.9.x(universal, minos 12) — Homebrew Qt 는 arm64 전용·러너 OS(14.x) 기준이라 못 쓴다
+          # Qt 는 공식 6.11.x(universal, minos 13 — 6.12 LTS 는 macOS 14 이상이라 쓰지 않는다, #159) — Homebrew Qt 는
+          # arm64 전용·러너 OS 기준이라 못 쓴다
           - { arch: arm64, cmake_arch: arm64,  triplet: arm64-osx-13, pdfium: mac-arm64, runner: "",             label: "Apple Silicon(arm64)" }
           - { arch: x64,   cmake_arch: x86_64, triplet: x64-osx-13,   pdfium: mac-x64,   runner: "arch -x86_64", label: "Intel(x86_64)" }
     env:
@@ -385,7 +386,7 @@ jobs:
       - uses: lukka/get-cmake@latest
       - uses: jurplel/install-qt-action@v4
         with:
-          version: "6.9.*"
+          version: "6.11.*"
           cache: true
       - uses: actions/cache@v4
         with:

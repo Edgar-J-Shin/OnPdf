@@ -29,12 +29,13 @@ jobs:
         with:
           arch: x64
 
-      # 릴리스와 같은 공식 Qt 6.9.x (#108). 6.8 의 macOS 바이너리는 SDK 에서 빠진 AGL 을 링크해 실패했고 6.9 에서 고쳐졌다
+      # 릴리스와 같은 공식 Qt 6.11.x (#108, #159). 6.8 의 macOS 바이너리는 SDK 에서 빠진 AGL 을 링크해 실패했고 6.9 에서
+      # 고쳐졌다. 6.9 는 2026-03-31 지원 종료, 6.12 LTS 는 macOS 14 이상이라 최소 13 을 지키는 마지막 판이 6.11 이다
       - name: Install Qt
         if: matrix.qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: "6.9.*"
+          version: "6.11.*"
           cache: true
 
       # vcpkg 바이너리 캐시 (qpdf·zlib·libjpeg-turbo 소스 빌드를 매번 반복하지 않게). vcpkg 의 x-gha 백엔드는 제거됐으므로
@@ -95,7 +96,7 @@ jobs:
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: "6.9.*"
+          version: "6.11.*"
           cache: true
       # vcpkg 바이너리 캐시 (qpdf·zlib·libjpeg-turbo 소스 빌드를 매번 반복하지 않게). vcpkg 의 x-gha 백엔드는 제거됐으므로
       # files 백엔드 디렉터리를 actions/cache 로 보존한다
