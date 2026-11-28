@@ -2,6 +2,7 @@
 #include "onpdf/core/platform/path.h"
 
 #include "../test_support.h"
+#include "dialog_helpers.h"
 #include "document_view.h"
 #include "main_window.h"
 #include "print_job.h"
@@ -34,7 +35,10 @@
 namespace onpdf::app {
 namespace {
 
+using onpdf::test::find_any_dialog;
+using onpdf::test::open_dialog_count;
 using onpdf::test::testdata;
+using onpdf::test::when_dialog;
 
 template <class Pred>
 bool spin_until(Pred pred, int timeout_ms = 20000) {
@@ -285,7 +289,7 @@ struct UnlockDriver {
   explicit UnlockDriver(QStringList pw) : passwords(std::move(pw)) {
     poll.setInterval(10);
     QObject::connect(&poll, &QTimer::timeout, &poll, [this] {
-      QWidget* modal = QApplication::activeModalWidget();
+      QWidget* modal = find_any_dialog();
       if (modal == nullptr) return;
       if (auto* box = qobject_cast<QMessageBox*>(modal);
           box != nullptr && box->objectName() == QStringLiteral("print_unlock_question")) {
@@ -327,7 +331,7 @@ TEST_F(PrintTest, OwnerPasswordUnlocksPrinting) {
   // 소유자 암호로 다시 열리면 권한이 전부 켜진다
   ASSERT_TRUE(spin_until([&] {
     return window_.print_action()->statusTip() == mw_tr("Print the document") &&
-           QApplication::activeModalWidget() == nullptr;
+           open_dialog_count() == 0;
   }));
   EXPECT_TRUE(driver.question_seen);
   ASSERT_EQ(driver.labels.size(), 1);
@@ -347,7 +351,7 @@ TEST_F(PrintTest, WrongPermissionsPasswordAsksAgainAndCancelKeepsDocument) {
   window_.print_action()->trigger();
   ASSERT_TRUE(spin_until([&] { return driver.labels.size() >= 2; }));
   EXPECT_TRUE(driver.labels[1].startsWith(mw_tr("Wrong password.")));
-  ASSERT_TRUE(spin_until([&] { return QApplication::activeModalWidget() == nullptr; }));
+  ASSERT_TRUE(spin_until([&] { return open_dialog_count() == 0; }));
   EXPECT_TRUE(window_.document_view()->has_document()) << "틀린 암호는 기존 문서를 유지한다";
   EXPECT_EQ(window_.print_action()->statusTip(),
             mw_tr("This document does not allow printing. You can unlock it with its permissions "
@@ -361,7 +365,7 @@ TEST_F(PrintTest, UserPasswordIsNotThePermissionsPassword) {
   window_.print_action()->trigger();
   ASSERT_TRUE(spin_until([&] { return driver.labels.size() >= 2; }));
   EXPECT_TRUE(driver.labels[1].startsWith(mw_tr("That is not the permissions password.")));
-  ASSERT_TRUE(spin_until([&] { return QApplication::activeModalWidget() == nullptr; }));
+  ASSERT_TRUE(spin_until([&] { return open_dialog_count() == 0; }));
   EXPECT_TRUE(window_.document_view()->has_document());
   EXPECT_EQ(driver.print_dialogs_closed, 0);
 }
@@ -379,7 +383,7 @@ TEST_F(PrintTest, ModifiedDocumentAsksToSaveBeforeUnlock) {
   QTimer poll;
   poll.setInterval(10);
   QObject::connect(&poll, &QTimer::timeout, &poll, [&] {
-    auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+    auto* box = qobject_cast<QMessageBox*>(find_any_dialog());
     if (box == nullptr) return;
     if (box->objectName() == QStringLiteral("print_unlock_question")) {
       for (QAbstractButton* button : box->buttons()) {
@@ -393,7 +397,7 @@ TEST_F(PrintTest, ModifiedDocumentAsksToSaveBeforeUnlock) {
   poll.start();
   window_.print_action()->trigger();
   ASSERT_TRUE(spin_until([&] { return save_question; }));
-  ASSERT_TRUE(spin_until([&] { return QApplication::activeModalWidget() == nullptr; }));
+  ASSERT_TRUE(spin_until([&] { return open_dialog_count() == 0; }));
   EXPECT_TRUE(window_.edit_controller()->is_modified()) << "취소하면 문서는 그대로다";
 }
 
@@ -467,11 +471,9 @@ void send_drag_enter(QWidget& target, QPointF at, QMimeData& mime) {
 // 인쇄 중 확인 대화상자("print_busy_question")에 자동으로 답한다. cancel_and_open=false 면 "인쇄
 // 계속하기"
 void answer_print_question(bool cancel_and_open, bool* asked) {
-  auto* poll = new QTimer();
-  poll->setInterval(10);
-  QObject::connect(poll, &QTimer::timeout, poll, [poll, cancel_and_open, asked] {
-    auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
-    if (box == nullptr || box->objectName() != QStringLiteral("print_busy_question")) return;
+  when_dialog("print_busy_question", [cancel_and_open, asked](QWidget* w) {
+    auto* box = qobject_cast<QMessageBox*>(w);
+    if (box == nullptr) return;
     *asked = true;
     for (QAbstractButton* button : box->buttons()) {
       const auto role = box->buttonRole(button);
@@ -481,9 +483,7 @@ void answer_print_question(bool cancel_and_open, bool* asked) {
         break;
       }
     }
-    poll->deleteLater();
   });
-  poll->start();
 }
 
 // 인쇄 중 새 문서를 열려 하면 먼저 묻는다: "인쇄 계속하기" 면 열지 않고, "인쇄 취소하고 열기" 면

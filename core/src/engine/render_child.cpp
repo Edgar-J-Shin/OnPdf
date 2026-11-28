@@ -210,6 +210,7 @@ int run_render_child(int argc, char** argv) {
   platform::Pipe in = platform::Pipe::from_native_string(argv[2]);
   platform::Pipe out = platform::Pipe::from_native_string(argv[3]);
   if (!in.valid() || !out.valid()) return 2;
+  platform::exit_when_parent_dies();  // 부모가 죽으면 멈춘 렌더 중이라도 끝난다 (#145)
   Child child(std::move(in), std::move(out));
   return child.run();
 }

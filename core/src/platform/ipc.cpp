@@ -3,6 +3,7 @@
 #include "onpdf/core/platform/path.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <thread>
@@ -480,6 +481,8 @@ long long current_process_id() noexcept {
   return static_cast<long long>(GetCurrentProcessId());
 }
 
+void exit_when_parent_dies() {}  // Job 객체(KILL_ON_JOB_CLOSE)가 처리한다
+
 #else  // POSIX
 
 std::pair<std::string, std::string> ChildProcess::child_handle_strings(Spawn& spawn) {
@@ -568,6 +571,16 @@ int ChildProcess::wait(std::chrono::milliseconds timeout) {
 
 long long current_process_id() noexcept {
   return static_cast<long long>(getpid());
+}
+
+void exit_when_parent_dies() {
+  const pid_t parent = getppid();
+  std::thread([parent] {
+    for (;;) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+      if (getppid() != parent) _exit(0);  // 부모가 사라지면 ppid 가 바뀐다 (1 또는 launchd 등)
+    }
+  }).detach();
 }
 
 #endif

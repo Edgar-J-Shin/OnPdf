@@ -40,6 +40,7 @@ namespace onpdf::app {
 namespace {
 
 using namespace std::chrono_literals;
+using onpdf::test::find_any_dialog;
 using onpdf::test::find_dialog;
 using onpdf::test::testdata;
 using onpdf::test::when_dialog;
@@ -185,7 +186,7 @@ TEST_F(CrashReportTest, MarkerLifecycle) {
   QTimer closer;
   closer.setInterval(10);
   QObject::connect(&closer, &QTimer::timeout, &closer, [] {
-    if (auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) box->accept();
+    if (auto* box = qobject_cast<QMessageBox*>(find_any_dialog())) box->accept();
   });
   closer.start();
   window_->open_file(qpath(testdata("truncated.pdf")));

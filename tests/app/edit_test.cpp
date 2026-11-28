@@ -8,6 +8,7 @@
 #include "onpdf/edit/command.h"
 
 #include "../test_support.h"
+#include "dialog_helpers.h"
 #include "document_view.h"
 #include "file_open_filter.h"
 #include "main_window.h"
@@ -37,6 +38,8 @@
 namespace onpdf::app {
 namespace {
 
+using onpdf::test::answer_input_dialog;
+using onpdf::test::answer_message_box;
 using onpdf::test::read_bytes;
 using onpdf::test::ScopedTempDir;
 using onpdf::test::testdata;
@@ -59,25 +62,6 @@ bool spin_until(Pred pred, int timeout_ms = 30000) {
   if (pred()) return true;
   loop.exec();
   return !timed_out;
-}
-
-// 이름이 object_name 인 메시지 상자가 뜨면 role 버튼을 누른다. 눌렀으면 *answered = true
-void answer_dialog(const char* object_name, QMessageBox::ButtonRole role, bool* answered) {
-  auto* poll = new QTimer();
-  poll->setInterval(10);
-  QObject::connect(poll, &QTimer::timeout, poll, [poll, object_name, role, answered] {
-    auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
-    if (box == nullptr || box->objectName() != QString::fromLatin1(object_name)) return;
-    for (QAbstractButton* button : box->buttons()) {
-      if (box->buttonRole(button) == role) {
-        *answered = true;
-        button->click();
-        break;
-      }
-    }
-    poll->deleteLater();
-  });
-  poll->start();
 }
 
 class EditTest : public ::testing::Test {
@@ -193,7 +177,7 @@ TEST_F(EditTest, SaveFailureKeepsModifiedAndReports) {
   ASSERT_TRUE(open("simple.pdf"));
   ASSERT_TRUE(rotate(1));
   bool reported = false;
-  answer_dialog("save_failed", QMessageBox::AcceptRole, &reported);
+  answer_message_box("save_failed", QMessageBox::AcceptRole, &reported);
   ASSERT_TRUE(window_.save_to(
       QString::fromStdString(onpdf::path_to_utf8(dir_ / "no-such-folder" / "x.pdf"))));
   ASSERT_TRUE(spin_until([&] { return reported && !window_.saving(); }));
@@ -206,7 +190,7 @@ TEST_F(EditTest, CloseAsksAndHonoursEachAnswer) {
 
   // 취소 → 닫히지 않음
   bool asked = false;
-  answer_dialog("save_changes_question", QMessageBox::RejectRole, &asked);
+  answer_message_box("save_changes_question", QMessageBox::RejectRole, &asked);
   window_.close();
   ASSERT_TRUE(spin_until([&] { return asked; }));
   QApplication::processEvents();
@@ -214,7 +198,7 @@ TEST_F(EditTest, CloseAsksAndHonoursEachAnswer) {
 
   // 저장 → 원래 경로에 저장한 뒤 닫힘
   asked = false;
-  answer_dialog("save_changes_question", QMessageBox::AcceptRole, &asked);
+  answer_message_box("save_changes_question", QMessageBox::AcceptRole, &asked);
   window_.close();
   ASSERT_TRUE(spin_until([&] { return asked && !window_.isVisible(); }));
   EXPECT_DOUBLE_EQ(saved_page0_width(copy), 792.0);
@@ -225,7 +209,7 @@ TEST_F(EditTest, DiscardOnCloseLeavesFileUntouched) {
   const auto before = read_bytes(copy);
   ASSERT_TRUE(rotate(1));
   bool asked = false;
-  answer_dialog("save_changes_question", QMessageBox::DestructiveRole, &asked);  // 저장 안 함
+  answer_message_box("save_changes_question", QMessageBox::DestructiveRole, &asked);  // 저장 안 함
   window_.close();
   ASSERT_TRUE(spin_until([&] { return asked && !window_.isVisible(); }));
   EXPECT_EQ(read_bytes(copy), before);
@@ -235,14 +219,14 @@ TEST_F(EditTest, OpeningAnotherDocumentAsksToSave) {
   ASSERT_TRUE(open("simple.pdf"));
   ASSERT_TRUE(rotate(1));
   bool asked = false;
-  answer_dialog("save_changes_question", QMessageBox::RejectRole, &asked);  // 취소
+  answer_message_box("save_changes_question", QMessageBox::RejectRole, &asked);  // 취소
   window_.open_file(QString::fromStdString(onpdf::path_to_utf8(testdata("bookmarks.pdf"))));
   EXPECT_TRUE(asked);
   EXPECT_TRUE(window_.windowTitle().contains(QStringLiteral("simple.pdf")));
   EXPECT_TRUE(window_.isWindowModified());
 
   asked = false;
-  answer_dialog("save_changes_question", QMessageBox::DestructiveRole, &asked);  // 저장 안 함
+  answer_message_box("save_changes_question", QMessageBox::DestructiveRole, &asked);  // 저장 안 함
   ASSERT_TRUE(open("bookmarks.pdf"));
   EXPECT_TRUE(asked);
   EXPECT_FALSE(window_.isWindowModified());
@@ -289,16 +273,7 @@ TEST_F(EditTest, SavingReadOnlyFileExplainsAndKeepsOriginal) {
   }
   ASSERT_TRUE(rotate(1));
   QString message;
-  auto* poll = new QTimer();
-  poll->setInterval(10);
-  QObject::connect(poll, &QTimer::timeout, poll, [poll, &message] {
-    auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
-    if (box == nullptr || box->objectName() != QStringLiteral("save_failed")) return;
-    message = box->text();
-    box->accept();
-    poll->deleteLater();
-  });
-  poll->start();
+  answer_message_box("save_failed", QMessageBox::AcceptRole, nullptr, &message);
   window_.save_action()->trigger();
   ASSERT_TRUE(spin_until([&] { return !message.isEmpty() && !window_.saving(); }));
   EXPECT_TRUE(message.contains(QStringLiteral("다른 이름으로 저장"))) << message.toStdString();
@@ -371,16 +346,7 @@ TEST_F(EditTest, SavingIntoReadOnlyFolderExplains) {
   }
   ASSERT_TRUE(rotate(1));
   QString message;
-  auto* poll = new QTimer();
-  poll->setInterval(10);
-  QObject::connect(poll, &QTimer::timeout, poll, [poll, &message] {
-    auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
-    if (box == nullptr || box->objectName() != QStringLiteral("save_failed")) return;
-    message = box->text();
-    box->accept();
-    poll->deleteLater();
-  });
-  poll->start();
+  answer_message_box("save_failed", QMessageBox::AcceptRole, nullptr, &message);
   window_.save_action()->trigger();
   ASSERT_TRUE(spin_until([&] { return !message.isEmpty() && !window_.saving(); }));
   EXPECT_TRUE(message.contains(QStringLiteral("폴더"))) << message.toStdString();
@@ -578,17 +544,7 @@ TEST_F(PageOpsTest, InsertFromFileAndUndo) {
 TEST_F(PageOpsTest, InsertingEncryptedSourceAsksPassword) {
   open_copy("simple.pdf");
   bool asked = false;
-  auto* poll = new QTimer();
-  poll->setInterval(10);
-  QObject::connect(poll, &QTimer::timeout, poll, [poll, &asked] {
-    auto* dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
-    if (dialog == nullptr || dialog->objectName() != QStringLiteral("insert_password")) return;
-    asked = true;
-    dialog->setTextValue(QStringLiteral("user"));
-    dialog->accept();
-    poll->deleteLater();
-  });
-  poll->start();
+  answer_input_dialog("insert_password", QStringLiteral("user"), &asked);
   ASSERT_TRUE(window_.insert_pages_from(
       QString::fromStdString(onpdf::path_to_utf8(testdata("encrypted-aes256.pdf"))), 2));
   ASSERT_TRUE(
@@ -677,7 +633,7 @@ TEST_F(PageOpsTest, OutlineReloadedAfterDeleteKeepsTab) {
 TEST_F(PageOpsTest, SignatureWarningShownOnceThenProceeds) {
   open_copy("signed-dummy.pdf");
   bool warned = false;
-  answer_dialog("signature_warning", QMessageBox::AcceptRole, &warned);
+  answer_message_box("signature_warning", QMessageBox::AcceptRole, &warned);
   ASSERT_TRUE(window_.insert_pages_from(
       QString::fromStdString(onpdf::path_to_utf8(testdata("simple.pdf"))), 1));
   ASSERT_TRUE(spin_until([&] { return idle() && window_.document_view()->page_count() == 3; }));
@@ -690,7 +646,7 @@ TEST_F(PageOpsTest, SignatureWarningShownOnceThenProceeds) {
 TEST_F(PageOpsTest, SignatureWarningCancelLeavesDocument) {
   open_copy("signed-dummy.pdf");
   bool warned = false;
-  answer_dialog("signature_warning", QMessageBox::RejectRole, &warned);
+  answer_message_box("signature_warning", QMessageBox::RejectRole, &warned);
   EXPECT_FALSE(window_.insert_pages_from(
       QString::fromStdString(onpdf::path_to_utf8(testdata("simple.pdf"))), 1));
   EXPECT_TRUE(warned);

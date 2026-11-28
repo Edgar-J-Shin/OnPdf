@@ -6,8 +6,11 @@
 // 최상위 창을 직접 훑는다. 대기가 시간 초과하면 describe_open_windows() 로 무엇이 떠 있었는지
 // 남긴다.
 
+#include <QAbstractButton>
 #include <QApplication>
 #include <QDialog>
+#include <QInputDialog>
+#include <QMessageBox>
 #include <QString>
 #include <QTimer>
 #include <QWidget>
@@ -19,6 +22,14 @@ inline QWidget* find_dialog(const char* object_name) {
   for (QWidget* w : QApplication::topLevelWidgets()) {
     if (!w->isVisible() || w->objectName() != QLatin1String(object_name)) continue;
     if (w->isModal() || qobject_cast<QDialog*>(w) != nullptr) return w;
+  }
+  return nullptr;
+}
+
+// 보이는 최상위 대화상자 가운데 아무거나 (이름 무관). 없으면 nullptr
+inline QWidget* find_any_dialog() {
+  for (QWidget* w : QApplication::topLevelWidgets()) {
+    if (w->isVisible() && (w->isModal() || qobject_cast<QDialog*>(w) != nullptr)) return w;
   }
   return nullptr;
 }
@@ -47,6 +58,35 @@ void when_dialog(const char* object_name, Fn fn) {
     fn(w);
   });
   poll->start();
+}
+
+// 이름이 object_name 인 메시지 상자가 뜨면 role 버튼을 누른다. answered 에 눌렀는지, text 에 본문
+// (#145: activeModalWidget() 폴링 복사본들을 이것으로 — 활성화가 늦으면 exec() 가 영영 안 끝난다)
+inline void answer_message_box(const char* object_name, QMessageBox::ButtonRole role,
+                               bool* answered = nullptr, QString* text = nullptr) {
+  when_dialog(object_name, [role, answered, text](QWidget* w) {
+    auto* box = qobject_cast<QMessageBox*>(w);
+    if (box == nullptr) return;
+    if (text != nullptr) *text = box->text();
+    for (QAbstractButton* button : box->buttons()) {
+      if (box->buttonRole(button) != role) continue;
+      if (answered != nullptr) *answered = true;
+      button->click();
+      break;
+    }
+  });
+}
+
+// 이름이 object_name 인 입력 대화상자가 뜨면 text 를 넣고 확인한다
+inline void answer_input_dialog(const char* object_name, const QString& text,
+                                bool* answered = nullptr) {
+  when_dialog(object_name, [text, answered](QWidget* w) {
+    auto* dialog = qobject_cast<QInputDialog*>(w);
+    if (dialog == nullptr) return;
+    if (answered != nullptr) *answered = true;
+    dialog->setTextValue(text);
+    dialog->accept();
+  });
 }
 
 // 시간 초과 진단용: 보이는 최상위 창 목록
