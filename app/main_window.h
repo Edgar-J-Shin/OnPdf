@@ -13,6 +13,7 @@
 #include "edit_controller.h"
 #include "font_catalog_loader.h"
 #include "print_job.h"
+#include "settings.h"
 #include "structure_job.h"
 #include <QColor>
 #include <QImage>
@@ -169,6 +170,13 @@ class MainWindow : public QMainWindow {
   void set_stall_threshold(std::chrono::milliseconds threshold) { stall_threshold_ = threshold; }
   void set_force_exit_hook(std::function<void(int code)> hook) { force_exit_ = std::move(hook); }
   [[nodiscard]] bool worker_stalled() const;
+  [[nodiscard]] std::chrono::milliseconds stall_threshold() const noexcept {
+    return stall_threshold_;
+  }
+  // 사용자 설정 (#129). 창이 소유하고 툴바 기본값·창 상태·최근 파일을 여기에 쓴다
+  [[nodiscard]] Settings& settings() noexcept { return *settings_; }
+  void open_preferences();  // 설정 대화상자 (모달)
+  [[nodiscard]] QMenu* recent_menu() const noexcept { return recent_menu_; }
 
  protected:
   void closeEvent(QCloseEvent* event) override;
@@ -294,10 +302,22 @@ class MainWindow : public QMainWindow {
   void on_page_refused(int page, const QString& reason);
   void on_tool_blocked(int page);
   void show_hazard_notice();  // 열 때 위험 쪽 목록 안내 (objectName render_hazards_notice)
+  // 설정 (#129)
+  void apply_settings();  // 편집 기본값·툴바·캐시·멈춤 초 (Settings::changed)
+  // 문서를 열 때 시작 배율. set_document 가 zoom_changed 를 내 "마지막 값" 을 덮어쓰므로 값은 그
+  // 전에 읽어 넘긴다
+  void apply_start_zoom(StartZoom start, ZoomKind last_kind, double last_zoom);
+  void restore_window_state();  // 생성자 끝: 창 크기·분할·사이드바
+  void save_window_state();     // closeEvent 가 accept 하기 직전
+  void rebuild_recent_menu();   // 파일 > 최근 파일 (aboutToShow)
+  void sync_text_size_combo();  // text_size_ 를 콤보에 비춘다
+  [[nodiscard]] QString start_dir(DirKind kind, const QString& preferred = {}) const;
+  void remember_dir(DirKind kind, const QString& file_or_dir);
   void set_document_status(const QString& text);  // 문서 정보 (지속)
   void show_transient(const QString& text);       // 진행·오류 안내 (몇 초 뒤 사라짐)
   void fail_screenshot(const QString& reason);    // --screenshot 모드에서 실패 시 종료
 
+  std::unique_ptr<Settings> settings_;  // 가장 먼저 — 다른 멤버 초기값이 읽는다 (#129)
   UiDispatcher& dispatcher_;
   engine::PdfiumWorker& worker_;  // 멈춤 감시용 (#121). main.cpp 의 스택 객체 — 창보다 오래 산다
   DocumentSession session_;
@@ -316,6 +336,9 @@ class MainWindow : public QMainWindow {
   ThumbnailPanel* thumbnail_panel_ = nullptr;
   OutlinePanel* outline_panel_ = nullptr;
   QAction* sidebar_action_ = nullptr;
+  QMenu* recent_menu_ = nullptr;  // 최근 파일 (#129)
+  QAction* preferences_action_ = nullptr;
+  bool settings_write_warned_ = false;  // "설정을 저장할 수 없습니다" 는 한 번만
   QAction* print_action_ = nullptr;
   QAction* save_action_ = nullptr;
   QAction* save_as_action_ = nullptr;
@@ -422,6 +445,8 @@ class MainWindow : public QMainWindow {
   // 워커 멈춤 감시 (#121)
   QTimer* stall_timer_ = nullptr;
   std::chrono::milliseconds stall_threshold_{60000};
+  int applied_stall_seconds_ =
+      -1;  // apply_settings 가 마지막으로 반영한 설정값 (테스트 훅을 덮지 않게)
   std::function<void(int code)> force_exit_;
   QPointer<QMessageBox> stall_box_;
   std::optional<std::chrono::steady_clock::time_point> warned_since_;  // 경고한 작업의 시작 시각

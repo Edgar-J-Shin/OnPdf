@@ -23,6 +23,9 @@ add_library(onpdf_app_lib STATIC
   form_field_editor.h form_field_editor.cpp
   structure_job.h structure_job.cpp
   font_catalog_loader.h font_catalog_loader.cpp
+  palette.h
+  settings.h settings.cpp
+  settings_dialog.h settings_dialog.cpp
   main_window.h main_window.cpp
   file_open_filter.h
   i18n.h i18n.cpp

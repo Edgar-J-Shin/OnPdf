@@ -56,6 +56,13 @@ If you force quit, unsaved changes are lost.</numerusform>
         </translation>
     </message>
     <message numerus="yes">
+        <source>%n page(s) cannot be displayed (hazardous pattern)</source>
+        <translation>
+            <numerusform>%n page cannot be displayed (hazardous pattern)</numerusform>
+            <numerusform>%n pages cannot be displayed (hazardous pattern)</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
         <source>%n page(s) of this document contain a pattern that cannot be rendered safely and will stay blank: %1.
 Other pages, search, editing and saving work as usual.</source>
         <translation>
