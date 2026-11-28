@@ -4,6 +4,7 @@
 #include "onpdf/core/platform/path.h"
 
 #include "../test_support.h"
+#include "dialog_helpers.h"
 #include "document_view.h"
 #include "form_field_editor.h"
 #include "main_window.h"
@@ -25,18 +26,8 @@ namespace onpdf::app {
 namespace {
 
 using onpdf::test::ScopedTempDir;
+using onpdf::test::spin_until;
 using onpdf::test::testdata;
-
-template <class Pred>
-bool spin_until(Pred pred, int timeout_ms = 10000) {
-  QElapsedTimer timer;
-  timer.start();
-  while (!pred()) {
-    if (timer.elapsed() > timeout_ms) return false;
-    QApplication::processEvents(QEventLoop::AllEvents, 20);
-  }
-  return true;
-}
 
 // QMenu::exec 가 도는 동안 팝업을 찾아 fn 을 부른다
 template <class Fn>

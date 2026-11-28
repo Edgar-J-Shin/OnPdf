@@ -39,26 +39,10 @@ namespace {
 
 using namespace std::chrono_literals;
 using onpdf::test::find_dialog;
+using onpdf::test::pump_events;
+using onpdf::test::spin_until;
 using onpdf::test::testdata;
 using onpdf::test::when_dialog;
-
-template <class Pred>
-bool spin_until(Pred pred, int timeout_ms = 30000) {
-  QEventLoop loop;
-  QTimer poll;
-  bool timed_out = false;
-  QObject::connect(&poll, &QTimer::timeout, &loop, [&] {
-    if (pred()) loop.quit();
-  });
-  poll.start(5);
-  QTimer::singleShot(timeout_ms, &loop, [&] {
-    timed_out = true;
-    loop.quit();
-  });
-  if (pred()) return true;
-  loop.exec();
-  return !timed_out;
-}
 
 QString qpath(const std::filesystem::path& p) {
   return QString::fromStdString(onpdf::path_to_utf8(p));
@@ -409,7 +393,8 @@ TEST_F(SettingsTest, AdvancedOptions) {
   EXPECT_EQ(w.stall_threshold(), 10s);
   EXPECT_EQ(view()->cache_limit(), std::size_t{64} << 20);
   ASSERT_TRUE(open("pattern-bomb.pdf"));
-  EXPECT_FALSE(spin_until([] { return find_dialog("render_hazards_notice") != nullptr; }, 1000));
+  pump_events(1000);
+  EXPECT_EQ(find_dialog("render_hazards_notice"), nullptr);
   // 켜면 안내가 뜬다
   Settings().set_hazard_notice(true);
   ASSERT_TRUE(open("simple.pdf"));

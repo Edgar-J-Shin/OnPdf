@@ -29,25 +29,9 @@ namespace onpdf::app {
 namespace {
 
 using onpdf::test::ScopedTempDir;
+using onpdf::test::spin_until;
 using onpdf::test::testdata;
 using onpdf::test::when_dialog;
-
-template <class Pred>
-// 느린 CI 러너(Windows)에서 줄 수정·대화상자 테스트가 10초를 넘긴 적이 있다 (#105) → print_test
-// 보다 넉넉히
-bool spin_until(Pred pred, int timeout_ms = 30000) {
-  QElapsedTimer timer;
-  timer.start();
-  while (!pred()) {
-    if (timer.elapsed() > timeout_ms) {
-      ADD_FAILURE() << "timed out; open windows: "
-                    << onpdf::test::describe_open_windows().toStdString();  // #112 진단
-      return false;
-    }
-    QApplication::processEvents(QEventLoop::AllEvents, 20);
-  }
-  return true;
-}
 
 class TextToolTest : public ::testing::Test {
  protected:

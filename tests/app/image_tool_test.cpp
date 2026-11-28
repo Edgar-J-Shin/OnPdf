@@ -30,19 +30,9 @@ namespace onpdf::app {
 namespace {
 
 using onpdf::test::ScopedTempDir;
+using onpdf::test::spin_until;
 using onpdf::test::testdata;
 using onpdf::test::when_dialog;
-
-template <class Pred>
-bool spin_until(Pred pred, int timeout_ms = 10000) {
-  QElapsedTimer timer;
-  timer.start();
-  while (!pred()) {
-    if (timer.elapsed() > timeout_ms) return false;
-    QApplication::processEvents(QEventLoop::AllEvents, 20);
-  }
-  return true;
-}
 
 class ImageToolTest : public ::testing::Test {
  protected:
