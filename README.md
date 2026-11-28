@@ -2,7 +2,7 @@
 
 PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편집기입니다.
 
-> 현재 단계: **v0.7.1** — [Releases](https://github.com/Edgar-J-Shin/OnPdf/releases) 에서 Windows 설치 파일·무설치 zip 과 macOS DMG(Apple Silicon·Intel, macOS 13 이상)를 받을 수 있습니다. 계획한 기능은 모두 들어갔고(0.7.0: 렌더 자식 프로세스 — 설정에서 켬; 0.6.0: 설정 화면·충돌 보고), **v1.0** 은 코드 서명·공증과 실기기·타 뷰어 검증이 끝나면 냅니다(설정 화면·충돌 보고는 1.1). 변경 내역은 [CHANGELOG.md](CHANGELOG.md) 를 참고하세요.
+> 현재 단계: **v0.7.1** — [Releases](https://github.com/Edgar-J-Shin/OnPdf/releases) 에서 Windows 설치 파일·무설치 zip 과 macOS DMG(Apple Silicon·Intel, macOS 13 이상)를 받을 수 있습니다. 계획한 기능은 모두 들어갔고(0.7.0: 렌더 자식 프로세스 — 기본 켬; 0.6.0: 설정 화면·충돌 보고), **v1.0** 은 코드 서명·공증과 실기기·타 뷰어 검증이 끝나면 냅니다(설정 화면·충돌 보고는 1.1). 변경 내역은 [CHANGELOG.md](CHANGELOG.md) 를 참고하세요.
 
 ## 목표
 
@@ -22,7 +22,7 @@ PDFium 기반의 가볍고 빠른 Windows·macOS용 오픈소스 PDF 뷰어·편
 | M4 | 기존 텍스트 줄 단위 수정, 서식 변경, 시스템 글꼴 대체, 폭 맞춤 | v0.5 (완료) |
 | M5 | 배포물 자동 생성, 다국어, 인쇄 미리보기, 자간 유지, Windows 설치기, macOS x64·13 (v0.5.3 완료) · 악성 PDF 완화, 왕복 코퍼스 260개 (v0.5.4 완료) · 코드 서명·공증, 실기기 검증 → v1.0 | v1.0 |
 | 1.1 | 설정 화면·설정 저장 (완료) · 충돌 보고 (완료) | v1.1 |
-| 1.2 | 렌더 자식 프로세스 — PDF 크래시·멈춤에서 앱이 살아남음 (완료, 설정에서 켬) | v1.2 |
+| 1.2 | 렌더 자식 프로세스 — PDF 크래시·멈춤에서 앱이 살아남음 (완료, 기본 켬) | v1.2 |
 
 자세한 계획은 [pdf-editor-plan.md](pdf-editor-plan.md) 를 참고하세요.
 

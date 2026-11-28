@@ -297,7 +297,7 @@ void Settings::set_stall_seconds(int seconds) {
 }
 
 bool Settings::render_process() const {
-  return read_bool(kKeyRenderProcess, false);  // 기본 끔 (2026-11-28 결정) — 설정 > 고급에서 켠다
+  return read_bool(kKeyRenderProcess, true);  // 기본 켬 (#147; 0.7.0 은 끔) — 설정 > 고급에서 끈다
 }
 
 void Settings::set_render_process(bool on) {
